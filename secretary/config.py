@@ -90,6 +90,22 @@ LEXICON_RECHECK_SEC = int(os.environ.get('SECRETARY_LEXICON_RECHECK')
 # 5 轮的上下文增量可接受（每轮最多带 400 字回答，见 qa_log.load_context）。
 HISTORY_TURNS = int(os.environ.get('SECRETARY_HISTORY_TURNS', '5'))
 
+# 规则文档（2026-09-24）：全系统**只维护这一篇**规则 —— 判断标准 + 比较 + 问法归一 + 回答方向
+# （skills/判据规则.md，同一篇同步进知识库）。普通问答不带任何技能 ID，每次先按
+# 「本轮问句 + 上一轮问句」检索它，命中的切片直接当本次的判断标准与回答方向交给模型；
+# 技能调用把整篇注入，两边的规则永远一致。
+# ★ 为什么由服务先检索、而不是等模型自己查：实测让模型"要判断时自己查"会时查时不查，
+#   不查就给不出判断。SECRETARY_RULES=0 可关掉（回到模型自己按需 kb_search）。
+RULE_DOC = (os.environ.get('SECRETARY_RULE_DOC') or '判据规则').strip()
+# 每次注入几条规则切片。2026-09-24 由 3 调到 4：零节（分析框架）相关度高时会排在最前，
+# 只取 3 条容易把场景段（如第二十节的审批类必答四段）挤掉 —— 框架和场景要同时在场。
+RULE_TOP_K = int(os.environ.get('SECRETARY_RULE_TOP_K', '4'))
+# qtype（分析/查数）的判定线：预检索到的规则相关度达到它就算分析题。
+# ★ 它只决定**要不要额外生成分析页面**，不影响回答本身 —— 分流由模型按《规则》第零节做。
+ANALYSIS_SCORE = float(os.environ.get('SECRETARY_ANALYSIS_SCORE', '0.8'))
+RULES_ON = (os.environ.get('SECRETARY_RULES') or '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+
 LLM_BASE = ENV['LLM_BASE_URL'].rstrip('/')
 LLM_KEY = ENV['LLM_API_KEY']
 MODEL = os.environ.get('SECRETARY_MODEL', 'qwen3.8-max')
@@ -130,12 +146,30 @@ MODELS = [
 ]
 MODEL_IDS = [m['id'] for m in MODELS]
 
-KB_SEARCH_URL = 'https://llm-dk4h22odcm9j1oqk.cn-beijing.maas.aliyuncs.com/api/v1/indices/knowledge/search'
-# 专用检索服务：绑定「项目管理秘书口径库 uxht00z9ey」+「ai大脑业务知识库 igjhr8giyb」
-# 检索服务：aid-72fa8… 只绑了 r57xtq9ypm（ai大脑通用语义知识库）；aid-c345… 是原先那个（只绑到口径库）。
-KB_AGENT_ID = os.environ.get('SECRETARY_KB_AGENT', 'aid-72fa8cae2b124d819617f157e97d0a1d')
-# 只检索指定知识库；留空 = 用检索服务默认范围
-KB_IDS = [x for x in os.environ.get('SECRETARY_KB_IDS', 'r57xtq9ypm').replace(' ', '').split(',') if x]
+# ---------------------------------------------------------------------------
+# 知识库（企业级本地知识库系统 · 自建 RAG）
+#
+# 2026-10-13 起**不再使用阿里云百炼知识库**：检索改为调用自建知识库的
+# `POST /api/v1/search`（只取切片，答案仍由本服务自己的模型生成），客户端见 kb_client.py。
+# 知识库的建库/上传/预览/冲突处理都在**它自己的 Web 界面**上做，本服务不再接管。
+#
+# 三条必须记住的线上约定：
+#  1. **必须用公网 IP**：nginx 的 server_name 是 47.121.183.81，
+#     用域名或 127.0.0.1 会落到默认站 → **502**。
+#  2. 认证 = `POST /auth/login` 拿 JWT（**12 小时过期**），kb_client 内建 401 自动重登。
+#  3. 下面几个键**环境变量优先、其次读 .env**（`.env` 里配了才生效，注意占位）。
+# ---------------------------------------------------------------------------
+KB_BASE = (os.environ.get('SECRETARY_KB_BASE')
+           or ENV.get('SECRETARY_KB_BASE') or 'http://47.121.183.81/api/v1').strip()
+KB_USER = (os.environ.get('SECRETARY_KB_USER')
+           or ENV.get('SECRETARY_KB_USER') or 'integration').strip()
+KB_PASSWORD = (os.environ.get('SECRETARY_KB_PASSWORD')
+               or ENV.get('SECRETARY_KB_PASSWORD') or '').strip()
+# 问答检索哪些库：新知识库用的是**数字 id**（逗号分隔）。默认 [5, 3]：
+#   5 = 秘书问答规则（判据 / 口径）　3 = 公司知识库（业务背景）
+KB_IDS = [int(x) for x in
+          (os.environ.get('SECRETARY_KB_IDS') or ENV.get('SECRETARY_KB_IDS') or '5,3')
+          .replace(' ', '').split(',') if x.strip().isdigit()]
 
 # AI 只能查这些表（留空 = 用业务字典里登记的全部）。
 # 六项指标已统一到这两张预计算表：快照（本期值）+ 对比（同比/环比）。
@@ -175,29 +209,10 @@ MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))
 # 服务端序列化与前端渲染都会很难受。要更多就用 limit+offset 分页取。
 API_MAX_ROWS = int(os.environ.get('SECRETARY_API_MAX_ROWS', '5000'))
 
-# 知识库「原文件 + 抽出的富文本」的存放位置（2026-09-22 新增，配合 /api/kb/files/**）。
-#   原文件 → 落磁盘：KB_FILE_ROOT/{index_id}/{md5}/{原文件名}
-#   富文本 → 入库（agent_data 的 t_kb_file / t_kb_file_page，按页存 HTML）
-# 为什么原文件不入库：几十上百 MB 的二进制塞 BLOB 会把备份、查询、迁移全拖慢；
-# 而且将来换成本地内网部署时，本地磁盘本来就是这个位置最适合。
-KB_FILE_ROOT = os.environ.get('SECRETARY_KB_FILES') or os.path.join(os.path.dirname(HERE), 'kb_files')
-
-# 知识库「单库模式」（2026-09-22 新增，默认**开**）：
-#   开：服务端只暴露一个知识库（DEFAULT_INDEX_ID）—— 列表接口只返回它，
-#       路径/参数里传别的 index_id 一律被忽略（并打日志留痕）。
-#   关（SECRETARY_KB_SINGLE=0）：恢复"能看能操作业务空间下全部知识库"的老行为。
-# ★ 为什么必须在服务端做：前端不显示只是"看不见"，只要接口还能指定 index_id，
-#   换个 ID 照样能操作别的库 —— 那是障眼法，不是隔离。
-KB_SINGLE_INDEX = (os.environ.get('SECRETARY_KB_SINGLE') or '1').strip().lower() \
-    not in ('0', 'false', 'no', 'off')
-
-# 上传文档是否**默认走异步**（2026-09-22 新增，默认 0 = 保持同步）。
-#   0：POST .../documents 同步等云端完成（最长 300 秒）后才返回 —— 对现有前端零影响。
-#   1：默认立刻返回 task_id，用 GET /api/kb/uploads/{task_id} 轮询。
-#   单个请求仍可用 ?async=1 / ?async=0 覆盖这个默认值。
-#   什么时候改成 1：同事的前端接完异步轮询之后。
-KB_UPLOAD_ASYNC_DEFAULT = (os.environ.get('SECRETARY_KB_ASYNC_DEFAULT') or '0').strip().lower() \
-    in ('1', 'true', 'yes', 'on')
+# 说明：原「知识库文件台账 / 本地原文件目录 / 单库模式 / 异步上传默认」这几个开关
+# （SECRETARY_KB_FILES、SECRETARY_KB_SINGLE、SECRETARY_KB_ASYNC_DEFAULT）已随
+# **管理面（/api/kb/**）一并移除**（2026-10-13）—— 上传、预览、删除都改用
+# 新知识库系统自己的 Web 界面，本服务只保留「检索」这一个动作。
 
 # L2 会话摘要（2026-09-22 新增）：把一场会话的早期轮次压成一段话，续聊时注进提示，
 # 这样"翻出一场很久以前的会话继续聊"时，模型不至于只知道最近的几轮。

@@ -76,8 +76,70 @@ def execute(name, args):
     if name == 'find_column':
         return tools_db.find_column(args.get('keyword', ''))
     if name == 'run_sql':
-        return tools_db.run_sql(args.get('sql', ''))
+        r = tools_db.run_sql(args.get('sql', ''))
+        # 0 行 = 空集。模型拿到空结果会忍不住摘掉时间/状态条件再查一遍凑数
+        # （实测：带年份查出 0 行 → 去掉年份 → 148.07 万 → 负余额）。
+        # 在它**正想放宽的那一刻**把话说死，比写在几百行外的规则文档里管用。
+        try:
+            if not r.get('error') and not (r.get('rows') or []):
+                r = dict(r)
+                r['空集提示'] = ('这是 0 行 = 空集，空集就是答案。不许摘掉时间 / 状态 / 范围条件再查一遍凑数字；'
+                                '确实要改条件，必须在回答里写明改了什么、为什么。')
+        except Exception:                           # noqa: BLE001
+            pass
+        return r
     return {'error': 'unknown tool ' + str(name)}
+
+
+# 固定口径（2026-09-24 业务确认）：**每次都带，不靠检索**。
+# 这里只放「业务定死的取值口径」——算错了就是错数，且每题都要用：
+#   状态分组、实际投入口径、分配预算取值、年度对齐、空集、结论三选一、重复申报、编号翻中文。
+# ★ **分析流程不在这里**（四个视角 / 同期对比 / 多数据拼接 / 建议怎么给）——
+#   那些写在 skills/判据规则.md 零节，**走知识库检索**注入。要改分析规矩改文档，不改这里。
+CALIBER = (
+    '【固定口径】（每次都必须遵守，不用去检索）\n'
+    '1. **已审批 = 工单状态 2、3、6、7**（2＝所长已审核通过、在上级审批中；3＝审核通过待施工；'
+    '6＝施工中；7＝施工完成待验收）。**不算** 0 草稿、1 提交审核、4 已驳回、5 已取消、9 驳回已修改。\n'
+    '2. **实际投入 = 已审批工单的预算金额**（budget_total）。库里的实际发生金额字段没有数据'
+    '（全库仅 62 条有值、2026 年为 0），**一律不用** —— 包括「钱花了没动」这类题，'
+    '也一律用预算金额（判据见《规则》第七节第 4 条）。\n'
+    '3. **执行率 = 当年已审批工单预算合计 ÷ 当年分配预算**。分配预算**只取供电所级分配结果**'
+    '（t_power_company_budget_result，条件 = 该所 + 问的年度 + deleted_flag=0 的唯一有效行）；'
+    '**全市 = 各所之和（2026 年 = 1880.00 万）**，**不要用公司级总预算表**（2026 年 = 1910.00 万，那是分配计算的输入）。\n'
+    '4. 分配、已审批、未审批**必须同年度、同层级**。对齐后占比 >100% 或余额为负 → **如实报**'
+    '「已审批已超出当年分配预算 X 万元」并提示需核实（分配额未更新 / 工单跨年 / 重复申报）；'
+    '**不许用「含往年结转」解释掉，也不许静默当成正常**。\n'
+    '4.1 **不许把内部的 0.6 达标系数换算成「基准线」写给人看** —— 回答里不许出现「44.38%」「45% 基准线」'
+    '这类内部换算；要么直接给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「要达标还需再完成多少」。\n'
+    '5. **空集就是答案**：第一次查到 0 行就按 0 行答（写清按什么口径没有记录）；'
+    '**不许摘掉时间 / 状态 / 范围条件再查一遍凑数字**。\n'
+    '6. 问「实际花了多少 / 决算金额 / 实际与申报差多少」→ 写「系统未采集实际投入数据，只能用预算金额」。\n'
+    '7. 状态与缺陷类型编号**一律翻中文**；查不到要写清口径，**不要回「未找到相关信息」**。\n'
+    '8. **「能不能批 / 能不能报」类问题：第一句给结论，结论只能是「符合 / 不符合 / 无法判定」三种**，'
+    '而且**必须与后面的依据一致** —— 依据里写了"超出余额 X 万元"，就**不许**写"可以批 / 符合"。\n'
+    '9. **「预算装得下」只对还没批的单判**（状态 0/1/2）。状态已是 3/6/7 的单，'
+    '它自己的金额**已经计入「已审批」**，直接答「该单已审核通过（待施工 / 待验收），无需再批」，'
+    '**不要再拿剩余余额去比它**（重复扣一次必然算出"超余额"）。\n'
+    '10. 发现同一所、同名（或只差标点）、同金额的多条工单 → 判「**疑似重复申报**」，'
+    '报出条数与 ID 提示核实，**不许静默当成两笔累加进已审批**。\n'
+    # --- 以下是「分层应答纪律」：每题都要用，所以固定注入；
+
+    #     **怎么答准**（数据地图、各层取数与坑、建议算法、阈值判据）写在知识库文档里检索。
+
+    '11. **领导是分多轮问的，你只答被问的那一层**：\n'
+    '    · **L1 情况**（「XX 怎么样 / 有多少 / 情况如何」）→ 给真实数据：条数 / 金额 / 状态构成 + 关键指标本期值；'
+    '问成效时带同期。**不要给对策**。≤150 字。\n'
+    '    · **L2 原因**（「为什么 / 怎么差这么多」）→ **至少两个数据源拼起来**说清成因与它们的关系。≤200 字。\n'
+    '    · **L3 对策**（「怎么办 / 钱往哪投 / 先干哪个」）→ 往年投入 + 指标偏重 → 优先级 + 金额 + 指向的指标。≤250 字。\n'
+    '    · **L4 预测**（「能达标吗 / 年底到多少」）→ 按当前速度外推 + 达成需要什么条件。≤150 字。\n'
+    '    **没问的不铺**（L1 不许把原因和对策一起倒出来）；下一层承接上一层结论但不重复。清单可以超字数。\n'
+    '    · **追问必须接上文**：像「为什么」「那怎么办」「这样能达标吗」这种省略主语的追问，'
+    '**一律从同一场会话的上一轮继承对象、范围、口径**（上一轮问的是哪个所，这几轮就还是哪个所），'
+    '**不许回「指代不明 / 请补充说明」**。\n'
+    '    · **同一场会话口径不许漂**：上一轮按所、这一轮不能悄悄变全市；要变必须写明。\n'
+    '12. **先拆再答**：单点（一个数 / 一份清单）直接查直接答；多点（要拼 2+ 数据源、或跨期跨表）'
+    '**先拆成 2~4 个子问题**，把互不依赖的查询**一次发出**，再汇总成一段话。\n'
+)
 
 
 # 回答契约：**固定在提示词里，不靠知识库检索**。
@@ -96,37 +158,43 @@ ANALYSIS_FRAME = (
     '**不许编原因，也不许回一句「未找到相关信息」。**\n'
     '5. 问「怎么办 / 先办哪几个 / 给建议」→ 给排序 + 排序依据 + 该谁动。\n'
     '6. 只问一个数 → 只给数，**不要附加「偏高/偏低/异常」这类判断**。\n'
-    '7. 判断标准只认下面【判断标准】里给的；没给标准就不下判断、不编标准。\n'
+    '7. 判断标准只认下面【本次的规则】里给的；没给标准就不下判断、不编标准。\n'
     '8. 长度：先结论后依据，正文控制在 300 字内（逐条清单可略长，一行一条、不要客套）。\n'
     '9. 数量必须与清单一致：说「N 条」，清单就得正好 N 条；概览与明细不能互相矛盾。\n'
+    '10. **先分流再动手**：\n'
+    '    · 分析题（要下判断、比大小、找原因、看趋势、判是否异常/是否合理）→ 作答前**先用 kb_search 查一次《'
+    + config.RULE_DOC + '》**，把最相关的那一节取全，再严格按它判断与组织回答。\n'
+    '    · 查数题（只问一个数 / 一份清单 / 一个排名）→ 取到数直接答，'
+    '**不要附加「偏高/偏低/异常」这类判断**，也不必查规则。\n'
 )
 
 
-# 检索回来的切片里，只挡掉这些明显是测试/噪声的文档，其余业务文档一律采用。
-KB_SKIP_DOCS = ('测试',)
+def rule_slices(query, top_k=None, limit=700):
+    """检索**唯一规则文档**的切片（全系统只有一篇，见 config.RULE_DOC）。返回 (切片, 最高分)。
 
-
-def analysis_rules(topic, question, top_k=4, limit=700):
-    """检索知识库里的判断标准（判据）。**只取判据，不取生成答案**。
-
-    这一步同时兼作分流：**命中判据 = 按判据判断；没命中 = 只呈现事实**。
-    检索失败按「没判据」处理：宁可只报事实，也不许拿别的东西当标准。
+    ★ 只认这一篇：以前是"拿问题去知识库检索判据"，会把相邻技能的标准当成本题的标准
+      （实测把「项目执行进度异常」的标准套到「审批积压」上）。限定成一篇之后，
+      这个错法从根上不可能再发生；技能文档也不再进知识库跟它抢名额。
+    检索失败按「没规则」处理：宁可只报事实，也不许拿别的东西当标准。
     """
-    q = (topic or question or '').strip()
+    q = (query or '').strip()
     if not q:
-        return []
+        return [], 0.0
+    want = top_k or config.RULE_TOP_K
+    # 只认一篇 → 必须多取候选再过滤（kb_search 返回前会先截到 top_k 条）
     try:
-        r = tools_kb.kb_search(q, top_k=top_k * 2, limit=limit)
-        out, seen = [], set()
-        for n in (r.get('nodes') or []):
-            doc = n.get('doc_name') or ''
-            if any(d in doc for d in KB_SKIP_DOCS) or doc in seen:
-                continue          # 同一篇文档只取分数最高的一条，别把切片堆满提示词
-            seen.add(doc)
-            out.append(n)
-        return out[:top_k]
-    except Exception:
-        return []
+        r = tools_kb.kb_search(q, top_k=max(want * 3, 9), limit=limit)
+    except Exception:                               # noqa: BLE001
+        return [], 0.0
+    out = []
+    for n in (r.get('nodes') or []):
+        if config.RULE_DOC not in (n.get('doc_name') or ''):
+            continue
+        out.append(n)
+        if len(out) >= want:
+            break
+    best = max([float(n.get('score') or 0) for n in out], default=0.0)
+    return out, best
 
 
 # 兜底：字典/提示词读不到时才用（正常情况下系统提示全部来自数据库）
@@ -359,7 +427,7 @@ def _summary_worth_it(session_id):
 
 
 def ask(question, model=None, max_steps=None, profile=None, want_page=False, today=None, scope=None,
-        page_async=False, standard=None,
+        page_async=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None):
     """question = 用户的原话（不需要上游预处理）。
@@ -502,6 +570,24 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             '本轮必须按下面【统计范围】重新查数。'
             '② 本轮的统计口径已在上面的【统计范围】里定好，**不要**因为历史而改变它。'
             '③ 不要在回答里复述或提及这段历史。' % (len(hist_detail), '\n'.join(hl)))
+    # ⓪·6 检索**唯一规则文档**：本轮问句 + 上一轮的原始问句一起查。
+    #      「是哪些项目？」这类跟在提醒后面的追问，光看问句没有线索，拼上上一轮才有
+    #      （实测：只拿问句检索会跑偏，拼上上一轮标题后正确规则回到第一）。
+    #      命中的切片随后当本次的判断标准与回答方向。
+    rule_hits, rule_best, rule_query = [], 0.0, question
+    if config.RULES_ON:
+        if history:
+            _prev_q = (history[-1].get('raw_question') or '').strip()
+            if _prev_q:
+                rule_query = question + ' ' + _prev_q
+        _t_rule = time.time()
+        rule_hits, rule_best = rule_slices(rule_query)
+        trace.append({'seq': len(trace) + 1, 'kind': 'rules', 'tool': 'rule_search',
+                      'ms': int((time.time() - _t_rule) * 1000),
+                      'args': {'query': rule_query, 'doc': config.RULE_DOC},
+                      'result': {'hits': len(rule_hits), 'best_score': round(rule_best, 4),
+                                 'titles': [(n.get('title') or '')[:60] for n in rule_hits]}})
+
     # 统计范围必须明确交给模型：六项指标是按「范围 + 期间」预计算的，
     # 不给这一句，它就得自己猜该取 month 还是 yearToDate、该取哪个月。
     user_content += ('\n\n【统计范围】（已按今天日期算好，直接采用，不要自行推算日期）\n'
@@ -510,18 +596,26 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         # 名称被归到「地名层」时（库里没有这个精确名），必须告诉模型用前缀查，
         # 否则它很可能拿合成名做等值匹配，一条都查不到还以为是空数据。
         user_content += ('\n\n【名称归一说明】' + fixed['hint'])
-    # 角度固定（ANALYSIS_FRAME 永远带），标准可检索 —— 两层分开，互不依赖
-    user_content += '\n\n' + ANALYSIS_FRAME
-    if standard:
-        # 调用方给了 skill_id：这份是该技能自己的口径文档 → **直接当本题的判断标准**，
-        # 不靠检索（检索会挑错标准），也不在代码里写死任何阈值。
-        user_content += ('\n【本题的判断标准】（本题属于该技能，**必须按这份口径判断与组织回答**；'
-                         '里面没写的标准不许自己编）\n' + standard)
+    # 角度固定（ANALYSIS_FRAME 永远带），口径固定（CALIBER 永远带），
+    # 场景化的判断标准来自唯一规则文档 —— 三层分开，互不依赖
+    user_content += '\n\n' + ANALYSIS_FRAME + '\n' + CALIBER
+    if rule_hits:
+        parts = []
+        for _n in rule_hits:
+            _t = (_n.get('title') or '').strip()
+            _c = (_n.get('content') or '').strip()
+            parts.append(('【' + _t + '】\n' if _t else '') + _c)
+        user_content += ('\n\n【本次的规则】（从《%s》检索到的**候选**切片。'
+                         '若本题要下判断 / 比大小 / 找原因 / 看趋势（分析题），'
+                         '**必须先用 kb_search 把你要用的那一节原文取全再作答**；'
+                         '只问一个数或一份清单（查数题）直接答。'
+                         '标准只认《%s》，里面没写的不许自己编。）\n'
+                         % (config.RULE_DOC, config.RULE_DOC) + '\n---\n'.join(parts))
     else:
-        user_content += ('\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
-                         '**先用 kb_search 查判断标准**（查《判据规则》或对应技能文档）；'
-                         '查到了就按它判，查不到就只报事实并说明「系统里没有这类判定标准」。'
-                         '**不许拿相邻技能的阈值套到本题上，也不许自己编标准。**')
+        user_content += ('\n\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
+                         '**先用 kb_search 查《%s》**；查到了就按它判，查不到就只报事实并说明'
+                         '「系统里没有这类判定标准」。**不许拿别的标准套到本题上，也不许自己编标准。**'
+                         % config.RULE_DOC)
     if profile:
         user_content += ('\n\n【提问人身份与数据范围】（判断标准与关注重点按它来，不要因此增减问题里已经要求的必答项）：\n' + profile)
     if scope:
@@ -589,9 +683,16 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
             messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _trim(o['name'], o['result'])})
-    # qtype 只作参考，且按**实际发生的事**判定：循环里查过判据（kb_search）才算分析题（不再猜题型）。
-    # 必须在页面判断之前算出来 —— 页面默认只给分析题。
-    qtype = '分析' if any(t.get('tool') == 'kb_search' and t.get('kind') == 'tool' for t in trace) else '查数'
+    # qtype：**只用来决定要不要出分析页面**（前端要页面可以直接传 want_page）。
+    # 真正的分流由模型按《规则》第零节做（分析题走五步、查数题取到数直接答）。
+    # 这里取两个"实际发生的事"的信号，任一成立即算分析：
+    #   ① 循环里自己查过《规则》（kb_search）—— 说明它认定这题要按规则判；
+    #   ② 服务预检索到的那条规则相关度够高（ANALYSIS_SCORE；实测分析题普遍 ≥0.8、
+    #      纯查数题普遍 <0.8，因为查数题在规则文档里本来就没有对应的判断条目）。
+    qtype = '分析' if (
+        any(t.get('tool') == 'kb_search' and t.get('kind') == 'tool' for t in trace)
+        or (rule_hits and rule_best >= config.ANALYSIS_SCORE)
+    ) else '查数'
     loop_end = time.time()
     # 分析题的附加产物：**另一次模型调用**把结论渲染成单页 HTML 数据大屏。
     # 与作答那次不共用；同步生成、同步随本响应返回。页面失败只返回空串，回答照旧。
@@ -631,7 +732,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     result = {
         'input_question': raw_question,
         'today': today or time.strftime('%Y-%m-%d'),
-        'standard_loaded': bool(standard),
+        'rules_loaded': len(rule_hits),      # 本次命中了几条《规则》，0 = 没检索到
         'fixed_question': question,
         'name_fix_used': fixed['used'],
         'scope': {

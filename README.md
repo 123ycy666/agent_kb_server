@@ -16,7 +16,7 @@
 | 超范围问题（酒店/GDP/三公） | 如实拒答，并落缺口清单 |
 | 多轮对话 | `session_id` 回传即续聊；长会话靠 **L2 会话摘要**记住更早的轮次 |
 | 历史对话接口 | **默认全部返回**（`total` 为真实总数，另有 `returned` / `truncated`）|
-| 知识库 | **单库收口**（只暴露 `razubo7dra`）；支持文件列表、**按页 HTML 预览**、原文下载、同步/异步上传、删除 |
+| 知识库 | **只读检索**：问答与判据检索都调自建知识库的 `POST /api/v1/search`（自带模型生成答案）；建库/上传/预览在知识库自己的 Web 界面上做 |
 | 平均耗时 | 单问 6–20 s（近期实测多在 7–8 s；复杂问法偶有几十秒）|
 
 **部署情况**：服务器（`47.121.183.81`）上跑的是 **4.0**；本仓库 `deploy_server4.0` 分支已是 **4.5**
@@ -41,21 +41,20 @@
 | SECRETARY_HOST / SECRETARY_PORT | 127.0.0.1 / 8200 | 监听地址与端口 |
 | SECRETARY_MODEL | qwen3.8-max | 模型，页面下拉 26 个可选 |
 | SECRETARY_MAX_STEPS | 0 | 工具步数上限，0 = 不限（模型自己收手） |
-| SECRETARY_KB_AGENT | aid-72fa8cae2b124d819617f157e97d0a1d | 知识检索服务（已绑 `r57xtq9ypm` + `razubo7dra` 两个库）|
-| SECRETARY_KB_IDS | `r57xtq9ypm,razubo7dra` | 检索范围（逗号分隔）。**检索面**用这一对 |
-| `DEFAULT_INDEX_ID`（在 `.env` 里，不是环境变量）| razubo7dra | **管理面**默认库：上传/删除/预览都对着它 |
-| SECRETARY_KB_SINGLE | 1 | 单库收口：`/api/kb/indices` 只返回 `DEFAULT_INDEX_ID`，路径里传别的库**会被忽略** |
-| SECRETARY_KB_ASYNC_DEFAULT | 0 | 上传默认同步；改 `1` 则默认异步（需前端先接轮询）|
+| SECRETARY_KB_BASE | `http://47.121.183.81/api/v1` | 自建知识库地址（**必须公网 IP**，用域名/127.0.0.1 会 502）|
+| SECRETARY_KB_USER / _PASSWORD | integration / — | 对接账号（管理员在知识库「用户管理」分配）；JWT 12h 过期，客户端自动重登 |
+| SECRETARY_KB_IDS | `5,3` | 检索范围（**数字 id**，逗号分隔）：5=秘书问答规则（判据/口径）、3=公司知识库（业务背景）|
 | SECRETARY_SESSION_SUMMARY / _EVERY / _MIN_TURNS / _KEEP_RECENT | 1 / 5 / 6 / 2 | L2 会话摘要：总开关 / 触发轮数 / 注入的轮数门槛 / 始终原样带的最近轮数 |
 | SECRETARY_RULES_PRIORITY | 1 | 是否在系统提示最前面加【规则优先级】声明（解决 system 规则与【统计范围】撞车）|
 | SECRETARY_API_MAX_ROWS | 5000 | 历史接口"全部返回"时的防呆上限，超了 `truncated=true` |
 | SECRETARY_TABLES | 空 | 限定可查的表；空 = 用字典里登记的全部 |
 
-> ⚠️ **两套知识库配置不要混**：**检索面**（`SECRETARY_KB_AGENT` + `SECRETARY_KB_IDS`）决定"问答时去哪些库找资料"；
-> **管理面**（`.env` 的 `DEFAULT_INDEX_ID`）决定"上传/删除对着哪个库"。两者是不同链路、不同凭据。
+> ⚠️ 知识库现在**只有「检索」一条链路**：本服务调自建知识库的 `POST /api/v1/search` 取切片，
+> 答案仍由本服务自己的模型生成。建库 / 上传 / 预览 / 冲突处理都在**知识库系统自己的 Web 界面**上做，
+> 本服务**不再暴露 `/api/kb/**` 管理接口**（2026-10-13 移除，原阿里云百炼 SDK 与 AK/SK 一并删掉）。
 >
-> ⚠️ `SECRETARY_*` 系列**写在 `.env` 里不生效**，只能走系统环境变量或 systemd 的 `Environment=`。
-> 例外：`DEFAULT_INDEX_ID` 和 4 个百炼键是**读 `.env`** 的。
+> ⚠️ `SECRETARY_KB_*` 这几类键**环境变量优先、其次读 `.env`**（写 `.env` 生效）；
+> 其余 `SECRETARY_*` 仍只认系统环境变量 / systemd 的 `Environment=`。
 
 **端点**：
 
@@ -64,12 +63,12 @@
 | 问答 | `POST /api/ask`（返回 answer / trace / timings，**多轮靠回传同一个 `session_id`**）|
 | 历史对话 | `GET /api/sessions`（会话列表）、`GET /api/history`（某场会话的消息）—— **不传 `limit` 就是全部返回** |
 | 其它问数 | `GET /api/stats`（概览）、`POST /api/feedback`（赞/踩）、`GET /api/gaps`（缺口）|
-| 知识库 | `GET /api/kb/health`、`GET /api/kb/indices`、`GET /api/kb/indices/{id}/documents`、<br>`POST /api/kb/indices/{id}/documents`（上传，可 `?async=1`）、`DELETE /api/kb/indices/{id}/documents/{file_id}`、<br>`GET /api/kb/files/{file_id}`（详情）、`GET /api/kb/files/{file_id}/text?page=N`（**按页 HTML 预览**）、<br>`GET /api/kb/files/{file_id}/download`（下载原文）、`GET /api/kb/uploads/{task_id}`（查异步上传进度）|
-| 页面与健康 | `GET /`（问答页）、`/asr`（语音页）、`/kb`（知识库控制台）、`GET /health`（六个能力字段）|
+| 知识库检索 | 内部能力（不对外暴露接口）：`kb_search` 工具与判据检索走自建知识库的 `POST /api/v1/search`；实现见 `secretary/kb_client.py` |
+| 页面与健康 | `GET /`（问答页）、`/asr`（语音页）、`GET /health`（能力字段，含 `kb` 连通性）|
 | 报告 | `POST /api/report`、`POST /api/report/notice`、`GET /api/report/meta` |
 
-> 接口契约见 `deploy/接口对接说明.md`（问数）、`deploy/知识库接口文档.md`（知识库）、
-> **`deploy/知识库与历史对话_对接手册.md`（面向前端，含可直接粘贴的 JS）**。
+> 接口契约见 `deploy/接口对接说明.md`（问数）、**`deploy/知识库与历史对话_对接手册.md`（面向前端，含可直接粘贴的 JS）**。
+> 知识库侧的对接文档在**知识库项目**里：`docs/对话项目接入知识库-示例.md`、`docs/API对接调用文档.md`。
 
 ## 三、分工与流程（五段）
 
@@ -101,15 +100,14 @@
 | 业务库 dlj_data | 业务表（真数据） | **严格只读**，run_sql 取数 |
 | 业务字典 ai_data | `ai_table_metadata` / `ai_column_metadata` / `ai_metric_metadata` / `ai_column_synonym` / `ai_table_relation` | 只读；semantic.py 启动时读进内存 |
 | 系统提示词 ai_data.ai_prompt | 四道：`answer_agent`（回答纪律）/ `business_rules`（业务规则）/ `sql_plan_rules`（查询规划）/ `work_order_rules`（缺陷工单取数口径：默认排除草稿 work_status=0）| 只读，**版本化**（取 `IS_new=1` 的最新一行，60 秒 TTL）。<br>★ **改提示词改库、不用改代码**（`config.PROMPTS` 决定注入哪几道；加一道要重启服务，改内容 60 秒自动生效） |
-| 知识库（检索面） | `r57xtq9ypm`（ai大脑通用语义知识库）+ `razubo7dra`（个人知识库）| kb_search 检索切片，用于**补全规则**与问答 |
-| 记录库 agent_data | **本项目自建**：对话记录、知识库文件台账、纠错词典 | **读写**（唯一有写权限的库）|
+| 知识库（只读检索） | 自建知识库系统：`5`（秘书问答规则 / 判据）+ `3`（公司知识库 / 业务背景）| `kb_search` 检索切片，用于问答与**判据**；建/传/预览在知识库自己的界面 |
+| 记录库 agent_data | **本项目自建**：对话记录、纠错词典 | **读写**（唯一有写权限的库）|
 
-**当前用到的知识库**：`r57xtq9ypm`（补全规则库 + 业务术语）与 `razubo7dra`（上传与预览的目标库）。
-业务空间下还有别的库（`uxht00z9ey` 口径库、`igjhr8giyb` 业务库等），
-但**服务端开了单库收口**，管理面只会暴露 `razubo7dra`。
+**知识库怎么用**：本服务**只取资料** —— 调自建知识库 `POST /api/v1/search`（向量召回 + 重排），
+拿回切片后由本服务自己的模型生成答案（知识库侧生成的 `answer` 一概不用）。
+建库 / 上传 / 预览 / 打标签 / 冲突处理都在**知识库系统自己的 Web 界面**上做，本服务不接管。
 
-> 📄 库与表的完整说明（含本次新增的 `t_kb_file` / `t_kb_file_page` / `t_kb_upload_task` 建表语句）
-> 见 **`docs/数据库与新增表说明.md`**。
+> 📄 库与表的完整说明（对话记录与纠错词典）见 **`docs/数据库与新增表说明.md`**。
 
 ## 六、代码结构（secretary/）
 
@@ -121,16 +119,12 @@
 | libs/name_correction_lib/ | 上面那步用的纠错引擎本体（标准库实现，附 8 个 CSV 词典与拼音表） |
 | semantic.py | 语义层（只读）：表目录、字段目录、白名单校验、SQL 抽表 |
 | tools_db.py | 只读闸、白名单拦截、list_tables / find_column / describe_table / run_sql |
-| tools_kb.py | 百炼知识检索客户端（只要切片，不要它生成的答案；limit 可调） |
+| tools_kb.py | 知识检索客户端（只要切片，不要它生成的答案；limit 可调） |
+| kb_client.py | ★ **唯一接触自建知识库 HTTP 的地方**：登录拿 JWT + 缓存 + 401 自动重登 + `POST /search` |
 | gaps.py | 缺口清单：答不了的问题落 output/gaps/gaps.jsonl |
 | tools_asr.py | 语音识别五阶段（/asr 页面用） |
-| config.py | 读 .env、模型清单、端口/主机、检索面知识库、表范围，以及本批新增的开关 |
+| config.py | 读 .env、模型清单、端口/主机、知识库检索配置、表范围，以及各个开关 |
 | time_scope.py | 阶段①的时间与地点补全（相对时间 → 具体年月；多轮沿用上一轮口径）|
-| kb_api.py | 知识库 HTTP 接口层：路由、错误码、multipart 解析；**预览/下载/异步上传**都在这里 |
-| kb_bailian.py | ★ 唯一接触阿里云 SDK 的文件（将来换云只改它）|
-| kb_store.py | 原文件落盘 + 台账增删查 + 按页正文读写 + **异步抽取 worker** |
-| text_extract.py | 文件 → 按页 HTML（PDF 走 pymupdf4llm，DOCX 走 mammoth…），**含 XSS 白名单清洗** |
-| kb_upload.py | 异步上传任务表与后台 worker |
 | session_summary.py | L2 会话摘要：异步生成（乐观锁写回）+ 每 N 轮触发 |
 | qa_log.py | 对话记录读写；历史接口（含"全部返回"语义）；摘要读写 |
 | static/index.html、static/asr.html | 问答页（左回答 / 右过程）、语音页 |
@@ -159,8 +153,9 @@
     py -X utf8 truth_check.py       # 直接查库核对真值
 
     cd <项目根目录>
-    py -X utf8 tools/apply_kb_file_schema.py         # 建知识库相关的三张表（幂等）
-    py -X utf8 tools/apply_kb_file_schema.py --check # 只看现状、不建
+    # 知识库现在是自建系统（外部服务），不再需要在本项目里建知识库相关表。
+    # 原 tools/apply_kb_file_schema.py（t_kb_file / t_kb_file_page / t_kb_upload_task）
+    # 与 tools/kb_sync.py 已随管理面一并移除（2026-10-13）。
 
 ## 九、文档地图
 
@@ -171,15 +166,15 @@
 | README.md（本文件） | 现状、怎么跑、分工、约束、待办 |
 | docs/ | 工程文档，索引见 docs/README.md |
 | docs/架构图.md、docs/架构说明.md | 五张图 + 关键文件 |
-| docs/实现文档.md、docs/工具说明.md | 关键决策与目录 / 5 个工具的契约 |
+| docs/实现文档.md、docs/工具说明.md | 关键决策与目录 / 工具的契约 |
 | docs/报告技能设计.md | 计划报告技能的设计与「实施后的修正」 |
 | docs/语义层与提速方案.md、docs/局域网访问说明.md | 早期方案 / 给同事的访问说明 |
 | docs/历史/ | 早期草案：构建说明、微调方案讨论、微调数据方案 |
-| **docs/数据库与新增表说明.md** | **★ 用了哪几个库、`t_kb_file`/`t_kb_file_page`/`t_kb_upload_task` 三张新表干什么与完整表结构** |
-| **`deploy/` 下的三份接口文档** | `接口对接说明.md`（问数主接口，含历史对话"全部返回"）｜`知识库接口文档.md`（知识库全量 + 部署运维）｜**`知识库与历史对话_对接手册.md`（面向前端，含可直接粘贴的 JS）** |
+| **docs/数据库与新增表说明.md** | **★ 用了哪几个库、对话记录表与纠错词典表的完整表结构** |
+| **`deploy/` 下的接口文档** | `接口对接说明.md`（问数主接口，含历史对话"全部返回"）｜**`知识库与历史对话_对接手册.md`（面向前端，含可直接粘贴的 JS）** |
 | skills/数据表说明书.md | 每张表做什么、怎么设计、有哪些坑 —— 写别的分析 skill 复用这份 |
 | skills/年度缺陷治理计划分析.md | 技能文档：分几节、每节找哪类数据、怎么判断、报告里不许出现什么 |
-| secretary/口径库.md、电力业务口径文档.md、数据地图.md | 知识库内容（已上传百炼，**不进仓库**） |
+| secretary/口径库.md、电力业务口径文档.md、数据地图.md | 知识库内容（已上传自建知识库，**不进仓库**） |
 | output/ | 测试报告与原始数据（**不进仓库**） |
 
 ---
@@ -203,4 +198,4 @@
 
 **补全只做地名/名称/时间这类信息**（`name_fix` + `time_scope`），**不改写用户的问题**；`qtype` 按实际发生的事判定（回答过程中查过判据才算分析）。
 
-**规则文档一处维护、两处生效**：`skills/*.md` 是唯一维护源 → `tools/deploy_update.py` 上服务器（`skill_id` 路径直接读）→ `tools/kb_sync.py` 同步进知识库（自由问句路径检索）。改完规则记得两步都跑。
+**规则文档一处维护、两处生效**：`skills/*.md` 是唯一维护源 → `tools/deploy_update.py` 上服务器（`skill_id` 路径直接读）→ **在知识库系统的 Web 界面上传/更新同名文档**（自由问句路径走检索）。⚠️ `tools/kb_sync.py` 已随管理面移除（2026-10-13），知识库侧的更新改在知识库界面上做。

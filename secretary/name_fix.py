@@ -82,19 +82,31 @@ def _build_source():
     return lex_source.MysqlSource()
 
 
+# 项目级「禁入常用词」补充：纠错库漏掉、但绝不能当地名归一的常用业务词。
+# 纠错库自带的禁入表 = 行业术语 + COMMON_WORDS + GENERIC_WORDS，「资金」三条都不在，
+# 于是它被当地名归一：资金(zijin) 与 紫金(zijin) 同音 →
+#   「哪些申请资金明显不合理？」→「哪些申请紫金台区明显不合理？」
+# 整句意思就没了，模型只能回一句「未找到相关信息」。
+# 只加**实测被误改**的词（实测 40 个常用业务词里只有它被改写）；以后再发现新的往这里加。
+NO_PARTIAL_EXTRA = ('资金',)
+
+
 def _load_corrector():
     """构造一个全新的 Corrector（含数据源）。"""
     if _LIB not in sys.path:
         sys.path.insert(0, _LIB)
     from name_correction_lib import Corrector, use_source
+    from name_correction_lib.name_corrector import normalize
 
     src = _build_source()
     use_source(src)                 # ★ 必须在构造之前：所有索引都是 __init__ 里建的
     try:
-        return Corrector()
+        c = Corrector()
     finally:
         if src is not None:
             src.close()             # ★ 加载完立刻关连接，不做长连接
+    c.no_partial |= {normalize(w) for w in NO_PARTIAL_EXTRA}
+    return c
 
 
 def _peek_version():

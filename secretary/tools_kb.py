@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-"""百炼知识检索客户端：只取切片，不取它生成的答案。"""
-import json
-import ssl
-import urllib.request
+"""知识检索客户端：**只取切片，不取知识库生成的答案**。
 
+2026-10-13 起底层从「阿里云百炼检索服务」换成「企业级本地知识库系统」的
+`POST /api/v1/search`（HTTP 细节都封在 kb_client.py 里）。
+★ **对外返回结构保持不变**，所以 agent.py（kb_search 工具 + rule_slices 规则检索）
+一行都不用改。
+
+返回结构（沿用百炼时代的老契约）：
+    {'total': int, 'nodes': [{'score','doc_name','title','content'}, ...], 'cached': bool}
+"""
 import config
-
-_ctx = ssl.create_default_context()
-_ctx.check_hostname = False
-_ctx.verify_mode = ssl.CERT_NONE
-
+import kb_client
 
 _CACHE = {}
 _CACHE_MAX = 200
@@ -22,30 +23,32 @@ def kb_search(query, top_k=3, kb_ids=None, limit=450):
         hit = dict(_CACHE[ck])
         hit['cached'] = True
         return hit
-    body = {'agent_id': config.KB_AGENT_ID, 'query': query, 'images': []}
-    if kb_ids:
-        body['kb_search_configs'] = [{'id': i} for i in kb_ids]
-    req = urllib.request.Request(config.KB_SEARCH_URL, data=json.dumps(body).encode('utf-8'),
-                                 headers={'Authorization': 'Bearer ' + config.LLM_KEY,
-                                          'Content-Type': 'application/json'})
+
     try:
-        raw = urllib.request.urlopen(req, timeout=config.HTTP_TIMEOUT, context=_ctx).read().decode('utf-8', 'replace')
-        d = json.loads(raw)
-    except Exception as e:
-        return {'error': type(e).__name__ + ': ' + str(e)[:200], 'nodes': [], 'total': 0}
-    if not d.get('success'):
-        return {'error': d.get('code', '') + ' ' + str(d.get('message', ''))[:200], 'nodes': [], 'total': 0}
-    data = d.get('data') or {}
+        d = kb_client.search(query, kb_ids=kb_ids, top_k=top_k, rerank=True)
+    except Exception as e:                       # noqa: BLE001  检索失败 → 按「没查到」兜底
+        return {'error': '%s: %s' % (type(e).__name__, str(e)[:200]), 'nodes': [], 'total': 0}
+
     nodes = []
-    for n in (data.get('nodes') or [])[:top_k]:
-        m = n.get('metadata') or {}
+    for h in (d.get('results') or [])[:top_k]:
+        # ★ 优先用 parent_content（同章节父块，信息更全），父块为空再退回切片本身。
+        #   两者都**已带【标题路径】前缀**，可直接喂给模型。
+        body = (h.get('parent_content') or '').strip() or (h.get('content') or '')
+        score = h.get('rerank_score')
+        if score is None:                         # 没配 rerank 时会降级，用融合分
+            score = h.get('fused_score')
         nodes.append({
-            'score': round(float(n.get('score') or 0), 4),
-            'doc_name': m.get('doc_name') or m.get('title') or '',
-            'title': (m.get('title') or '')[:120],
-            'content': (m.get('content') or '')[:limit],
+            'score': round(float(score or 0), 4),
+            'doc_name': h.get('doc_name') or '',
+            'title': (h.get('heading_path') or '')[:120],
+            'content': body[:limit],
         })
-    out = {'total': data.get('total'), 'cost_time': data.get('cost_time'), 'nodes': nodes}
+
+    out = {'total': d.get('total'), 'nodes': nodes}
+    if d.get('degraded'):
+        # 知识库降级（如未配 rerank）只是提示，不影响取数
+        out['degraded'] = True
+        out['degraded_reason'] = d.get('degraded_reason') or ''
     if len(_CACHE) >= _CACHE_MAX:
         _CACHE.clear()
     _CACHE[ck] = out

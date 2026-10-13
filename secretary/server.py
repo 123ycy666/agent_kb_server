@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""演示服务：GET / 页面、/kb 知识库页、/skills 技能触发台、/health、/api/sessions、/api/history；
-POST /api/ask、/api/feedback、/api/skill/run、/api/skill/title、/api/kb/**；DELETE /api/kb/**。标准库实现，零额外依赖。
+"""演示服务：GET / 页面、/skills 技能触发台、/health、/api/sessions、/api/history；
+POST /api/ask、/api/feedback、/api/skill/run、/api/skill/title。标准库实现，零额外依赖。
 
 问答会自动落库到 agent_data（会话/消息/执行明细），历史接口从这里读。
 落库由 qa_log.py 负责，**失败不影响问答**。
 
-知识库（阿里云百炼）那组接口走 kb_api.py —— 那是**附属能力**，
-SDK 没装 / 凭据没配都只影响它自己，不影响问答主链路。
+知识库已收敛为**只读检索**：本服务通过 kb_client.py 调用自建知识库的
+`POST /api/v1/search` 取切片（建库 / 上传 / 预览都在知识库自己的 Web 界面上做），
+**本服务不再暴露 /api/kb/** 管理接口** —— 2026-10-13 移除。
 """
 import json
 import os
@@ -14,7 +15,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import agent
 import tools_asr
@@ -69,37 +70,12 @@ def _preheat():
                   % (type(e).__name__, e), flush=True)
     threading.Thread(target=warm_semantic, daemon=True, name='semantic-preheat').start()
 
-    def resume_kb_extract():
-        """把上次没抽完的知识库文件重新排队。
+    def resume_tasks():
+        """把上次中断的后台任务补跑一遍。
 
-        为什么需要：抽取是**异步**的（大 PDF 要几十秒到几分钟），
-        进程重启会让队列里的任务丢掉。台账里 `pending / extracting` 的行就是"没抽完的"，
-        启动时扫一遍重新投递 —— 否则那些文件会永远停在"抽取中"，前端一直转圈。
+        ★ 2026-10-13：知识库文件抽取 / 异步上传的恢复逻辑已随管理面一并移除
+        （那两件事现在由知识库系统自己负责），这里只剩下 L2 会话摘要。
         """
-        try:
-            import kb_store
-            n = kb_store.recover()
-            st = kb_store.status()
-            print('[启动] 文件台账%s（%s，已存 %s 个文件，本次恢复 %d 个待抽取）%s'
-                  % ('就绪' if st.get('available') else '未就绪', st.get('source', '?'),
-                     st.get('files', 0), n,
-                     '' if st.get('available') else '：' + st.get('reason', '')),
-                  flush=True)
-        except Exception as e:                    # noqa: BLE001
-            print('[启动] 文件台账不可用（不影响问答与上传，只是没有本地副本/预览）：%s: %s'
-                  % (type(e).__name__, e), flush=True)
-        # 异步上传任务：把上次中断的标成 failed（**不自动重试**：上传链路不幂等，重试会造重复文档）
-        try:
-            import kb_upload
-            n = kb_upload.recover()
-            st = kb_upload.status()
-            print('[启动] 异步上传%s（%s，历史任务 %s，本次标记中断 %d 个）%s'
-                  % ('就绪' if st.get('available') else '未就绪', st.get('source', '?'),
-                     st.get('by_status', {}), n,
-                     '' if st.get('available') else '：' + st.get('reason', '')),
-                  flush=True)
-        except Exception as e:                    # noqa: BLE001
-            print('[启动] 异步上传不可用（同步上传不受影响）：%s: %s' % (type(e).__name__, e), flush=True)
         # L2 会话摘要：把「攒够轮数但还没摘要」的会话补跑一遍。
         # 摘要可以安全重跑（读同一批轮次 + 乐观锁写回），所以中断后自动补上没问题。
         try:
@@ -113,7 +89,29 @@ def _preheat():
                   flush=True)
         except Exception as e:                    # noqa: BLE001
             print('[启动] 会话摘要不可用（不影响问答）：%s: %s' % (type(e).__name__, e), flush=True)
-    threading.Thread(target=resume_kb_extract, daemon=True, name='kb-extract-resume').start()
+    threading.Thread(target=resume_tasks, daemon=True, name='resume-tasks').start()
+
+
+# 知识库连通性探测的结果缓存：/health 每次真连一次太浪费，60 秒内复用。
+_KB_PING = {'at': 0.0, 'val': None}
+
+
+def _kb_ping():
+    """知识库检索连通性（登录一次，8 秒超时）。结果缓存 60 秒。
+
+    登录不通 = 知识库检索必然失败（凭据错 / KB_BASE 写错 / 网络不通）。
+    这里只影响 /health 里的 `kb` 字段，**不影响问答主链路**。
+    """
+    now = time.time()
+    if _KB_PING['val'] is not None and now - _KB_PING['at'] < 60:
+        return _KB_PING['val']
+    try:
+        import kb_client
+        val = kb_client.health(timeout=8)
+    except Exception as e:                        # noqa: BLE001
+        val = {'available': False, 'reason': '%s: %s' % (type(e).__name__, e)}
+    _KB_PING['at'], _KB_PING['val'] = now, val
+    return val
 
 
 def _lan_ips():
@@ -160,16 +158,13 @@ class H(BaseHTTPRequestHandler):
         - name_fix ：词典默认从 agent_data 的 t_nc_* 表读（SECRETARY_LEXICON=db），
                      表没建 / 表是空的 / 连不上 → 错字纠正静默不生效
         - qa_log   ：记录库没建表 / 连不上 → 问答照答，但对话记录静默不落库
-        - kb       ：知识库 SDK 没装 / 凭据没配 → /api/kb/** 全返 503（**不连云**，
-                     只看依赖与配置；真正的连通性用 GET /api/kb/health 检查）
-        - kb_files ：文件台账表没建 / 连不上 → 上传仍成功，但**没有本地副本、没有预览**
-        - kb_upload：异步上传任务表没建 / 连不上 → `?async=1` 会失败（同步上传不受影响）
+        - kb       ：知识库**检索**连通性。这里会**真连一次**自建知识库（登录）；
+                     结果缓存 60 秒，避免被高频探活打爆。登录不通 = 检索必然失败。
         - session_summary：L2 会话摘要。开关关掉（SECRETARY_SESSION_SUMMARY=0）时它算
                      **未启用**而不是故障 —— 所以这里只看 available，不看原因
         """
         out = {'ok': True, 'model': agent.config.MODEL}
-        for mod, key in (('name_fix', 'name_fix'), ('qa_log', 'qa_log'),
-                         ('kb_api', 'kb'), ('kb_store', 'kb_files'), ('kb_upload', 'kb_upload')):
+        for mod, key in (('name_fix', 'name_fix'), ('qa_log', 'qa_log')):
             try:
                 m = __import__(mod)
                 st = m.status()
@@ -181,6 +176,13 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:              # noqa: BLE001
                 out[key] = False
                 out[key + '_reason'] = '%s: %s' % (type(e).__name__, e)
+        st = _kb_ping()
+        out['kb'] = bool(st.get('available'))
+        if st.get('available'):
+            out['kb_source'] = st.get('source', '')
+            out['kb_ids'] = st.get('kb_ids', [])
+        else:
+            out['kb_reason'] = st.get('reason', '')
         try:
             import session_summary
             st = session_summary.status()
@@ -238,8 +240,9 @@ class H(BaseHTTPRequestHandler):
     def _send_static(self, relpath, ctype):
         """发一个**静态页面**（相对 HERE）；文件缺失返 404（而不是让 open() 抛出去变成 500）。
 
-        ★ 名字不能叫 `_send_file` —— 那个已被"流式下发知识库原文件"占用
-        （它带 Content-Disposition: attachment），重名会让页面变成"被下载"。
+        ★ 名字刻意叫 `_send_static` 而不是 `_send_file`：历史上 `_send_file` 被
+        「流式下发知识库原文件」占用过（带 Content-Disposition: attachment，会被浏览器下载）。
+        那段管理面已于 2026-10-13 移除，但静态页仍走这条专用路径，避免再次混淆。
         """
         fp = os.path.join(HERE, relpath)
         try:
@@ -325,21 +328,11 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, got['html'], 'text/html')
             else:
                 self._send(500, 'page failed: %s' % got.get('error', ''), 'text/plain')
-        elif path.startswith('/api/kb/'):
-            # 知识库（阿里云百炼）：列表 / 详情 / 文档 / 上传 / 删除，实现见 kb_api.py
-            self._handle_kb('GET')
-        elif path in ('/kb', '/kb.html'):
-            # 知识库控制台页面（上传/删除文档，给同事用）
-            self._send_static('static/kb.html', 'text/html')
         else:
             self._send(404, 'not found', 'text/plain')
 
     def _do_post(self):
         path = self.path.split('?')[0]
-        if path.startswith('/api/kb/'):
-            # 上传文档：multipart/form-data 与裸二进制都支持（见 kb_api._upload）
-            self._handle_kb('POST')
-            return
         if path == '/api/asr':
             self._handle_asr()
             return
@@ -417,31 +410,16 @@ class H(BaseHTTPRequestHandler):
         page_async = (data.get('page_mode') or '').strip().lower() == 'async'
         # scope：数据范围由上游传（强制按它取数）。
         scope = (data.get('scope') or data.get('business_scope') or '').strip() or None
-        # skill_id：调用方知道这是哪个技能的追问 → 服务直接加载该技能自己的口径文档当标准，不靠检索。
-        skill_id = (data.get('skill_id') or '').strip()
-        standard = None
-        if skill_id:
-            try:
-                import report as _rep
-                for _s in (_rep.list_triggers().get('skills') or []):
-                    if _s.get('id') == skill_id:
-                        standard = _s.get('doc_text') or None
-                        _tu = _s.get('trigger_user') or {}
-                        scope = scope or _s.get('scope') or _tu.get('scope') or None
-                        profile = profile or ('你的身份：%s（账号 %s，角色 %s）。数据范围：%s。'
-                                              % (_tu.get('name') or _s.get('role') or '',
-                                                 _tu.get('account') or '', _tu.get('role') or '',
-                                                 _s.get('scope') or _tu.get('dept') or ''))
-                        break
-            except Exception:
-                standard = None
+        # ★ /api/ask 上**没有也不该有 skill_id**：对话就是对话、技能接口就是技能接口。
+        #   真实链路里前端从不传技能 ID；「按哪个技能答」由服务自己从唯一规则文档检索决定
+        #   （见 agent.rule_slices）。以前那条"传了就直接加载该技能文档当标准"的分支已删。
         # today：业务上的「今天」，**由上游传**（定时任务/业务系统知道业务日期）。
         # 不传才退回服务器日期；停留天数、同比、"截至今天"全按它算。
         today = (data.get('today') or data.get('business_date') or '').strip() or None
         client_ip = self.client_address[0] if self.client_address else None
         try:
             r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page,
-                          today=today, scope=scope, page_async=page_async, standard=standard,
+                          today=today, scope=scope, page_async=page_async,
                           session_id=session_id, user_id=user_id, user_code=user_code,
                           client_ip=client_ip, channel=channel, history_turns=history_turns)
         except Exception as e:
@@ -605,65 +583,8 @@ class H(BaseHTTPRequestHandler):
             self._fail(e)
 
     def _do_delete(self):
-        path = self.path.split('?')[0]
-        if path.startswith('/api/kb/'):
-            self._handle_kb('DELETE')
-            return
+        # 2026-10-13：删除类接口只剩知识库管理面（已移除），DELETE 现在一律 404。
         self._send(404, 'not found', 'text/plain')
-
-    def _handle_kb(self, method):
-        """把所有 /api/kb/** 交给 kb_api 处理。
-
-        知识库是**附属能力**：SDK 没装 / 凭据没配 / 连不上云端，
-        都只影响这一组接口，**绝不拖垮问答主链路**（所以这里再包一层 try）。
-        """
-        try:
-            import kb_api
-            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
-            n = int(self.headers.get('Content-Length') or 0)
-            body = self.rfile.read(n) if n else b''
-            headers = {k.lower(): v for k, v in self.headers.items()}
-            r = kb_api.dispatch(method, unquote(self.path.split('?')[0]), q, headers, body)
-        except Exception as e:                  # noqa: BLE001
-            self._send_json({'error': '%s: %s' % (type(e).__name__, e)}, 503)
-            return
-        if r is None:
-            self._send_json({'error': 'not found'}, 404)
-            return
-        status, payload = r
-        # 下载原文件：payload 里带 __file__ 时走流式下发，不是 JSON
-        if isinstance(payload, dict) and payload.get('__file__'):
-            self._send_file(status, payload['__file__'], payload.get('name'), payload.get('ctype'))
-            return
-        self._send(status, json.dumps(payload, ensure_ascii=False, default=str),
-                   'application/json')
-
-    def _send_file(self, code, path, name=None, ctype=None):
-        """流式下发磁盘上的原文件（GET /api/kb/files/{file_id}/download）。
-
-        分块读 + 预声明 Content-Length：大文件不占内存，前端也能显示下载进度。
-        """
-        try:
-            size = os.path.getsize(path)
-        except OSError as e:
-            self._send_json({'error': '原文件读不到：%s' % e}, 404)
-            return
-        self.send_response(code)
-        self.send_header('Content-Type', ctype or 'application/octet-stream')
-        self.send_header('Content-Length', str(size))
-        # 中文文件名必须用 filename*（RFC 5987）编码，否则浏览器拿到的是乱码
-        self.send_header('Content-Disposition',
-                         "attachment; filename*=UTF-8''" + quote(name or os.path.basename(path)))
-        self.end_headers()
-        try:
-            with open(path, 'rb') as f:
-                while True:
-                    buf = f.read(64 * 1024)
-                    if not buf:
-                        break
-                    self.wfile.write(buf)
-        except (BrokenPipeError, ConnectionResetError):
-            pass                                          # 客户端中途断开，不算错误
 
     def log_message(self, *a):
         pass

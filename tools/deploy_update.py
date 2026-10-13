@@ -54,8 +54,10 @@ ROOT_FILES = ('requirements.txt', '.env.example')
 #   只按根目录找会**静默找不到**，于是每部署一次，服务器上就少一个 —— 脚本换目录时会整体替换，
 #   不在上传清单里的文件等于被删掉。实测 15:07 那次部署就把 start.sh / install_service.sh
 #   和《知识库与历史对话_对接手册.md》一起弄没了。
-DEPLOY_FILES = ('DEPLOY.md', '部署脚本使用说明.md', '接口对接说明.md', '知识库接口文档.md',
-                '技能接口文档.md', '知识库与历史对话_对接手册.md',
+# 2026-10-13：知识库管理面移除，删掉《知识库接口文档.md》；对接手册改名为
+#   《历史对话与接口_对接手册.md》（旧名不在清单里 ⇒ 切换时会被自动删掉，符合预期）。
+DEPLOY_FILES = ('DEPLOY.md', '部署脚本使用说明.md', '接口对接说明.md', '技能接口文档.md',
+                '历史对话与接口_对接手册.md',
                 'start.sh', 'start.bat', 'install_service.sh')
 SKIP_DIRS = {'__pycache__', '.git', '.venv', 'node_modules', 'output'}
 SKIP_SUFFIX = {'.pyc', '.pyo', '.log'}
