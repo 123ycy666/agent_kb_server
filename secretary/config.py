@@ -150,21 +150,30 @@ MODELS = [
 ]
 MODEL_IDS = [m['id'] for m in MODELS]
 
-KB_SEARCH_URL = 'https://llm-dk4h22odcm9j1oqk.cn-beijing.maas.aliyuncs.com/api/v1/indices/knowledge/search'
-# 专用检索服务：绑定「项目管理秘书口径库 uxht00z9ey」+「ai大脑业务知识库 igjhr8giyb」
-# 检索服务：aid-72fa8… 只绑了 r57xtq9ypm（ai大脑通用语义知识库）；aid-c345… 是原先那个（只绑到口径库）。
-KB_AGENT_ID = os.environ.get('SECRETARY_KB_AGENT', 'aid-72fa8cae2b124d819617f157e97d0a1d')
-# 只检索指定知识库；留空 = 用检索服务默认范围
-KB_IDS = [x for x in os.environ.get('SECRETARY_KB_IDS', 'r57xtq9ypm').replace(' ', '').split(',') if x]
-
-# 检索后端：bailian=阿里云百炼（原样保留，可一行回滚）｜local=自建知识库（47.121.183.81）。
-# ★ 默认先留在 bailian：切 local = 行为变更，验收通过（S2–S5）后才改这一行。
-KB_BACKEND = (os.environ.get('SECRETARY_KB_BACKEND') or 'bailian').strip().lower()
-KB_LOCAL_URL = (os.environ.get('SECRETARY_KB_LOCAL_URL') or 'http://47.121.183.81').rstrip('/')
-KB_LOCAL_USER = os.environ.get('SECRETARY_KB_LOCAL_USER') or 'admin'
-KB_LOCAL_PASSWORD = os.environ.get('SECRETARY_KB_LOCAL_PASSWORD') or '123456'
-# 自建库里的知识库 id（KB 5 =「秘书问答规则」：判据规则 + 数据表说明书）
-KB_LOCAL_IDS = [int(x) for x in (os.environ.get('SECRETARY_KB_LOCAL_IDS') or '5').replace(' ', '').split(',') if x]
+# ---------------------------------------------------------------------------
+# 知识库（企业级本地知识库系统 · 自建 RAG）
+#
+# 2026-10-13 起**不再使用阿里云百炼知识库**：检索改为调用自建知识库的
+# `POST /api/v1/search`（只取切片，答案仍由本服务自己的模型生成），客户端见 kb_client.py。
+# 知识库的建库/上传/预览/冲突处理都在**它自己的 Web 界面**上做，本服务不再接管。
+#
+# 三条必须记住的线上约定：
+#  1. **必须用公网 IP**：nginx 的 server_name 是 47.121.183.81，
+#     用域名或 127.0.0.1 会落到默认站 → **502**。
+#  2. 认证 = `POST /auth/login` 拿 JWT（**12 小时过期**），kb_client 内建 401 自动重登。
+#  3. 下面几个键**环境变量优先、其次读 .env**（`.env` 里配了才生效，注意占位）。
+# ---------------------------------------------------------------------------
+KB_BASE = (os.environ.get('SECRETARY_KB_BASE')
+           or ENV.get('SECRETARY_KB_BASE') or 'http://47.121.183.81/api/v1').strip()
+KB_USER = (os.environ.get('SECRETARY_KB_USER')
+           or ENV.get('SECRETARY_KB_USER') or 'integration').strip()
+KB_PASSWORD = (os.environ.get('SECRETARY_KB_PASSWORD')
+               or ENV.get('SECRETARY_KB_PASSWORD') or '').strip()
+# 问答检索哪些库：新知识库用的是**数字 id**（逗号分隔）。默认 [5, 3]：
+#   5 = 秘书问答规则（判据 / 口径）　3 = 公司知识库（业务背景）
+KB_IDS = [int(x) for x in
+          (os.environ.get('SECRETARY_KB_IDS') or ENV.get('SECRETARY_KB_IDS') or '5,3')
+          .replace(' ', '').split(',') if x.strip().isdigit()]
 
 # AI 只能查这些表（留空 = 用业务字典里登记的全部）。
 # 六项指标已统一到这两张预计算表：快照（本期值）+ 对比（同比/环比）。
@@ -207,29 +216,10 @@ MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))
 # 服务端序列化与前端渲染都会很难受。要更多就用 limit+offset 分页取。
 API_MAX_ROWS = int(os.environ.get('SECRETARY_API_MAX_ROWS', '5000'))
 
-# 知识库「原文件 + 抽出的富文本」的存放位置（2026-09-22 新增，配合 /api/kb/files/**）。
-#   原文件 → 落磁盘：KB_FILE_ROOT/{index_id}/{md5}/{原文件名}
-#   富文本 → 入库（agent_data 的 t_kb_file / t_kb_file_page，按页存 HTML）
-# 为什么原文件不入库：几十上百 MB 的二进制塞 BLOB 会把备份、查询、迁移全拖慢；
-# 而且将来换成本地内网部署时，本地磁盘本来就是这个位置最适合。
-KB_FILE_ROOT = os.environ.get('SECRETARY_KB_FILES') or os.path.join(os.path.dirname(HERE), 'kb_files')
-
-# 知识库「单库模式」（2026-09-22 新增，默认**开**）：
-#   开：服务端只暴露一个知识库（DEFAULT_INDEX_ID）—— 列表接口只返回它，
-#       路径/参数里传别的 index_id 一律被忽略（并打日志留痕）。
-#   关（SECRETARY_KB_SINGLE=0）：恢复"能看能操作业务空间下全部知识库"的老行为。
-# ★ 为什么必须在服务端做：前端不显示只是"看不见"，只要接口还能指定 index_id，
-#   换个 ID 照样能操作别的库 —— 那是障眼法，不是隔离。
-KB_SINGLE_INDEX = (os.environ.get('SECRETARY_KB_SINGLE') or '1').strip().lower() \
-    not in ('0', 'false', 'no', 'off')
-
-# 上传文档是否**默认走异步**（2026-09-22 新增，默认 0 = 保持同步）。
-#   0：POST .../documents 同步等云端完成（最长 300 秒）后才返回 —— 对现有前端零影响。
-#   1：默认立刻返回 task_id，用 GET /api/kb/uploads/{task_id} 轮询。
-#   单个请求仍可用 ?async=1 / ?async=0 覆盖这个默认值。
-#   什么时候改成 1：同事的前端接完异步轮询之后。
-KB_UPLOAD_ASYNC_DEFAULT = (os.environ.get('SECRETARY_KB_ASYNC_DEFAULT') or '0').strip().lower() \
-    in ('1', 'true', 'yes', 'on')
+# 说明：原「知识库文件台账 / 本地原文件目录 / 单库模式 / 异步上传默认」这几个开关
+# （SECRETARY_KB_FILES、SECRETARY_KB_SINGLE、SECRETARY_KB_ASYNC_DEFAULT）已随
+# **管理面（/api/kb/**）一并移除**（2026-10-13）—— 上传、预览、删除都改用
+# 新知识库系统自己的 Web 界面，本服务只保留「检索」这一个动作。
 
 # L2 会话摘要（2026-09-22 新增）：把一场会话的早期轮次压成一段话，续聊时注进提示，
 # 这样"翻出一场很久以前的会话继续聊"时，模型不至于只知道最近的几轮。

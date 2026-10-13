@@ -296,155 +296,57 @@ SELECT id,uid,username,role FROM agent_data.t_user;"
 
 ---
 
-## 九、4.1 新增：知识库文件预览（本地副本 + 按页 HTML）
+## 九、知识库：只读检索（2026-10-13 管理面已移除）
 
-> 接口契约与前端用法见《知识库接口文档.md》**第十一节**，这里只说部署要做什么。
+> ⚠️ **本服务不再有知识库管理接口**：`/api/kb/**` 与 `/kb` 控制台页面已删除，
+> 阿里云百炼 SDK、AK/SK、`WORKSPACE_ID` / `DEFAULT_INDEX_ID` 全部不再需要。
+> 建库 / 上传 / 预览 / 标签 / 冲突处理请用**知识库系统自己的 Web 界面**（`http://47.121.183.81/`）。
 
-### 9.1 建表（一次性）
+本服务与知识库只剩**一条链路：检索**——`secretary/kb_client.py` 调 `POST /api/v1/search`
+拿回切片，答案仍由本服务的模型生成（**不用知识库生成的答案**）。
 
-```bash
-cd /root/agentkownlg/deploy_server
-python3 -X utf8 tools/apply_kb_file_schema.py          # 建表 + 自检
-python3 -X utf8 tools/apply_kb_file_schema.py --check  # 只看现状、不建
-```
+### 9.1 配置（一次性）
 
-会建 `t_kb_file`（文件台账）与 `t_kb_file_page`（按页 HTML），
-并给 `t_chat_session` 加三个摘要列（`summary` / `summary_upto_seq` / `summary_time`，P2 会话记忆用）。
-**幂等**，可重复执行，不会清数据。
-
-> ★ **不建表也不会让服务起不来**：上传照旧成功，只是没有本地副本、没有预览
-> （`/api/kb/files/**` 报 503，`/health` 里 `kb_files:false`）。
-
-### 9.2 装抽取依赖
-
-```bash
-python3 -m pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
-```
-
-新增这几类（**缺哪个只影响那种格式**，其余照常）：
-
-| 依赖 | 干什么 | 不装的后果 |
-|---|---|---|
-| `mammoth` | DOCX → HTML | docx 无预览 |
-| `openpyxl` | XLSX，每 sheet 一页 | xlsx 无预览 |
-| `pymupdf4llm` (+`markdown`) | PDF → 按页 Markdown → HTML | 退回纯 `pymupdf`（正文能看但丢表格结构）；**体积较大，会顺带装 onnxruntime** |
-| `python-pptx` | PPTX，每 slide 一页 | pptx 无预览 |
-| **`nh3`（或 `bleach`）** | **HTML 白名单清洗** | **两个都没有 → 抽取直接报错**（宁可不预览，也不把未清洗的 HTML 入库）|
-
-装完自检一下哪些格式真的能用：
-
-```bash
-cd /root/agentkownlg/deploy_server/secretary
-python3 -X utf8 -c "import text_extract; print(text_extract.status())"
-```
-
-### 9.3 原文件存哪
-
-默认落在 **`<部署目录>/kb_files/`**（与 `secretary/` 平级），可用环境变量改：
+知识库的对接账号由知识库管理员在「用户管理」里分配。写进部署目录的 `.env`：
 
 ```ini
-# systemd 里加： Environment=SECRETARY_KB_FILES=/data/kb_files
+SECRETARY_KB_BASE=http://47.121.183.81/api/v1   # ⚠️ 必须公网 IP，用域名/127.0.0.1 会 502
+SECRETARY_KB_USER=integration
+SECRETARY_KB_PASSWORD=<管理员分配>               # 不配 = 检索必失败
+SECRETARY_KB_IDS=5,3                            # 检索哪些库（数字 id）：5=秘书问答规则、3=公司知识库
 ```
 
-目录结构：`{root}/{index_id}/{md5}/{原文件名}`。用 md5 当目录名 —— 上传前就能算出来、
-天然去重、失败时好清理，不依赖云端返回的 file_id。
+> ★ 这几个键**环境变量优先、其次读 `.env`**（`.env` 里写就生效）。
+> 想在 systemd 里覆盖，加 `Environment=SECRETARY_KB_IDS=5,3` 后 `daemon-reload` + `restart`。
 
-> **留意磁盘容量**：原文件会一直留着（删文档时**默认保留**，只有传 `drop_raw=1` 才删）。
-> 长期运行要盯一下这个目录的增长，必要时挂独立数据盘。
+### 9.2 建表：不需要
 
-### 9.4 验证
+原 `tools/apply_kb_file_schema.py`（`t_kb_file` / `t_kb_file_page` / `t_kb_upload_task`）
+与 `tools/kb_sync.py` 已随管理面删除。**本服务不再往 agent_data 写任何知识库相关表**。
+（`t_chat_session` 的 `summary` 三列仍由会话摘要使用，见 10.4。旧表留着不影响运行。）
+
+### 9.3 验证
 
 ```bash
-# ① 能力字段都要 true（完整清单与含义见 10.6）
+# ① 检索连通性：/health 里 kb 应为 true，并带 kb_source / kb_ids
 curl -s http://127.0.0.1:8200/health
-# {"ok":true,...,"kb":true,"kb_files":true,"kb_files_source":"mysql:agent_data"}
+# {"ok":true,…,"kb":true,"kb_source":"http://47.121.183.81/api/v1","kb_ids":[5,3]}
 
-# ② 传一个真实文件（同时落盘 + 后台抽 HTML）
-curl -s -X POST -F "file=@公司简介.pdf" "http://127.0.0.1:8200/api/kb/indices/razubo7dra/documents"
-#   记下响应里的 file_id；local.extract_status 一开始是 pending
-
-# ③ 轮询到 done（大文件几十秒到几分钟）
-curl -s "http://127.0.0.1:8200/api/kb/files/<file_id>"
-
-# ④ 取正文（HTML 富文本）
-curl -s "http://127.0.0.1:8200/api/kb/files/<file_id>/text?page=1"
-
-# ⑤ 下载原文件
-curl -OJ "http://127.0.0.1:8200/api/kb/files/<file_id>/download"
+# ② 端到端：问一个需要判据的问题，响应 trace 里应出现 kb_search 且能取到切片
+curl -s -X POST -H "Content-Type: application/json" \
+  -d "{\"question\":\"项目执行进度异常的判断标准是什么\"}" \
+  http://127.0.0.1:8200/api/ask | python3 -c "import sys,json;d=json.load(sys.stdin);print([t['tool'] for t in d['trace']])"
 ```
 
-**重启不会丢抽取任务**：启动时会扫台账里 `pending/extracting` 的行自动重新排队，
-启动日志里有一行 `[启动] 文件台账就绪（… 本次恢复 N 个待抽取）`。
+> 排障：`kb:false` 时看 `kb_reason`（多为密码错 / 网络不通 / `KB_BASE` 用了域名）。
 
 ---
 
-## 十、4.2 新增：单库收口 + 异步上传 + 会话摘要
+## 十、会话摘要（L2）与相关开关
 
-> 接口契约与前端用法见《知识库接口文档.md》**第十二节**；
-> L2 摘要新增的返回字段见《接口对接说明.md》。这里只说**部署要做什么**。
+> ⚠️ 本节原含「单库收口 / 异步上传」两小节，已随知识库管理面**一并移除**（2026-10-13）。
 
-### 10.1 多建一张表（`t_kb_upload_task`）
-
-异步上传的任务表。`tools/kb_file_schema.sql` 里已经加进去了，
-**重跑一次建表脚本就行**（幂等，不会清数据）：
-
-```bash
-cd /root/agentkownlg/deploy_server
-python3 -X utf8 tools/apply_kb_file_schema.py          # 建表 + 自检
-python3 -X utf8 tools/apply_kb_file_schema.py --check  # 只看现状、不建
-```
-
-> ★ **不建这张表也不会让服务起不来**：只有带 `?async=1` 的上传会失败，
-> **同步上传照旧**；`/health` 里 `kb_upload:false`。
-
-### 10.2 单库收口（前端只能看到一个知识库）
-
-**默认就是开的**，不用配。它做两件事，都是**服务端强制**（不是前端不显示）：
-
-| 行为 | 效果 |
-|---|---|
-| `GET /api/kb/indices` | 只返回 `DEFAULT_INDEX_ID`（`razubo7dra`）那一个，并带 `locked:true` |
-| 路径里的 `index_id` | **一律忽略**，统一用 `DEFAULT_INDEX_ID`；传了别的值会打日志留痕 |
-
-```bash
-# 想恢复"能看能操作业务空间下全部知识库"的老行为：
-# systemd 里加 Environment=SECRETARY_KB_SINGLE=0
-```
-
-> ⚠️ **为什么必须在服务端做**：只要 `/api/kb/indices` 还在返回全部，
-> 调用方换个 `index_id` 照样能操作别的库 —— **前端隐藏 ≠ 隔离**。
-
-### 10.3 异步上传
-
-**默认仍是同步**（对已上线的老前端零影响）。加一个查询参数就走异步：
-
-```bash
-# 同步（默认，最长等云端 300 秒）
-curl -s -X POST -F "file=@公司简介.pdf" \
-  "http://127.0.0.1:8200/api/kb/indices/razubo7dra/documents"
-
-# 异步（立刻返回 task_id）
-curl -s -X POST -F "file=@公司简介.pdf" \
-  "http://127.0.0.1:8200/api/kb/indices/razubo7dra/documents?async=1"
-# → {"task_id":"up_9124575e…","status":"pending","status_url":"/api/kb/uploads/up_…"}
-
-# 轮询（pending → uploading → done / failed）
-curl -s "http://127.0.0.1:8200/api/kb/uploads/up_9124575e…"
-# → done 时带 file_id，拿它去 /api/kb/files/{file_id} 看预览
-```
-
-**前端接完异步轮询后**，可以把它设成默认（不带 `?async=1` 也走异步）：
-
-```ini
-# systemd 里加： Environment=SECRETARY_KB_ASYNC_DEFAULT=1
-```
-
-> ⚠️ **服务重启会把"上传中"的任务标成 `failed`，不自动重试。**
-> 原因：上传链路（申请租约 → PUT → 登记 → 等解析）**不幂等**，
-> 而且中断时无法判断上次传到哪一步 —— 重试只会造重复文档。
-> 中断的任务仍在表里，能查到，但需要人工重传。
-
-### 10.4 L2 会话摘要（长会话也能记住）
+### 10.1 L2 会话摘要（长会话也能记住）
 
 **默认就是开的**，不用配。后台 daemon 线程异步生成，**不阻塞问答**。
 
@@ -489,56 +391,48 @@ user_content = 本轮问题
 | `SECRETARY_SUMMARY_MODEL` | 空 | 摘要用哪个模型；留空 = 同主模型（想省钱可填 flash 级）|
 | `SECRETARY_SUMMARY_MAX_CHARS` | `150` | 摘要正文长度上限（字）★ 与提示词里写的 150 对齐 |
 
-### 10.5 本轮新增开关一览
+### 10.2 相关开关一览
 
 | 变量 | 默认 | 加在哪 |
 |---|---|---|
-| `SECRETARY_KB_SINGLE` | `1` | 单库收口，`0` = 恢复能看全部库 |
-| `SECRETARY_KB_ASYNC_DEFAULT` | `0` | `1` = 上传默认走异步 |
 | `SECRETARY_SESSION_SUMMARY` | `1` | 会话摘要总开关 |
 | `SECRETARY_SUMMARY_EVERY` | `5` | 摘要触发阈值（轮）|
 | `SECRETARY_SUMMARY_KEEP_RECENT` | `2` | 最近几轮始终带原话（且不再写进摘要）|
 | `SECRETARY_SUMMARY_MIN_TURNS` | `6` | 会话总轮数达到才注入摘要（`0`=不设门槛）|
 | `SECRETARY_SUMMARY_MODEL` | 空 | 摘要模型（空=同主模型）|
 | `SECRETARY_SUMMARY_MAX_CHARS` | `150` | 摘要长度上限（与提示词对齐）|
-| `SECRETARY_KB_FILES` | `<部署目录>/kb_files` | 原文件落盘目录（见 9.3）|
 
-> ⚠️ **这些都是 `SECRETARY_*` 系列，写在 `.env` 里不生效** ——
+> ⚠️ **知识库检索配置（`SECRETARY_KB_*`）既读环境变量、也读 `.env`**（见 9.1）；
+> 而上面这几个 `SECRETARY_SUMMARY_*` **写在 `.env` 里不生效** ——
 > 只能走 **systemd 单元里的 `Environment=`**（`config.py` 读的是 `os.environ`）。
 > 改完必须 `systemctl daemon-reload` 再 `restart`。
 
-### 10.6 验证
+### 10.3 验证
 
 ```bash
-# ① 六个能力字段都要 true（新增 kb_upload / session_summary）
+# ① 能力字段（kb 的连通性检查见 9.3）
 curl -s http://127.0.0.1:8200/health
-# {"ok":true,…,"kb":true,"kb_files":true,"kb_upload":true,
+# {"ok":true,…,"kb":true,"name_fix":true,"qa_log":true,
 #  "session_summary":true,"session_summary_source":"mysql:agent_data"}
 
-# ② 单库收口生效（期望 total_count=1、locked=true）
-curl -s "http://127.0.0.1:8200/api/kb/indices?page_size=50"
-
-# ③ 异步上传走一遍（见 10.3 三条命令）
-# ④ 会话摘要：同一 session_id 连问 6 轮以上，第 6 轮起响应里 summary_used=true
+# ② 会话摘要：同一 session_id 连问 6 轮以上，第 6 轮起响应里 summary_used=true
 ```
 
-启动日志里应能看到这三行：
+启动日志里应能看到会话摘要那一行：
 
 ```
-[启动] 文件台账就绪（mysql:agent_data，已存 N 个文件，本次恢复 N 个待抽取）
-[启动] 异步上传就绪（mysql:agent_data，历史任务 {...}，本次标记中断 N 个）
 [启动] 会话摘要就绪（mysql:agent_data，每 5 轮触发一次，本次补跑 N 场）
 ```
 
-### 10.7 四个坑
+### 10.4 四个坑
 
-1. ★ **必须 `daemon-reload` + `restart`** —— 本轮新增了 systemd `Environment=`，
+1. ★ **必须 `daemon-reload` + `restart`** —— 若在 systemd 里加了 `Environment=`（如 `SECRETARY_SUMMARY_*`），
    只 `restart` 不会让新环境变量生效。
-   复核：`systemctl show secretary -p Environment | tr ' ' '\n' | grep -i 'KB\|SUMMARY'`
+   复核：`systemctl show secretary -p Environment | tr ' ' '\n' | grep -i 'SUMMARY\|KB'`
 2. **摘要是异步的** —— 回答响应当轮 `summary_queued=true` 只表示"已投递"，
    摘要文本要等下一次提问才会被注入（不要以为当轮就该有）。
-3. **收口后传错 `index_id` 不会报错**，会被静默改成 `razubo7dra` ——
-   排障时如果发现操作的不是预期库，先翻服务日志里的忽略告警。
+3. **知识库地址必须用公网 IP**（`http://47.121.183.81/api/v1`）——
+   用域名或 `127.0.0.1` 会落到 nginx 默认站 → **502**，`/health` 里 `kb:false`。
 4. **摘要生成的模型调用是额外成本** —— 每 `SUMMARY_EVERY` 轮一次；
    会话量大了想省钱，把 `SECRETARY_SUMMARY_MODEL` 指到便宜模型上。
 

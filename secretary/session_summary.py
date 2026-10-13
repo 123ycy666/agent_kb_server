@@ -101,8 +101,8 @@ def status():
         finally:
             c.close()
     except Exception as exc:                          # noqa: BLE001
-        out['reason'] = ('摘要列不可用（先跑 tools/apply_kb_file_schema.py）：%s: %s'
-                         % (type(exc).__name__, str(exc)[:120]))
+        out['reason'] = ('摘要列不可用（需给 t_chat_session 补 summary / summary_upto_seq / '
+                         'summary_time 三列）：%s: %s' % (type(exc).__name__, str(exc)[:120]))
         return out
     out['available'] = True
     return out
