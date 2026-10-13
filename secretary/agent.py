@@ -8,12 +8,14 @@
 """
 import concurrent.futures
 import hashlib
+import socket
 import threading
 import uuid
 import json
 import re
 import ssl
 import time
+import urllib.error
 import urllib.request
 
 import config
@@ -45,8 +47,18 @@ TOOLS = [
         'name': 'run_sql',
         'description': '在只读业务库执行一条 SELECT（只允许业务字典里的表；不支持分号与注释，最多返回 200 行）。'
                        '★ 要查多个互不依赖的数时，请在**同一次回复里一次发出多条 run_sql**'
-                       '（系统会并发执行，一轮就全拿到）；不要一条一条分多轮来 —— 每多一轮就多花几秒。',
+                       '（系统会并发执行，一轮就全拿到）；不要一条一条分多轮来 —— 每多一轮就多花几秒。'
+                       '★ 调工具的那几轮**只给工具调用，不要写任何说明文字**（不复述在查什么、不解释下一步、'
+                       '不描述结果）。**数据查够后就不要再写了，只回一句「数据已查全」** —— '
+                       '最终汇报会另外让你写；自己在这轮写汇报会白烧十几秒，而且系统不用那段文字。',
         'parameters': {'type': 'object', 'properties': {'sql': {'type': 'string'}}, 'required': ['sql']}}},
+    # ★ 收尾信号（2026-10-09 加）：查数轮强制 tool_choice=required，模型不能写散文，
+    #   于是用一个空工具表示"到此为止"。数据查够就调它，之后由系统另行要一次正文。
+    {'type': 'function', 'function': {
+        'name': 'finish',
+        'description': '数据已经查够、可以写汇报了，就调用它收尾（不要再写任何文字）。',
+        'parameters': {'type': 'object', 'properties': {
+            'plan': {'type': 'string', 'description': '一句话说明你打算怎么答'}}, 'required': ['plan']}}},
 ]
 
 _ctx = ssl.create_default_context()
@@ -54,20 +66,130 @@ _ctx.check_hostname = False
 _ctx.verify_mode = ssl.CERT_NONE
 
 
-def _chat(messages, model, use_tools=True, max_tokens=1500):
+def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_choice=None):
+    # ★ 默认开思考（**不要**关）：关掉思考时模型没有隐藏草稿纸，过程话术会直接写进 content，
+    #   正文里出现「这是对策题。回答要点：…」「让我确认一下」「现在我已经收集了…」——
+    #   领导看到的就是思考过程（实测，output/probe_thinking.py、probe_final_turn.py）。
+    #   开思考时过程落在 reasoning 字段，content 只剩最终回答。
+    # 代价：reasoning 也占 completion token，max_tokens 给小了会把正文挤空 —— 所以放大到 4000。
+    # 2026-10-10：模型换百炼 deepseek-v4.1-flash（内网 v4 到期），思考开关用 enable_thinking。
     body = {'model': model, 'messages': messages,
-            'enable_thinking': False, 'temperature': 0, 'max_tokens': max_tokens}
+            'temperature': 0, 'max_tokens': max_tokens}
+    if not think:
+        # ★ 只用**查数轮**（正文不要，只要 tool_calls）：关思考每轮 59 token / 1.3s，
+        #   开思考同一轮 159 token / 2.6s，而实测真实链路里开思考的查数轮能涨到
+        #   1000~4000 token 的内心独白（一轮 20~68s）—— 那才是「一道分析题 3 分钟」的真凶。
+        #   关掉它，查数轮的正文我们本来就不看（下面不再拿 content 当答案）。
+        #   百炼的 DeepSeek-V4.1 认 **enable_thinking**（非标准参数、放顶层，实测关掉后 reasoning=0、
+        #   正文直接出来）；原来内网 dsv4 认的是 chat_template_kwargs，随内网 v4 到期一起停用。
+        body['enable_thinking'] = False
     if use_tools:
         body['tools'] = TOOLS
+        if tool_choice:
+            body['tool_choice'] = tool_choice
     body = json.dumps(body).encode('utf-8')
     req = urllib.request.Request(config.LLM_BASE + '/chat/completions', data=body, headers={
         'Authorization': 'Bearer ' + config.LLM_KEY, 'Content-Type': 'application/json'})
-    raw = urllib.request.urlopen(req, timeout=config.HTTP_TIMEOUT, context=_ctx).read().decode('utf-8', 'replace')
-    return json.loads(raw)
+    # ★ 重推理题偶发单次调用超过 HTTP_TIMEOUT（实测问「今年能达标吗」那次跑到 137s），
+    #   直接抛出去就变成「服务异常：TimeoutError」这种用户看不懂的东西 —— 等于这题废了。
+    #   所以**超时重试一次**并把等待放宽：多等一会儿，换回一个答案。
+    last = None
+    for tmo in (config.HTTP_TIMEOUT, config.HTTP_TIMEOUT + 90):
+        try:
+            raw = urllib.request.urlopen(req, timeout=tmo, context=_ctx).read().decode('utf-8', 'replace')
+            return json.loads(raw)
+        except (socket.timeout, TimeoutError) as e:
+            last = e
+        except urllib.error.URLError as e:
+            if not isinstance(getattr(e, 'reason', None), (socket.timeout, TimeoutError)):
+                raise                                   # 不是超时（DNS/连接被拒…）就别重试
+            last = e
+        print('[agent] 模型调用超时（%ss），重试一次' % tmo, flush=True)
+    raise last
+
+
+def _final_answer(messages, model, max_tokens=2500):
+    """兜底：**关掉工具**再明确要一次正文。
+
+    用在 content 为空的场合（实测 Q10「申报有没有不该批的」跑 594s、16 次查询后返回空正文）：
+    开着思考时 reasoning 会把 max_tokens 吃满，正文就没了。不能把 reasoning 当答案给领导
+    （那是内心独白），更不能给空白 —— 不带工具时它没得可调，只能写正文。
+    """
+    msgs = list(messages) + [{'role': 'user', 'content':
+                              '请直接给出给领导的最终回答正文，不要调用工具、不要复述分析过程、不要写思考过程。'}]
+    # 关思考：实测同一次「写汇报」开着思考要 23s（reasoning 2117 字 + 正文 382 字），
+    # 关掉只需几秒；正文由上面的明确口令限定，不缺东西。
+    # ★ 偶发空正文（实测 12 题里 1 次：生成 13.6 秒却 content 为空，疑似退化重复被 strip 掉），
+    #   这时**开思考重试一次**；空回答绝不能给领导。
+    for think in (False, True):
+        resp = _chat(msgs, model, use_tools=False, max_tokens=max_tokens, think=think)
+        out = (resp['choices'][0]['message'].get('content') or '').strip()
+        if out:
+            return out
+    return ''
 
 
 def _trim(name, res):
     return json.dumps(res, ensure_ascii=False, default=str)[:4000]
+
+
+# ---------------------------------------------------------------------------
+# 输出清洗：把模型漏进正文的「过程话术 / Markdown 符号 / 英文思考句」洗掉。
+#
+# 为什么放在代码里而不是只写进提示词：实测 dsv4 即使被明确禁止，仍会把思考句
+# （"I have all the data. Let me compile the report."）和 ** 加粗漏进正文；
+# 提示词对它约束力不够。清洗是确定性的，且对所有模型都受益。
+# 原则：**只洗格式与过程话术，不动内容与数字**；洗空了就退回原文，绝不返回空。
+_MD_RULES = (
+    (re.compile(r'\*\*(.+?)\*\*', re.S), r'\1'),                 # **粗体**
+    (re.compile(r'^\s{0,3}#{1,6}\s*', re.M), ''),                  # # 标题
+    (re.compile(r'^\s{0,3}>\s?', re.M), ''),                       # > 引用
+    (re.compile(r'^\s{0,3}[-*+]\s+', re.M), ''),                   # - 项目符号
+    (re.compile(r'^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$', re.M), ''),  # 表格分隔行
+)
+_PROCESS_PATTERNS = (
+    re.compile(r'(?:I have|I now have|Let me|Now I|Now let|Based on the|Okay,?|Sure,?)[^。\n]{0,140}[.\n]', re.I),
+    re.compile(r'(?:我(?:已经|现在)?(?:掌握|拿到|获得|获取)了?[^。\n]{0,30}(?:数据|信息|指标|结果)[^。\n]{0,20}[。：:]\s*)'),
+    re.compile(r'(?:让|接下来)?我(?:们)?(?:来)?(?:综合|组织|整理|汇总|判断|分析|回答|汇报|梳理)[^。\n]{0,30}[。：:]\s*'),
+    re.compile(r'^(?:好的?|收到)[，,。]?\s*'),
+    # 内部故障/过程话术（模型把"检索失败"也当正文写了）
+    re.compile(r'[^。\n]{0,10}(?:知识库)?检索(?:持续)?失败[^。\n]{0,40}[。\n]?'),
+    re.compile(r'[^。\n]{0,10}无法(?:获取|读取|访问)(?:到)?(?:判据)?规则[^。\n]{0,30}[。\n]?'),
+    re.compile(r'但(?:我)?根据业务规则[^。\n]{0,30}(?:判断|判断标准)[^。\n]{0,20}[。\n]?'),
+    # 数据确认句 / 收尾过渡句（实测 dsv4 常带）
+    re.compile(r'[^。\n]{0,12}数据(?:已|都)?(?:确认|核对)?(?:已)?(?:齐|齐全|完毕|完整)[^。\n]{0,10}[。，]?\s*'),
+    re.compile(r'(?:现在|接下来)(?:我)?(?:给出|开始|整理出|输出)?(?:给出)?(?:最终)?回答[。：:]?\s*'),
+    re.compile(r'^(?:现在|接下来)(?:我)?(?:来)?(?:给出|说说|回答)[^。\n]{0,10}[。：:]\s*'),
+)
+
+
+def _clean_answer(text):
+    """清洗模型漏进正文的格式符号与过程话术。只洗格式，不动内容；洗空就退回原文。"""
+    if not text:
+        return text
+    out = text
+    for pat, rep in _MD_RULES:
+        out = pat.sub(rep, out)
+    # 表格行：| a | b |  ->  a：b（一行一条，保留信息，不留竖线）
+    def _row(m):
+        cells = [c.strip() for c in m.group(1).split('|')]
+        cells = [c for c in cells if c]
+        return cells[0] + '：' + '，'.join(cells[1:]) if len(cells) >= 2 else (cells[0] if cells else '')
+    out = re.sub(r'^\s*\|(.+?)\|\s*$', _row, out, flags=re.M)
+    out = out.replace('|', '，')                            # 残留竖线
+    for _ in range(3):                                   # 开头可能连着几句过程话术
+        before = out
+        for pat in _PROCESS_PATTERNS:
+            out = pat.sub('', out, count=1)
+        out = out.lstrip()
+        if out == before:
+            break
+    for pat in _PROCESS_PATTERNS:                        # 正文中间漏的英文思考句也删
+        out = pat.sub('', out)
+    out = re.sub(r'[ \t]+\n', '\n', out)
+    out = re.sub(r'\n{3,}', '\n\n', out).strip()
+    return out if len(re.sub(r'\s', '', out)) >= 10 else text
+
 
 
 def execute(name, args):
@@ -76,8 +198,108 @@ def execute(name, args):
     if name == 'find_column':
         return tools_db.find_column(args.get('keyword', ''))
     if name == 'run_sql':
-        return tools_db.run_sql(args.get('sql', ''))
+        r = tools_db.run_sql(args.get('sql', ''))
+        # 0 行 = 空集。模型拿到空结果会忍不住摘掉时间/状态条件再查一遍凑数
+        # （实测：带年份查出 0 行 → 去掉年份 → 148.07 万 → 负余额）。
+        # 在它**正想放宽的那一刻**把话说死，比写在几百行外的规则文档里管用。
+        try:
+            if not r.get('error') and not (r.get('rows') or []):
+                r = dict(r)
+                r['空集提示'] = ('这是 0 行 = 空集，空集就是答案。不许摘掉时间 / 状态 / 范围条件再查一遍凑数字；'
+                                '确实要改条件，必须在回答里写明改了什么、为什么。')
+        except Exception:                           # noqa: BLE001
+            pass
+        return r
     return {'error': 'unknown tool ' + str(name)}
+
+
+# 固定口径（2026-09-24 业务确认）：**每次都带，不靠检索**。
+# 这里只放「业务定死的取值口径」——算错了就是错数，且每题都要用：
+#   状态分组、实际投入口径、分配预算取值、年度对齐、空集、结论三选一、重复申报、编号翻中文。
+# ★ **分析流程不在这里**（四个视角 / 同期对比 / 多数据拼接 / 建议怎么给）——
+#   那些写在 skills/判据规则.md 零节，**走知识库检索**注入。要改分析规矩改文档，不改这里。
+CALIBER = (
+    '【固定口径】（每次都必须遵守，不用去检索）\n'
+    '1. **已审批 = 工单状态 2、3、6、7**（2＝所长已审核通过、在上级审批中；3＝审核通过待施工；'
+    '6＝施工中；7＝施工完成待验收）。**不算** 0 草稿、1 提交审核、4 已驳回、5 已取消、9 驳回已修改。\n'
+    '2. **实际投入 = 已审批工单的预算金额**（budget_total）。库里的实际发生金额字段没有数据'
+    '（全库仅 62 条有值、2026 年为 0），**一律不用** —— 包括「钱花了没动」这类题，'
+    '也一律用预算金额（判据见《规则》第七节第 4 条）。\n'
+    '3. **执行率 = 当年已审批工单预算合计 ÷ 当年分配预算**。分配预算**只取供电所级分配结果**'
+    '（t_power_company_budget_result，条件 = 该所 + 问的年度 + deleted_flag=0 的唯一有效行）；'
+    '**全市 = 各所之和（2026 年 = 1880.00 万）**，**不要用公司级总预算表**（2026 年 = 1910.00 万，那是分配计算的输入）。\n'
+    '4. 分配、已审批、未审批**必须同年度、同层级**。对齐后占比 >100% 或余额为负 → **如实报**'
+    '「已审批已超出当年分配预算 X 万元」并提示需核实（分配额未更新 / 工单跨年 / 重复申报）；'
+    '**不许用「含往年结转」解释掉，也不许静默当成正常**。\n'
+    '4.1 **不许把内部的 0.6 达标系数换算成「基准线」写给人看** —— 回答里不许出现「44.38%」「45% 基准线」'
+    '这类内部换算；要么直接给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「要达标还需再完成多少」。\n'
+    '5. **空集就是答案**：第一次查到 0 行就按 0 行答（写清按什么口径没有记录）；'
+    '**不许摘掉时间 / 状态 / 范围条件再查一遍凑数字**。\n'
+    '6. 问「实际花了多少 / 决算金额 / 实际与申报差多少」→ 写「系统未采集实际投入数据，只能用预算金额」。\n'
+    '7. 状态与缺陷类型编号**一律翻中文**；查不到要写清口径，**不要回「未找到相关信息」**。\n'
+    '8. **「能不能批 / 能不能报」类问题：第一句给结论，结论只能是「符合 / 不符合 / 无法判定」三种**，'
+    '而且**必须与后面的依据一致** —— 依据里写了"超出余额 X 万元"，就**不许**写"可以批 / 符合"。\n'
+    '9. **「预算装得下」只对还没批的单判**（状态 0/1/2）。状态已是 3/6/7 的单，'
+    '它自己的金额**已经计入「已审批」**，直接答「该单已审核通过（待施工 / 待验收），无需再批」，'
+    '**不要再拿剩余余额去比它**（重复扣一次必然算出"超余额"）。\n'
+    '10. 发现同一所、同名（或只差标点）、同金额的多条工单 → 判「**疑似重复申报**」，'
+    '报出条数与 ID 提示核实，**不许静默当成两笔累加进已审批**。\n'
+    # --- 以下是「分层应答纪律」：每题都要用，所以固定注入；
+
+    #     **怎么答准**（数据地图、各层取数与坑、建议算法、阈值判据）写在知识库文档里检索。
+
+    '11. **领导是分多轮问的，你只答被问的那一层**：\n'
+    '    · **L1 情况**（「XX 怎么样 / 有多少 / 情况如何」）→ 给真实数据：条数 / 金额 / 状态构成 + 关键指标本期值；'
+    '问成效时带同期。**不要给对策**。\n'
+    '    · **L2 原因**（「为什么 / 怎么差这么多」）→ **至少两个数据源拼起来**说清成因与它们的关系。\n'
+    '    · **L3 对策**（「怎么办 / 钱往哪投 / 先干哪个」）→ 往年投入 + 指标偏重 → 优先级 + 金额 + 指向的指标。\n'
+    '    · **L4 预测**（「能达标吗 / 年底到多少」）→ 按当前速度外推 + 达成需要什么条件。\n'
+    '    **没问的不铺**（L1 不许把原因和对策一起倒出来）；下一层承接上一层结论但不重复。\n'
+    '    · **正文按必答项的 ①②③… 序号分段写**：一项目一段、每段一句话（30~60 字）、带数字，'
+    '不合并、不跳号；同一件事只说一次（不许在开头概况里说一遍、分条里再说一遍）。'
+    '问「有哪些」的逐条清单不受此限（一行一条）。\n'
+    '    · **追问必须接上文**：像「为什么」「那怎么办」「这样能达标吗」这种省略主语的追问，'
+    '**一律从同一场会话的上一轮继承对象、范围、口径**（上一轮问的是哪个所，这几轮就还是哪个所），'
+    '**不许回「指代不明 / 请补充说明」**。\n'
+    '    · **同一场会话口径不许漂**：上一轮按所、这一轮不能悄悄变全市；要变必须写明。\n'
+    '    · **问「全市 / 所有 / 都 / 有哪些」时，必须扫全域并先给总数**（N 个），再逐条列；'
+    '**不许只挑一个所、一张单当样本就收尾** —— 那是抽样，不是回答。\n'
+    '12. **先拆再答**：单点（一个数 / 一份清单）直接查直接答；多点（要拼 2+ 数据源、或跨期跨表）'
+    '**先拆成 2~4 个子问题**，把互不依赖的查询**一次发出**，再汇总成一段话。\n'
+    '13. **拿到问题先自己拆**（不管见没见过这类问题）：\n'
+    '    · 他到底要什么答案（判断？对比？预测？办法？）→ 要答这个，需要哪几块事实 →\n'
+    '      每块去哪个数据源、跟谁比、怎么算 → 推出什么结论 / 建议。\n'
+    '    · **先给答案的重点，再摆支撑它的数据**；不要先罗列数据再等别人自己得结论。\n'
+    '    · 结论、原因、建议都要有依据；说不出依据的判断不许写。\n'
+    '    · 没见过的问法也要这么拆，不要因为"没有先例"就答得浅。\n'
+    '【回答模板】（按问题类型选一套，**不是固定句式**）\n'
+    '· 综合研判型（"X 整体怎么样""哪个最重""最该抓什么"）→ 结论一句话 + 最突出的 2~3 个问题（各带一个数）'
+    '+ **先抓什么** + 预计效果\n'
+    '· 情况型（"有多少""执行得怎么样"）→ **先给判断**（快/慢、多/少、卡不卡）+ 支撑的数据；'
+    '问"怎么样"只报数等于没答\n'
+    '· 原因型（"为什么""怎么降的"）→ 至少两个数据源拼起来 + 说清它们的关系\n'
+    '· 对策型（"钱怎么花""先干哪个"）→ 方向 + **为什么是这个方向（依据以往数据）** + 做完预计到什么程度\n'
+    '· 预测型（"能达标吗""年底到多少"）→ 按当前速度外推 + 达成需要什么条件\n'
+    '· **任何分析题：结论、原因、建议都要有依据；建议必须落到"谁做什么"，禁止"加强管理""提高重视"**\n'
+)
+
+
+# 公共契约：**所有题都带**（口吻 / 格式 / 出处 / 清单纪律），但**不含"怎么分析"**。
+# 为什么要拆开：分析那套（分层、四视角、回答模板、拆解方法）以前是每题都注入，
+# 结果问「全市有多少个供电所」也被灌一遍分析要求（答得又长又像小报告）。
+# 现在按题型分流：分析题 = 公共 + 分析契约；查数题 = 只带公共。
+COMMON = (
+    '【汇报口吻与格式】（所有回答都适用）\n'
+    '· 像秘书向领导汇报：直接说事、说重点；**不要出现"我已经获得足够信息""让我组织回答"'
+    '"接下来我将""根据查询结果"这类过程话术**。\n'
+    '· 你只负责回答领导的问题：**不要复述你的思考过程、判断过程或工作步骤**'
+    '（例如"这是分析题""这是对策题""数据已齐""现在给出回答""让我组织一下"），也不要把中间推理写成英文句子。\n'
+    '\u00b7 纯文本、一行一句：**正文里不要出现 **、#、|、>、反引号 这些符号**，也不要小标题；要分条就用"1. 2. 3."。\n'
+    '\u00b7 不提 SQL、表名、字段名、数据库、工具过程。\n'
+    '\u00b7 数字必须来自本次查询：不许估算、不许补 0、不许拿别的年份顶。\n'
+    '\u00b7 查到 0 行就是答案：写清"按什么口径没有记录"，不要回"未找到相关信息"，也不要放宽条件重查。\n'
+    '\u00b7 问"有哪些"要逐条列全（一行一条），说 N 条就得正好 N 条。\n'
+)
 
 
 # 回答契约：**固定在提示词里，不靠知识库检索**。
@@ -87,7 +309,9 @@ def execute(name, args):
 # 知识库只负责「判断标准是多少、口径怎么写、取数用哪张表」。
 ANALYSIS_FRAME = (
     '【回答契约】（每次都按它走，不依赖检索到的内容）\n'
-    '1. 先定性：这道题要的是「有哪些 / 有多少 / 为什么 / 怎么办 / 合不合理」中的哪一种。\n'
+    '1. 直接按问题要的答案来答：问「有哪些」就逐条列、问「多少」就给数、问「为什么」就给成因、'
+    '问「怎么办」就给办法。\n'
+    '   **不要说出你在判断题型、也不要说出你打算怎么组织回答** —— 那是你自己的事。\n'
     '2. 问「有哪些 / 哪些 / 是哪些」→ **必须逐条把对象列出来**（一行一条），'
     '每条给题目问到的字段（名字、所属、金额、状态、天数…）；**只回一个数就是答非所问**。\n'
     '3. 问「有多少 / 几个」→ 给数，并说明这个数是怎么算的（范围 + 状态 + 时间口径）。\n'
@@ -96,37 +320,54 @@ ANALYSIS_FRAME = (
     '**不许编原因，也不许回一句「未找到相关信息」。**\n'
     '5. 问「怎么办 / 先办哪几个 / 给建议」→ 给排序 + 排序依据 + 该谁动。\n'
     '6. 只问一个数 → 只给数，**不要附加「偏高/偏低/异常」这类判断**。\n'
-    '7. 判断标准只认下面【判断标准】里给的；没给标准就不下判断、不编标准。\n'
-    '8. 长度：先结论后依据，正文控制在 300 字内（逐条清单可略长，一行一条、不要客套）。\n'
+    '7. 判断标准只认下面【本次的规则】里给的；没给标准就不下判断、不编标准。\n'
+    '8. **正文就按【各类问题的必答项】里 ① ② ③…的顺序分段写**：一项目一段，段首写编号，'
+    '每段一句话（30~60 字）、带数字；不合并、不跳号、不重复。不设字数上限，但每项只准写一句；'
+    '问「有哪些」的逐条清单一行一条。\n'
     '9. 数量必须与清单一致：说「N 条」，清单就得正好 N 条；概览与明细不能互相矛盾。\n'
+    '10. 要下判断（比大小、找原因、看趋势、判是否异常/是否合理）之前，**先用 kb_search 查一次《'
+    '【怎么一步步深入】（做题方法；每一类问题该看哪些维度、答案必须出现什么，'
+    '**先用 kb_search 把《判据规则》里对应那一节取回来**，按它逐项检查）\n'
+    '1. 先想清楚：领导要的是哪种答案 —— 判断（好/差、达标/不达标）、对比（跟谁比、差多少）、'
+    '预测（会变成什么样）、还是办法（谁做什么）。\n'
+    '2. 再想：要给出这个答案，需要哪几块事实？每块去哪张表、按什么口径算、跟谁比。\n'
+    '3. 动手查：互不依赖的查询**一次发出**；一块一块把事实凑齐，**发现缺哪块就补查哪块**，'
+    '不要拿「大概齐」的数据下结论。\n'
+    '4. 拿到事实之后按顺序走：先比（跟全市/同类/同期比，算出差多少）→ 再算（比例、倍数、占比）→ '
+    '再归因（是哪几个数共同造成的）→ 最后给办法（谁做什么、做完到什么程度）。\n'
+    '5. 下笔前把《判据规则》里那一类的「必答/易漏」和角度库逐项对一遍：缺哪项就补哪项；'
+    '要明细的必须逐条写出对象名字，要预计的必须给出具体数值或月份，不许写空话。\n'
+    '6. 查不到就写清口径和「系统里没有这类数据」，不许略过、不许编。\n'
+    + config.RULE_DOC + '》**，把最相关的那一节取全，再严格按它判断；查不到标准就只报事实、不编标准。\n'
 )
 
 
-# 检索回来的切片里，只挡掉这些明显是测试/噪声的文档，其余业务文档一律采用。
-KB_SKIP_DOCS = ('测试',)
+def rule_slices(query, top_k=None, limit=700):
+    """检索**唯一规则文档**的切片（全系统只有一篇，见 config.RULE_DOC）。返回 (切片, 最高分)。
 
-
-def analysis_rules(topic, question, top_k=4, limit=700):
-    """检索知识库里的判断标准（判据）。**只取判据，不取生成答案**。
-
-    这一步同时兼作分流：**命中判据 = 按判据判断；没命中 = 只呈现事实**。
-    检索失败按「没判据」处理：宁可只报事实，也不许拿别的东西当标准。
+    ★ 只认这一篇：以前是"拿问题去知识库检索判据"，会把相邻技能的标准当成本题的标准
+      （实测把「项目执行进度异常」的标准套到「审批积压」上）。限定成一篇之后，
+      这个错法从根上不可能再发生；技能文档也不再进知识库跟它抢名额。
+    检索失败按「没规则」处理：宁可只报事实，也不许拿别的东西当标准。
     """
-    q = (topic or question or '').strip()
+    q = (query or '').strip()
     if not q:
-        return []
+        return [], 0.0
+    want = top_k or config.RULE_TOP_K
+    # 只认一篇 → 必须多取候选再过滤（kb_search 返回前会先截到 top_k 条）
     try:
-        r = tools_kb.kb_search(q, top_k=top_k * 2, limit=limit)
-        out, seen = [], set()
-        for n in (r.get('nodes') or []):
-            doc = n.get('doc_name') or ''
-            if any(d in doc for d in KB_SKIP_DOCS) or doc in seen:
-                continue          # 同一篇文档只取分数最高的一条，别把切片堆满提示词
-            seen.add(doc)
-            out.append(n)
-        return out[:top_k]
-    except Exception:
-        return []
+        r = tools_kb.kb_search(q, top_k=max(want * 3, 9), limit=limit)
+    except Exception:                               # noqa: BLE001
+        return [], 0.0
+    out = []
+    for n in (r.get('nodes') or []):
+        if config.RULE_DOC not in (n.get('doc_name') or ''):
+            continue
+        out.append(n)
+        if len(out) >= want:
+            break
+    best = max([float(n.get('score') or 0) for n in out], default=0.0)
+    return out, best
 
 
 # 兜底：字典/提示词读不到时才用（正常情况下系统提示全部来自数据库）
@@ -359,7 +600,7 @@ def _summary_worth_it(session_id):
 
 
 def ask(question, model=None, max_steps=None, profile=None, want_page=False, today=None, scope=None,
-        page_async=False, standard=None,
+        page_async=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None):
     """question = 用户的原话（不需要上游预处理）。
@@ -502,6 +743,24 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             '本轮必须按下面【统计范围】重新查数。'
             '② 本轮的统计口径已在上面的【统计范围】里定好，**不要**因为历史而改变它。'
             '③ 不要在回答里复述或提及这段历史。' % (len(hist_detail), '\n'.join(hl)))
+    # ⓪·6 检索**唯一规则文档**：本轮问句 + 上一轮的原始问句一起查。
+    #      「是哪些项目？」这类跟在提醒后面的追问，光看问句没有线索，拼上上一轮才有
+    #      （实测：只拿问句检索会跑偏，拼上上一轮标题后正确规则回到第一）。
+    #      命中的切片随后当本次的判断标准与回答方向。
+    rule_hits, rule_best, rule_query = [], 0.0, question
+    if config.RULES_ON:
+        if history:
+            _prev_q = (history[-1].get('raw_question') or '').strip()
+            if _prev_q:
+                rule_query = question + ' ' + _prev_q
+        _t_rule = time.time()
+        rule_hits, rule_best = rule_slices(rule_query)
+        trace.append({'seq': len(trace) + 1, 'kind': 'rules', 'tool': 'rule_search',
+                      'ms': int((time.time() - _t_rule) * 1000),
+                      'args': {'query': rule_query, 'doc': config.RULE_DOC},
+                      'result': {'hits': len(rule_hits), 'best_score': round(rule_best, 4),
+                                 'titles': [(n.get('title') or '')[:60] for n in rule_hits]}})
+
     # 统计范围必须明确交给模型：六项指标是按「范围 + 期间」预计算的，
     # 不给这一句，它就得自己猜该取 month 还是 yearToDate、该取哪个月。
     user_content += ('\n\n【统计范围】（已按今天日期算好，直接采用，不要自行推算日期）\n'
@@ -510,25 +769,60 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         # 名称被归到「地名层」时（库里没有这个精确名），必须告诉模型用前缀查，
         # 否则它很可能拿合成名做等值匹配，一条都查不到还以为是空数据。
         user_content += ('\n\n【名称归一说明】' + fixed['hint'])
-    # 角度固定（ANALYSIS_FRAME 永远带），标准可检索 —— 两层分开，互不依赖
-    user_content += '\n\n' + ANALYSIS_FRAME
-    if standard:
-        # 调用方给了 skill_id：这份是该技能自己的口径文档 → **直接当本题的判断标准**，
-        # 不靠检索（检索会挑错标准），也不在代码里写死任何阈值。
-        user_content += ('\n【本题的判断标准】（本题属于该技能，**必须按这份口径判断与组织回答**；'
-                         '里面没写的标准不许自己编）\n' + standard)
+    # 三层注入，按题型分流：
+    #   ① COMMON         —— 口吻 / 格式 / 出处 / 清单纪律，**所有题都带**
+    #   ② ANALYSIS_FRAME —— 怎么分析（分层、拆解方法、回答模板），**只有分析题带**
+    #   ③ CALIBER        —— 业务口径铁律（状态分组、实际投入…），**所有题都带**
+    # 分流判据 = 规则文档检索相关度（业务问题的"分析性"能从规则命中里看出来）。
+    # 检索失败（百炼不通，内网/代理环境常见）时 rule_hits 为空 —— 这时**不能当查数题**，
+    # 否则一场基础设施故障会把所有分析题静默降级成“念数据”（实测就是这样）。默认按分析注入。
+    _is_analysis = (not rule_hits) or (rule_best >= config.ANALYSIS_SCORE)
+    user_content += '\n\n' + COMMON
+    if _is_analysis:
+        user_content += '\n' + ANALYSIS_FRAME
+    user_content += '\n' + CALIBER
+    if _is_analysis:
+        # 交付前自检（放在提问的最后一屏，最贴近生成点）：
+        # 这是"分析问答"的质量闸 —— 实测缺的从来不是数据，而是"建议 / 依据 / 预计效果"三段。
+        user_content += (
+            '\n\n【交卷前自检一遍，缺哪段就补哪段】\n'
+            '1. 结论有没有？第一句就要给判断（好/差、达标/不达标、是/不是、哪几个）。\n'
+            '2. 依据有没有？每条结论后面跟着数字，并说清"跟谁比、怎么算出来的"。\n'
+            '3. 原因有没有？说清是哪几个数据共同造成的，不要只罗列。\n'
+            '4. **建议有没有？必须落到"谁该做什么"**（哪个岗位/哪个所，做什么）。没有建议 = 没答完。\n'
+            '5. 预计效果有没有？能推算的给出"做完会变成什么样"。\n'
+            '6. 有没有夹带思考过程、英文句、Markdown 符号？有就删掉。\n'
+            '7. 要点里要求的「差多少 / 是几倍 / 占百分之几」要**自己算出来写在正文里**，'
+            '不能只把两头的数字摆着让领导自己算。\n'
+            '8. 有没有重复？同一件事不要在开头说一遍、分条里再说一遍。\n'
+            '9. **回到【各类问题的必答项】，找到你这类问题的那一行，把 ①②③… 逐项对一遍**'
+            '（不要整体感觉"都有"，要一项一项确认），缺哪项补哪项 —— 这是交卷前最后一道关。\n')
+    if rule_hits:
+        parts = []
+        for _n in rule_hits:
+            _t = (_n.get('title') or '').strip()
+            _c = (_n.get('content') or '').strip()
+            parts.append(('【' + _t + '】\n' if _t else '') + _c)
+        user_content += ('\n\n【本次的规则】（从《%s》检索到的**候选**切片。'
+                         '若本题要下判断 / 比大小 / 找原因 / 看趋势（分析题），'
+                         '**必须先用 kb_search 把你要用的那一节原文取全再作答**；'
+                         '只问一个数或一份清单（查数题）直接答。'
+                         '标准只认《%s》，里面没写的不许自己编。）\n'
+                         % (config.RULE_DOC, config.RULE_DOC) + '\n---\n'.join(parts))
     else:
-        user_content += ('\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
-                         '**先用 kb_search 查判断标准**（查《判据规则》或对应技能文档）；'
-                         '查到了就按它判，查不到就只报事实并说明「系统里没有这类判定标准」。'
-                         '**不许拿相邻技能的阈值套到本题上，也不许自己编标准。**')
+        user_content += ('\n\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
+                         '**先用 kb_search 查《%s》**；查到了就按它判，查不到就只报事实并说明'
+                         '「系统里没有这类判定标准」。**不许拿别的标准套到本题上，也不许自己编标准。**'
+                         % config.RULE_DOC)
     if profile:
         user_content += ('\n\n【提问人身份与数据范围】（判断标准与关注重点按它来，不要因此增减问题里已经要求的必答项）：\n' + profile)
     if scope:
         # 身份范围必须**压过**【统计范围】里的默认「全市」——否则上游传了范围，模型还是按全市答。
         user_content += ('\n\n【本题数据范围（强制）】%s\n'
                          '上面【统计范围】里的地点若是「全市」，那只是默认值；'
-                         '**本题一律只取 %s 范围内的数据**，并在回答里写明这个范围。' % (scope, scope))
+                         '**本题一律只取 %s 范围内的数据**，并在回答里写明这个范围。'
+                         '**这条优先于上一轮继承来的对象** —— 本轮给了范围就按本轮，'
+                         '不要因为上一轮问的是某个所就把本题也答成那个所。' % (scope, scope))
     messages = [{'role': 'system', 'content': _system(today)}, {'role': 'user', 'content': user_content}]
     answer = ''
     nudged = False
@@ -537,14 +831,23 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     while True:
         step += 1
         if max_steps and step > max_steps:
-            answer = '（已超过设定的最大步骤 %d，停止）' % max_steps
+            # 到顶不再空转：关掉工具直接要正文。原来回一句「已超过最大步骤」等于把这题废了。
+            answer = _final_answer(messages, model)
+            trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content':
+                          '已到查询步数上限 %d，强制出正文' % max_steps})
             break
         t0 = time.time()
-        resp = _chat(messages, model)
+        # 查数轮：关思考（省内心独白）+ tool_choice=required（不许写散文，只准发工具调用）。
+        # 实测同一轮：auto 会写 240~3400 字过程散文（一轮 10~17s），required 只有 56 token / 1.7s。
+        # 收尾靠 finish 工具，不靠"模型自己停下来顺手写答案"。
+        resp = _chat(messages, model, think=False, max_tokens=600)
         llm_ms = int((time.time() - t0) * 1000)
         msg = resp['choices'][0]['message']
         calls = msg.get('tool_calls') or []
         if not calls:
+            # 这一轮的正文只用于「有没有瞎下结论」的判定；**不当最终答案**：
+            # 查数轮是关思考跑的，它的 content 里可能混着"我已经收集了…让我汇报"这类过程话术
+            #（那正是领导看到思考过程的原因）。真正的答案由下面 _final_answer 另起一次调用写。
             answer = (msg.get('content') or '').strip()
             used_tool = any(t.get('kind') == 'tool' for t in trace)
             # 硬约束：一个工具都没调就下结论，先要求它核实一次；仍不调则直接拦下，不当答案返回。
@@ -574,24 +877,52 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 answer = ('【未核实，不予作答】这一轮没有调用任何工具去核对事实，结论不可信，已拦下。'
                           '请重试，或把问题问得更具体一些。')
                 break
+            # 数据查完了：**另起一次「写汇报」调用**（不给工具、明确要求写正文）。
+            # 关思考的查数轮省下的时间，全花在这一步上——只让它写正文，不让它继续想。
+            answer = _final_answer(messages, model)
+            llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                           'content': answer[:600]})
             break
         keep = {'role': 'assistant', 'content': msg.get('content') or '', 'tool_calls': calls}
         messages.append(keep)
         # 不设步数上限，改用周期性软提醒，防止一直翻表不收手
-        if step >= 15 and step % 5 == 0:
+        if step in (2, 4, 6, 8):
             messages.append({'role': 'user', 'content':
-                             '你已经调用 %d 次工具了。如果已有足够数据，请立刻给出结论；'
-                             '还差关键数据就集中查最关键的那一项。不要在回答里提到本条提示。' % step})
-        outs = _exec_calls(calls)
-        for tc, o in zip(calls, outs):
+                             '第 %d 轮了。**现在对照【各类问题的必答项】逐项点一遍手上的数据**：'
+                             '要分类计数的（各类各几个、分别是谁）、要每类判定数据的（条数/卡在哪个节点/停留几天）、'
+                             '要多期数值或同期对比的、要预计完工时间或预计指标的 —— **缺哪一项就再查哪一项**，'
+                             '不要拿"大概齐"的数据去凑。都齐了就直接给结论（不要再重复查已经查过的数）。'
+                             '不要在回答里提到本条提示。' % step})
+        # finish 是收尾信号：同轮里真实查询先跑完，再另起一次「写汇报」调用
+        fins = [c for c in calls if ((c.get('function') or {}).get('name')) == 'finish']
+        live = [c for c in calls if ((c.get('function') or {}).get('name')) != 'finish']
+        outs = _exec_calls(live) if live else []
+        for tc, o in zip(live, outs):
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
             messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _trim(o['name'], o['result'])})
-    # qtype 只作参考，且按**实际发生的事**判定：循环里查过判据（kb_search）才算分析题（不再猜题型）。
-    # 必须在页面判断之前算出来 —— 页面默认只给分析题。
-    qtype = '分析' if any(t.get('tool') == 'kb_search' and t.get('kind') == 'tool' for t in trace) else '查数'
+        if fins:
+            # 模型自己说「数据够了」→ 由系统另起一次调用写正文（不用它这轮的 content，那是散文草稿）
+            answer = _final_answer(messages, model)
+            llm_ms = int((time.time() - t0) * 1000)
+            trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
+                          'content': answer[:600], 'note': '模型调用 finish，已另起一次写汇报'})
+            break
+    # 输出清洗：把模型漏进正文的 Markdown 符号、过程话术、英文思考句洗掉
+    # （实测 dsv4 禁不掉，只能代码层兜）。**必须在 qtype 与页面之前** —— 页面是从 answer 生成的，
+    # 洗晚了页面里还是脏的。
+    answer = _clean_answer(answer)
+    # qtype：**只用来决定要不要出分析页面**（前端要页面可以直接传 want_page）。
+    # 真正的分流由模型按《规则》第零节做（分析题走五步、查数题取到数直接答）。
+    # 这里取两个"实际发生的事"的信号，任一成立即算分析：
+    #   ① 循环里自己查过《规则》（kb_search）—— 说明它认定这题要按规则判；
+    #   ② 服务预检索到的那条规则相关度够高（ANALYSIS_SCORE；实测分析题普遍 ≥0.8、
+    #      纯查数题普遍 <0.8，因为查数题在规则文档里本来就没有对应的判断条目）。
+    qtype = '分析' if (
+        _is_analysis                                        # 与注入判据对齐：注入了分析框架就算分析题
+        or any(t.get('tool') == 'kb_search' and t.get('kind') == 'tool' for t in trace)
+    ) else '查数'
     loop_end = time.time()
     # 分析题的附加产物：**另一次模型调用**把结论渲染成单页 HTML 数据大屏。
     # 与作答那次不共用；同步生成、同步随本响应返回。页面失败只返回空串，回答照旧。
@@ -631,7 +962,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     result = {
         'input_question': raw_question,
         'today': today or time.strftime('%Y-%m-%d'),
-        'standard_loaded': bool(standard),
+        'rules_loaded': len(rule_hits),      # 本次命中了几条《规则》，0 = 没检索到
         'fixed_question': question,
         'name_fix_used': fixed['used'],
         'scope': {

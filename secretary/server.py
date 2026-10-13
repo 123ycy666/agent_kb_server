@@ -417,31 +417,16 @@ class H(BaseHTTPRequestHandler):
         page_async = (data.get('page_mode') or '').strip().lower() == 'async'
         # scope：数据范围由上游传（强制按它取数）。
         scope = (data.get('scope') or data.get('business_scope') or '').strip() or None
-        # skill_id：调用方知道这是哪个技能的追问 → 服务直接加载该技能自己的口径文档当标准，不靠检索。
-        skill_id = (data.get('skill_id') or '').strip()
-        standard = None
-        if skill_id:
-            try:
-                import report as _rep
-                for _s in (_rep.list_triggers().get('skills') or []):
-                    if _s.get('id') == skill_id:
-                        standard = _s.get('doc_text') or None
-                        _tu = _s.get('trigger_user') or {}
-                        scope = scope or _s.get('scope') or _tu.get('scope') or None
-                        profile = profile or ('你的身份：%s（账号 %s，角色 %s）。数据范围：%s。'
-                                              % (_tu.get('name') or _s.get('role') or '',
-                                                 _tu.get('account') or '', _tu.get('role') or '',
-                                                 _s.get('scope') or _tu.get('dept') or ''))
-                        break
-            except Exception:
-                standard = None
+        # ★ /api/ask 上**没有也不该有 skill_id**：对话就是对话、技能接口就是技能接口。
+        #   真实链路里前端从不传技能 ID；「按哪个技能答」由服务自己从唯一规则文档检索决定
+        #   （见 agent.rule_slices）。以前那条"传了就直接加载该技能文档当标准"的分支已删。
         # today：业务上的「今天」，**由上游传**（定时任务/业务系统知道业务日期）。
         # 不传才退回服务器日期；停留天数、同比、"截至今天"全按它算。
         today = (data.get('today') or data.get('business_date') or '').strip() or None
         client_ip = self.client_address[0] if self.client_address else None
         try:
             r = agent.ask(q, model=model, max_steps=max_steps, profile=profile, want_page=want_page,
-                          today=today, scope=scope, page_async=page_async, standard=standard,
+                          today=today, scope=scope, page_async=page_async,
                           session_id=session_id, user_id=user_id, user_code=user_code,
                           client_ip=client_ip, channel=channel, history_turns=history_turns)
         except Exception as e:

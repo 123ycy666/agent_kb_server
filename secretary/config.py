@@ -90,9 +90,29 @@ LEXICON_RECHECK_SEC = int(os.environ.get('SECRETARY_LEXICON_RECHECK')
 # 5 轮的上下文增量可接受（每轮最多带 400 字回答，见 qa_log.load_context）。
 HISTORY_TURNS = int(os.environ.get('SECRETARY_HISTORY_TURNS', '5'))
 
+# 规则文档（2026-09-24）：全系统**只维护这一篇**规则 —— 判断标准 + 比较 + 问法归一 + 回答方向
+# （skills/判据规则.md，同一篇同步进知识库）。普通问答不带任何技能 ID，每次先按
+# 「本轮问句 + 上一轮问句」检索它，命中的切片直接当本次的判断标准与回答方向交给模型；
+# 技能调用把整篇注入，两边的规则永远一致。
+# ★ 为什么由服务先检索、而不是等模型自己查：实测让模型"要判断时自己查"会时查时不查，
+#   不查就给不出判断。SECRETARY_RULES=0 可关掉（回到模型自己按需 kb_search）。
+RULE_DOC = (os.environ.get('SECRETARY_RULE_DOC') or '判据规则').strip()
+# 每次注入几条规则切片。2026-09-24 由 3 调到 4：零节（分析框架）相关度高时会排在最前，
+# 只取 3 条容易把场景段（如第二十节的审批类必答四段）挤掉 —— 框架和场景要同时在场。
+RULE_TOP_K = int(os.environ.get('SECRETARY_RULE_TOP_K', '4'))
+# qtype（分析/查数）的判定线：预检索到的规则相关度达到它就算分析题。
+# ★ 它只决定**要不要额外生成分析页面**，不影响回答本身 —— 分流由模型按《规则》第零节做。
+ANALYSIS_SCORE = float(os.environ.get('SECRETARY_ANALYSIS_SCORE', '0.8'))
+RULES_ON = (os.environ.get('SECRETARY_RULES') or '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+
 LLM_BASE = ENV['LLM_BASE_URL'].rstrip('/')
 LLM_KEY = ENV['LLM_API_KEY']
-MODEL = os.environ.get('SECRETARY_MODEL', 'qwen3.8-max')
+# 默认模型：优先 SECRETARY_MODEL（环境变量 / .env），再退到 .env 里的 LLM_MODEL_ANSWER / LLM_MODEL_ROUTER，
+# 最后才是内置默认。为什么这么写：线上换模型时同事往往只改 .env 的 LLM_MODEL_*，
+# 代码只认 SECRETARY_MODEL 的话会对不上（实测端点只有 dsv4 时，写死 qwen 会 404）。
+MODEL = (os.environ.get('SECRETARY_MODEL') or ENV.get('SECRETARY_MODEL')
+         or ENV.get('LLM_MODEL_ANSWER') or ENV.get('LLM_MODEL_ROUTER') or 'dsv4').strip()
 
 # 可选模型清单（全部来自本端点 GET /models 实测存在，共 250 个；这里挑出适合本场景的）
 # group 用于前端分组；note 写清"什么时候该用它"。
@@ -137,6 +157,15 @@ KB_AGENT_ID = os.environ.get('SECRETARY_KB_AGENT', 'aid-72fa8cae2b124d819617f157
 # 只检索指定知识库；留空 = 用检索服务默认范围
 KB_IDS = [x for x in os.environ.get('SECRETARY_KB_IDS', 'r57xtq9ypm').replace(' ', '').split(',') if x]
 
+# 检索后端：bailian=阿里云百炼（原样保留，可一行回滚）｜local=自建知识库（47.121.183.81）。
+# ★ 默认先留在 bailian：切 local = 行为变更，验收通过（S2–S5）后才改这一行。
+KB_BACKEND = (os.environ.get('SECRETARY_KB_BACKEND') or 'bailian').strip().lower()
+KB_LOCAL_URL = (os.environ.get('SECRETARY_KB_LOCAL_URL') or 'http://47.121.183.81').rstrip('/')
+KB_LOCAL_USER = os.environ.get('SECRETARY_KB_LOCAL_USER') or 'admin'
+KB_LOCAL_PASSWORD = os.environ.get('SECRETARY_KB_LOCAL_PASSWORD') or '123456'
+# 自建库里的知识库 id（KB 5 =「秘书问答规则」：判据规则 + 数据表说明书）
+KB_LOCAL_IDS = [int(x) for x in (os.environ.get('SECRETARY_KB_LOCAL_IDS') or '5').replace(' ', '').split(',') if x]
+
 # AI 只能查这些表（留空 = 用业务字典里登记的全部）。
 # 六项指标已统一到这两张预计算表：快照（本期值）+ 对比（同比/环比）。
 TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').split(',') if x]
@@ -166,7 +195,10 @@ COMPLETION_URL = (LLM_BASE.split('/compatible-mode')[0] +
 RULES_PRIORITY = (os.environ.get('SECRETARY_RULES_PRIORITY') or '1').strip().lower() \
     not in ('0', 'false', 'no', 'off')
 
-# 工具调用步数上限：0 = 不设上限（由模型自己决定什么时候收手）
+# 工具调用步数上限：0 = 不设上限（由模型自己决定什么时候收手）。
+# ★ 2026-10-08 撤回默认值 14：Fred 明确「不要随意加上限，优化的是过程，想办法让他快点，
+#   不是限制他」。要提速就改链路（页面移出关键路径、减少每轮上下文、换更快的思考档），
+#   不许靠砍模型能查多少次来提速。保留这个开关只为压测用，默认必须是不限。
 MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))
 
 # HTTP 接口的**防呆上限**：历史对话类接口（/api/sessions、/api/history）在「要求全部返回」时，
@@ -228,6 +260,12 @@ SUMMARY_MIN_TURNS = int(os.environ.get('SECRETARY_SUMMARY_MIN_TURNS', '6'))
 SQL_MAX_ROWS = 200
 SQL_TIMEOUT_MS = 25000
 HTTP_TIMEOUT = 120
+
+# 知识库检索的超时（秒）：检索只是取切片，正常 <1 秒，不该占满 HTTP_TIMEOUT。
+# 实测两个"卡到超时、一次库都没查"的问句（「今年立的项目都干到哪一步了？」600s、
+# 「我新报的单子能过吗？」420s），就是被这类下游调用拖住的。给它短超时：失败按"没检索到"处理，
+# 不影响作答；也免得把整轮问答拖死。
+KB_TIMEOUT = int(os.environ.get('SECRETARY_KB_TIMEOUT', '15'))
 
 # 分析题的「分析页面」：判出题型为分析时，额外调一次模型把结论渲染成单页 HTML 数据大屏。
 # 设 SECRETARY_PAGE=0 可关掉（关掉后 /api/ask 不再返回 page_html，回答不受影响）。
