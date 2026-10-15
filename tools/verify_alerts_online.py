@@ -69,8 +69,8 @@ for acct, label in ACCOUNTS:
                 bad_words.append('%s/%s: %s' % (acct, a['type'], w))
         if len(a['title'] or '') > 44:
             over40.append('%s/%s=%d' % (acct, a['type'], len(a['title'])))
-        if '请' not in (a['title'] or ''):
-            no_urge.append('%s/%s' % (acct, a['type']))
+        if '请' in (a['title'] or ''):
+            no_urge.append('%s/%s 出现催办空话' % (acct, a['type']))
         if '…' in (a['title'] or ''):
             no_urge.append('%s/%s 截断' % (acct, a['type']))
     if rec['status'] == 'unknown':
@@ -97,7 +97,7 @@ checks = {
     '市领导 ≤2 条且只全市口径': len(master_types) <= 2 and set(master_types) <= {'budget_underspend', 'metric_deteriorated'},
     'scope/role 传了无效': r_ign.get('scope') == '两水供电所',
     '每条 ≤44 字且不被截断': not over40,
-    '每条都有催办句（请…）': not no_urge,
+    '每句只陈述事实（无「请…」空话）': not no_urge,
     '无禁用词(卡在/单子/卡住/超标)': not bad_words,
     '单次 <3 秒': max(c['elapsed_ms'] for c in out['calls']) < 3000,
 }

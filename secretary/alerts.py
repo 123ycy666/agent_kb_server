@@ -148,6 +148,14 @@ def _facts(station_ids, year, today):
         'AND (budget_engineering=0 OR budget_material=0) ORDER BY budget_total DESC',
         ['0', year] + ids, limit=200)
 
+    # 5.5) 大金额单（金额异常预警用）
+    f['big_amount'] = _all(
+        'SELECT id, work_name, power_company_name, budget_total, budget_engineering, '
+        'budget_material, work_status FROM t_power_work_order '
+        'WHERE deleted_flag=%s AND YEAR(create_time)=%s AND power_company_id IN (' + mk + ') '
+        'AND budget_total >= %s ORDER BY budget_total DESC',
+        ['0', year] + ids + [R.EXTREME_AMOUNT], limit=100)
+
     # 6) 指标恶化：只取**年度同比**口径（跳闸/线损的同比记在 period_type='year' 上；
     #    月度口径里恶化的只有售电量，而售电量的累计口径没对齐 = 假恶化，必须排除）。
     f['metrics'] = []
@@ -233,16 +241,14 @@ def _budget_underspend(facts, sc, today):
     head = _head(sc)
     if sc['scope_type'] == 'station':
         h = hit[0]
-        fact = '分%s、已批%s、剩%s' % (wan(h['alloc']), wan(h['approved']), wan(h['left']))
+        title = '截至今日预算执行进度偏慢，预计年底剩余%s' % wan(h['left'])
     else:
         scope_alloc = sum(_f(facts['alloc'].get(i)) for i in sc['station_ids'])
-        fact = '%d所超期未动' % len(hit)
+        title = '%d个所预算执行进度偏慢，预计年底剩余%s' % (len(hit), wan(tot_left))
         if zero:
-            fact += '、%d未审批' % zero
-        fact += '，分%s' % wan(scope_alloc)
+            title += '，其中%d个所尚未启动' % zero
         tot_alloc = scope_alloc
-    return {'type': 'budget_underspend',
-            'title': W.compose('budget_underspend', _short(head), fact, sc['scope_type'], sc['role_code']),
+    return {'type': 'budget_underspend', 'title': W.fact(title),
             'total': len(hit), 'amount': tot_left,
             'data': {'alloc': round(tot_alloc, 2), 'left': round(tot_left, 2),
                      'zero_stations': zero, 'stations': len(hit),
@@ -260,9 +266,8 @@ def _zero_execution(facts, sc, today):
     if not zero:
         return None
     amt = sum(r['alloc'] for r in zero)
-    fact = '%d所零审批，分%s' % (len(zero), wan(amt))
-    return {'type': 'zero_execution',
-            'title': W.compose('zero_execution', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+    title = '%d个所在今年尚未审批通过任何项目，预算%s未启动' % (len(zero), wan(amt))
+    return {'type': 'zero_execution', 'title': W.fact(title),
             'total': len(zero), 'amount': amt,
             'data': {'alloc': round(amt, 2), 'stations': len(zero)}}
 
@@ -276,11 +281,10 @@ def _approval_backlog(facts, sc, today):
         over += sum(a['over_cnt'] for a in r['audit'])
     if not cnt:
         return None
-    fact = '%d个未审批%s' % (cnt, wan(amt))
+    title = '%d个项目待审批，合计%s' % (cnt, wan(amt))
     if over:
-        fact += '、%d超90天' % over
-    return {'type': 'approval_backlog',
-            'title': W.compose('approval_backlog', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+        title += '，其中%d个已超90天' % over
+    return {'type': 'approval_backlog', 'title': W.fact(title),
             'total': cnt, 'amount': amt,
             'data': {'cnt': cnt, 'amount': round(amt, 2), 'over_90': over}}
 
@@ -300,9 +304,8 @@ def _approved_not_started(facts, sc, today):
     cnt = sum(x['cnt'] for x in hit)
     amt = sum(x['amt'] for x in hit)
     days = max(x['days'] for x in hit)
-    fact = '%d个已批未开工%s、最久%d天' % (cnt, wan(amt), days)
-    return {'type': 'approved_not_started',
-            'title': W.compose('approved_not_started', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+    title = '%d个项目已审批通过未开工，合计%s，最久%d天' % (cnt, wan(amt), days)
+    return {'type': 'approved_not_started', 'title': W.fact(title),
             'total': cnt, 'amount': amt,
             'data': {'cnt': cnt, 'amount': round(amt, 2), 'max_days': days}}
 
@@ -316,12 +319,10 @@ def _node_stay_overdue(facts, sc, today):
     if not b or not b['cnt']:
         return None
     if b['over_cnt']:
-        fact = '%d个滞留超90天%s' % (b['over_cnt'], wan(b['amt']))
+        title = '%d个项目在%s滞留超90天' % (b['over_cnt'], node)
     else:
-        fact = '%d个待办' % b['cnt']
-    return {'type': 'node_stay_overdue',
-            'title': W.compose('node_stay_overdue', _short(_head(sc)), fact,
-                               sc['scope_type'], sc['role_code']),
+        title = '%d个项目在%s待处理' % (b['cnt'], node)
+    return {'type': 'node_stay_overdue', 'title': W.fact(title),
             'total': b['cnt'], 'amount': b['amt'],
             'data': {'node': node, 'cnt': b['cnt'], 'over_90': b['over_cnt'],
                      'max_days': b['max_days'], 'amount': round(b['amt'], 2)}}
@@ -337,9 +338,8 @@ def _node_backlog(facts, sc, today):
         a['cnt'] += b['cnt']
     top = sorted(agg.items(), key=lambda kv: -kv[1]['cnt'])[:1]
     n0, v0 = top[0]
-    fact = '%d个待审批、%d在%s' % (sum(v['cnt'] for _, v in top), v0['cnt'], _node(n0))
-    return {'type': 'node_backlog',
-            'title': W.compose('node_backlog', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+    title = '%d个项目集中在%s环节' % (v0['cnt'], n0)
+    return {'type': 'node_backlog', 'title': W.fact(title),
             'total': sum(v['cnt'] for _, v in top),
             'data': {'by_node': {n: v['cnt'] for n, v in top}}}
 
@@ -349,15 +349,40 @@ def _data_quality_amount(facts, sc, today):
     if not rows:
         return None
     tot = sum(_f(r['budget_total']) for r in rows)
-    fact = '%d个工程费或物资费为零' % len(rows)
-    return {'type': 'data_quality_amount',
-            'title': W.compose('data_quality_amount', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+    title = '%d个项目工程费或物资费为零' % len(rows)
+    return {'type': 'data_quality_amount', 'title': W.fact(title),
             'total': len(rows), 'amount': tot,
             'data': {'cnt': len(rows), 'amount': round(tot, 2)},
             'items': [{'work_order_id': _i(r['id']), 'name': r['work_name'],
                        'station': r['power_company_name'], 'amount': _f(r['budget_total']),
                        'engineering': _f(r['budget_engineering']),
                        'material': _f(r['budget_material'])} for r in rows[:20]]}
+
+
+def _extreme_amount(facts, sc, today):
+    """金额异常：单笔预算 ≥ 阈值，基本都是录入有误（实测那笔物资费是工程费的 644 倍）。"""
+    limit = R.EXTREME_AMOUNT
+    rows = [r for r in facts['struct_zero'] if False]      # 占位，见下：用 facts['big_amount']
+    rows = facts.get('big_amount') or []
+    rows = [r for r in rows if _f(r.get('budget_total')) >= limit]
+    if not rows:
+        return None
+    if len(rows) == 1:
+        r0 = rows[0]
+        title = '1个项目预算%s，疑录入有误' % wan(r0.get('budget_total'))
+    else:
+        top = max(_f(r.get('budget_total')) for r in rows)
+        title = '%d个项目预算异常（最大%s），疑录入有误' % (len(rows), wan(top))
+    return {'type': 'extreme_amount', 'title': W.fact(title),
+            'total': len(rows),
+            'amount': sum(_f(r.get('budget_total')) for r in rows),
+            'data': {'limit': limit, 'cnt': len(rows)},
+            'items': [{'work_order_id': _i(r.get('id')), 'name': r.get('work_name'),
+                       'station': r.get('power_company_name'),
+                       'amount': _f(r.get('budget_total')),
+                       'engineering': _f(r.get('budget_engineering')),
+                       'material': _f(r.get('budget_material')),
+                       'status': str(r.get('work_status'))} for r in rows[:20]]}
 
 
 def _data_quality_status(facts, sc, today):
@@ -367,9 +392,8 @@ def _data_quality_status(facts, sc, today):
         amt += _sum_wo(r['wo'], (R.STATUS_UNREGISTERED,))
     if not cnt:
         return None
-    fact = '%d个状态未登记' % cnt
-    return {'type': 'data_quality_status',
-            'title': W.compose('data_quality_status', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+    title = '%d个项目状态未登记，无法计入统计' % cnt
+    return {'type': 'data_quality_status', 'title': W.fact(title),
             'total': cnt, 'amount': amt,
             'data': {'cnt': cnt, 'amount': round(amt, 2)}}
 
@@ -386,9 +410,8 @@ def _data_quality_missing(facts, sc, today):
     cnt, miss = _i(r.get('cnt')), _i(r.get('miss'))
     if not cnt or not miss:
         return None
-    fact = '今年%d个未填计划完工日期' % cnt
-    return {'type': 'data_quality_missing',
-            'title': W.compose('data_quality_missing', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+    title = '%d个项目未填计划完工日期' % cnt
+    return {'type': 'data_quality_missing', 'title': W.fact(title),
             'total': miss,
             'data': {'cnt': cnt, 'missing': miss}}
 
@@ -409,9 +432,8 @@ def _metric_deteriorated(facts, sc, today):
         return None
     worst = max(hit, key=lambda m: abs(_f(m['change_rate'])))
     pct = _f(worst['change_rate']) * 100.0
-    fact = '%s同比%s%.1f%%' % (worst['metric_name'], '上升' if pct > 0 else '下降', abs(pct))
-    return {'type': 'metric_deteriorated',
-            'title': W.compose('metric_deteriorated', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+    title = '%s同比%s%.1f%%' % (worst['metric_name'], '上升' if pct > 0 else '下降', abs(pct))
+    return {'type': 'metric_deteriorated', 'title': W.fact(title),
             'total': len(hit),
             'data': {'period': facts.get('metric_period'),
                      'items': [{'metric': m['metric_name'], 'current': _f(m['current_value']),
@@ -427,6 +449,7 @@ JUDGES = {
     'node_stay_overdue': _node_stay_overdue,
     'node_backlog': _node_backlog,
     'data_quality_amount': _data_quality_amount,
+    'extreme_amount': _extreme_amount,
     'data_quality_status': _data_quality_status,
     'data_quality_missing': _data_quality_missing,
     'metric_deteriorated': _metric_deteriorated,
@@ -434,7 +457,8 @@ JUDGES = {
 
 # 判据执行顺序（也是并列时的优先次序：钱的 → 停留的 → 积压的 → 质量的 → 指标的）
 ORDER = ['budget_underspend', 'zero_execution', 'node_stay_overdue', 'approval_backlog',
-         'approved_not_started', 'node_backlog', 'data_quality_amount', 'data_quality_status',
+         'approved_not_started', 'node_backlog', 'extreme_amount', 'data_quality_amount',
+         'data_quality_status',
          'metric_deteriorated', 'data_quality_missing']
 
 
@@ -487,8 +511,11 @@ def daily(account, today=None, when=None, limit=10):
             continue
         a.setdefault('level', R.ALERT_TYPES[code]['level'])
         a['name'] = R.ALERT_TYPES[code]['name']
+        # 「这一段话是什么预警」—— 前端靠 alert_label 决定标签与样式
+        a['alert_type'] = code
+        a['alert_label'] = W.LABEL.get(code, a['name'])
         if len(a['title']) > TITLE_MAX:
-            # 兜底：真超长时也不许把催办吃掉（催办句在「，」之后）
+            # 兜底：真超长时也不许把句尾（结论）吃掉
             head, sep, tail = a['title'].partition('，')
             room = TITLE_MAX - len(tail) - 1
             a['title'] = (head[:max(1, room)] + '，' + tail) if sep else a['title'][:TITLE_MAX]

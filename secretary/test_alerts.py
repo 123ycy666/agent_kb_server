@@ -173,11 +173,11 @@ for a in ACCOUNTS:
             longs.append('%s/%s=%d' % (a, x['type'], len(t)))
         if '…' in t:
             longs.append('%s/%s 被截断' % (a, x['type']))
-        # 口吻判据：必须有催办（"请"），且不许是纯陈述
-        if '请' not in t:
-            noremain.append('%s/%s: %s' % (a, x['type'], t))
-check(11, '一条一件事 + ≤44 字 + 每句都有催办（请…）', not longs and not dups and not noremain,
-      '超长/截断 %s；重复类型 %s；无催办 %s' % (longs or '无', dups or '无', noremain or '无'))
+        # 口吻判据：只陈述事实 —— **不许出现「请…」这类空话**
+        if '请' in t:
+            noremain.append('%s/%s 出现催办空话: %s' % (a, x['type'], t))
+check(11, '一条一件事 + ≤44 字 + 只陈述事实（无「请…」空话）', not longs and not dups and not noremain,
+      '超长/截断 %s；重复类型 %s；出现催办空话 %s' % (longs or '无', dups or '无', noremain or '无'))
 
 # ── 判据 12：市领导绝不收执行层/数据质量类 ─────────────────────────────
 allow = set(R.ROLE_ALERTS['master'])

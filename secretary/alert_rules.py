@@ -18,7 +18,8 @@ ALERT_TYPES = {
     'approved_not_started': {'name': '已批未开工预警',   'level': 'mid',  'scope_level': 'station'},
     'node_stay_overdue':    {'name': '审批停留超期预警', 'level': 'high', 'scope_level': 'any'},
     'node_backlog':         {'name': '审批环节积压预警', 'level': 'mid',  'scope_level': 'any'},
-    'data_quality_amount':  {'name': '金额结构异常预警', 'level': 'mid',  'scope_level': 'any'},
+    'data_quality_amount':  {'name': '金额存疑预警',     'level': 'mid',  'scope_level': 'any'},
+    'extreme_amount':       {'name': '金额异常预警',     'level': 'mid',  'scope_level': 'any'},
     'data_quality_status':  {'name': '状态未登记预警',   'level': 'low',  'scope_level': 'any'},
     'data_quality_missing': {'name': '数据缺失预警',     'level': 'low',  'scope_level': 'any'},
     'metric_deteriorated':  {'name': '指标恶化预警',     'level': 'mid',  'scope_level': 'any'},
@@ -28,13 +29,13 @@ ALERT_TYPES = {
 # 原则：预警发给「能动手的人」；层级越高只收汇总与要决策的；小问题不上大领导。
 ROLE_ALERTS = {
     'sz': ['budget_underspend', 'approval_backlog', 'approved_not_started',
-           'node_stay_overdue', 'node_backlog', 'data_quality_amount'],
+           'node_stay_overdue', 'node_backlog', 'data_quality_amount', 'extreme_amount'],
     'xgscwb': ['budget_underspend', 'zero_execution', 'approval_backlog',
                'node_stay_overdue', 'node_backlog', 'metric_deteriorated'],
     'cto': ['node_stay_overdue', 'node_backlog', 'approved_not_started', 'approval_backlog'],
     'yxb': ['node_stay_overdue', 'node_backlog'],
     'sgscwb': ['budget_underspend', 'zero_execution', 'approval_backlog',
-               'node_stay_overdue', 'node_backlog', 'data_quality_amount',
+               'node_stay_overdue', 'node_backlog', 'extreme_amount', 'data_quality_amount',
                'data_quality_status', 'data_quality_missing', 'metric_deteriorated'],
     # 市领导：只收全市汇总 + 指标，**执行层与数据质量问题一律不给**
     'master': ['budget_underspend', 'metric_deteriorated'],
@@ -65,7 +66,7 @@ LEVEL_WEIGHT = {'high': 0, 'mid': 1, 'low': 2}
 # 每个角色一次最多回几条（一次一件事，但不能无限多条把接口变成报表）
 # 超出按 LEVEL_WEIGHT 截断，被截掉的类型名放进返回的 `suppressed` 里（只给类型名，便于排查）
 MAX_ALERTS = {
-    'sz': 5, 'xgscwb': 5, 'cto': 4, 'yxb': 3, 'sgscwb': 6, 'master': 2, 'codea': 0,
+    'sz': 6, 'xgscwb': 6, 'cto': 4, 'yxb': 3, 'sgscwb': 7, 'master': 2, 'codea': 0,
 }
 
 # ── 判据阈值（出处：skills/判据规则.md 的起始约定）─────────────────────
@@ -74,6 +75,7 @@ STAY_SLOW_DAYS = 15           # >15 天 = 偏慢（判据规则 八.3）
 UNDERSPEND_COEF = 0.6         # 执行率/进度系数（判据规则 三.7、17.1）
 NOT_STARTED_DAYS = 30         # 已批未开工超过这么多天才报（判据规则 11.1 一般环节 >30 天）
 STATUS_UNREGISTERED = '-1'    # 原系统状态未登记（判据规则 21 节：单列，不并进草稿）
+EXTREME_AMOUNT = 1000000.0    # 单笔 ≥ 100 万视为异常（需人工核；实测有一笔 4383 万）
 STATUS_APPROVED = ('3', '6', '7')   # 已审批（判据规则 三.1）
 STATUS_UNAPPROVED = ('0', '1', '9')  # 未审批（判据规则 三.2）
 STATUS_NOT_STARTED = '3'      # 审核通过待施工
