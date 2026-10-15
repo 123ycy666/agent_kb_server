@@ -371,6 +371,23 @@ class H(BaseHTTPRequestHandler):
                      'checked_at': time.strftime('%Y-%m-%d %H:%M:%S')}
             self._send_json(r)
             return
+        if path == '/api/alerts/daily':
+            # 每天 8 点：上游传登录账号，回「这个人今天该办的事」。一件事一条，一句话。
+            # 角色与范围**一律现查库**：上游传 scope/role 也忽略（见 alert_scope.py）。
+            data = self._read_json()
+            acct = (data.get('account') or data.get('uid') or '').strip()
+            try:
+                import alerts as alertmod
+                r = alertmod.daily(acct,
+                                   today=(data.get('today') or data.get('business_date') or '').strip() or None,
+                                   when=(data.get('when') or data.get('triggered_at') or '').strip() or None,
+                                   limit=data.get('limit') or 10)
+            except Exception as e:                      # noqa: BLE001
+                r = {'status': 'unknown', 'account': acct, 'alerts': [],
+                     'error': '%s: %s' % (type(e).__name__, str(e)[:200]),
+                     'checked_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+            self._send_json(r)
+            return
         if path == '/api/report/notice':
             self._handle_notice()
             return
