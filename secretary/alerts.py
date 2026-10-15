@@ -217,8 +217,12 @@ def _budget_underspend(facts, sc, today):
     zero = sum(1 for x in hit if x['approved'] <= 0)
     if sc['scope_type'] == 'station':
         h = hit[0]
-        title = '%s：分配%s已通过%s，按此进度年底结余%s' % (
-            sc['scope'], wan(h['alloc']), wan(h['approved']), wan(h['left']))
+        if R.forecast_mode() == 'pipeline':
+            title = '%s：分配%s已通过%s，按立项能力算年底余%s' % (
+                sc['scope'], wan(h['alloc']), wan(h['approved']), wan(h['left']))
+        else:
+            title = '%s：分配%s已通过%s，按此进度年底结余%s' % (
+                sc['scope'], wan(h['alloc']), wan(h['approved']), wan(h['left']))
     else:
         scope_alloc = sum(_f(facts['alloc'].get(i)) for i in sc['station_ids'])
         head = '全市' if sc['scope_type'] == 'city' else sc['scope']
