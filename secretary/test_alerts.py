@@ -160,18 +160,24 @@ for a in ACCOUNTS:
         order_ok = False
 check(10, '排序按 level 权重不递减', order_ok, ' | '.join(seq))
 
-# ── 判据 11：一条一件事、每句 ≤40 汉字 ────────────────────────────────
-longs, dups = [], []
+# ── 判据 11：一条一件事、每句 ≤44 字、**且必须是催办句** ──────────────
+longs, dups, noremain = [], [], []
 for a in ACCOUNTS:
     rr = alerts.daily(a, today=TODAY)
     types = [x['type'] for x in rr['alerts']]
     if len(types) != len(set(types)):
         dups.append(a)
     for x in rr['alerts']:
-        if len(x['title']) > 40:
-            longs.append('%s/%s=%d' % (a, x['type'], len(x['title'])))
-check(11, '一条一件事 + 每句 ≤40 汉字', not longs and not dups,
-      '超长 %s；重复类型 %s' % (longs or '无', dups or '无'))
+        t = x['title']
+        if len(t) > 44:
+            longs.append('%s/%s=%d' % (a, x['type'], len(t)))
+        if '…' in t:
+            longs.append('%s/%s 被截断' % (a, x['type']))
+        # 口吻判据：必须有催办（"请"），且不许是纯陈述
+        if '请' not in t:
+            noremain.append('%s/%s: %s' % (a, x['type'], t))
+check(11, '一条一件事 + ≤44 字 + 每句都有催办（请…）', not longs and not dups and not noremain,
+      '超长/截断 %s；重复类型 %s；无催办 %s' % (longs or '无', dups or '无', noremain or '无'))
 
 # ── 判据 12：市领导绝不收执行层/数据质量类 ─────────────────────────────
 allow = set(R.ROLE_ALERTS['master'])

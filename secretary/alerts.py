@@ -14,9 +14,12 @@ import time
 
 import alert_rules as R
 import alert_scope
+import alert_wording as W
 import tools_db
 
-TITLE_MAX = 40            # 一句话上限（汉字数）
+TITLE_MAX = 44            # 一句话上限（汉字数）。定 44 是因为实测最长的那条
+                          # 「县公司+未审批+金额+滞留+催办」压到 40 会把催办句吃掉，
+                          # 而**催办句是这个接口的意义所在**，不能截。
 NODE_NAME_MAX = 8         # 节点名拼进标题时截断，避免超字数
 
 
@@ -58,6 +61,15 @@ def _marks(n):
 def _node(node):
     n = str(node or '')
     return n if len(n) <= NODE_NAME_MAX else n[:NODE_NAME_MAX] + '…'
+
+
+def _short(name):
+    """所名简称：两水供电所→两水所、神农供电服务站→神农站。标题省字用（data 里仍是全名）。"""
+    n = str(name or '')
+    for suf, r in (('供电服务站', '站'), ('供电中心', '中心'), ('供电所', '所')):
+        if n.endswith(suf):
+            return n[:-len(suf)] + r
+    return n
 
 
 def _num(v):
@@ -175,7 +187,10 @@ def _cnt_wo(wo, statuses):
 
 
 def _head(sc):
-    return '全市' if sc['scope_type'] == 'city' else sc['scope']
+    """标题里的范围名：全市 / 曾都区公司（去掉「供电」二字省字）；data 里仍是全名。"""
+    if sc['scope_type'] == 'city':
+        return '全市'
+    return str(sc['scope'] or '').replace('供电公司', '公司').replace('供电中心', '中心')
 
 
 def _stations_of(sc, ids):
@@ -215,21 +230,20 @@ def _budget_underspend(facts, sc, today):
     tot_left = sum(x['left'] for x in hit)
     tot_alloc = sum(x['alloc'] for x in hit)
     zero = sum(1 for x in hit if x['approved'] <= 0)
+    head = _head(sc)
     if sc['scope_type'] == 'station':
         h = hit[0]
-        if R.forecast_mode() == 'pipeline':
-            title = '%s：分配%s已通过%s，按立项能力算年底余%s' % (
-                sc['scope'], wan(h['alloc']), wan(h['approved']), wan(h['left']))
-        else:
-            title = '%s：分配%s已通过%s，按此进度年底结余%s' % (
-                sc['scope'], wan(h['alloc']), wan(h['approved']), wan(h['left']))
+        fact = '分%s、已批%s、剩%s' % (wan(h['alloc']), wan(h['approved']), wan(h['left']))
     else:
         scope_alloc = sum(_f(facts['alloc'].get(i)) for i in sc['station_ids'])
-        head = '全市' if sc['scope_type'] == 'city' else sc['scope']
-        extra = '，%d个所零审批' % zero if zero else ''
-        title = '%s：%d个所超期未动，共分%s%s' % (head, len(hit), wan(scope_alloc), extra)
+        fact = '%d所超期未动' % len(hit)
+        if zero:
+            fact += '、%d未审批' % zero
+        fact += '，分%s' % wan(scope_alloc)
         tot_alloc = scope_alloc
-    return {'type': 'budget_underspend', 'title': title, 'total': len(hit), 'amount': tot_left,
+    return {'type': 'budget_underspend',
+            'title': W.compose('budget_underspend', _short(head), fact, sc['scope_type'], sc['role_code']),
+            'total': len(hit), 'amount': tot_left,
             'data': {'alloc': round(tot_alloc, 2), 'left': round(tot_left, 2),
                      'zero_stations': zero, 'stations': len(hit),
                      'worst': [{'station': s, 'left': round(x['left'], 2)}
@@ -246,11 +260,10 @@ def _zero_execution(facts, sc, today):
     if not zero:
         return None
     amt = sum(r['alloc'] for r in zero)
-    if sc['scope_type'] == 'county':
-        title = '%s：%d个所今年未审批通过一笔，分配%s' % (sc['scope'], len(zero), wan(amt))
-    else:
-        title = '全市%d个所今年未审批通过一笔，分配%s' % (len(zero), wan(amt))
-    return {'type': 'zero_execution', 'title': title, 'total': len(zero), 'amount': amt,
+    fact = '%d所零审批，分%s' % (len(zero), wan(amt))
+    return {'type': 'zero_execution',
+            'title': W.compose('zero_execution', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+            'total': len(zero), 'amount': amt,
             'data': {'alloc': round(amt, 2), 'stations': len(zero)}}
 
 
@@ -263,13 +276,12 @@ def _approval_backlog(facts, sc, today):
         over += sum(a['over_cnt'] for a in r['audit'])
     if not cnt:
         return None
-    if sc['scope_type'] == 'station':
-        title = '%s：截至今日%d个项目未审批%s' % (sc['scope'], cnt, wan(amt))
-    else:
-        title = '%s：截至今日%d个项目未审批%s' % (_head(sc), cnt, wan(amt))
+    fact = '%d个未审批%s' % (cnt, wan(amt))
     if over:
-        title += '，%d个停留超90天' % over
-    return {'type': 'approval_backlog', 'title': title, 'total': cnt, 'amount': amt,
+        fact += '、%d超90天' % over
+    return {'type': 'approval_backlog',
+            'title': W.compose('approval_backlog', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+            'total': cnt, 'amount': amt,
             'data': {'cnt': cnt, 'amount': round(amt, 2), 'over_90': over}}
 
 
@@ -288,14 +300,15 @@ def _approved_not_started(facts, sc, today):
     cnt = sum(x['cnt'] for x in hit)
     amt = sum(x['amt'] for x in hit)
     days = max(x['days'] for x in hit)
-    title = '%s：%d个项目已通过审批未开工%s，最久%d天' % (
-        _head(sc) if sc['scope_type'] != 'station' else sc['scope'], cnt, wan(amt), days)
-    return {'type': 'approved_not_started', 'title': title, 'total': cnt, 'amount': amt,
+    fact = '%d个已批未开工%s、最久%d天' % (cnt, wan(amt), days)
+    return {'type': 'approved_not_started',
+            'title': W.compose('approved_not_started', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+            'total': cnt, 'amount': amt,
             'data': {'cnt': cnt, 'amount': round(amt, 2), 'max_days': days}}
 
 
 def _node_stay_overdue(facts, sc, today):
-    """审批停留超期：只算**本角色对应节点**的待办 —— 判据规则十二节禁止拿全库量当某人待办。"""
+    """审批滞留：只算**本角色对应节点**的待办 —— 判据规则十二节禁止拿全库量当某人待办。"""
     node = sc.get('ledger_node') or ''
     if not node:
         return None
@@ -303,10 +316,13 @@ def _node_stay_overdue(facts, sc, today):
     if not b or not b['cnt']:
         return None
     if b['over_cnt']:
-        title = '%s：%d个项目在%s停留超90天' % (sc['scope'], b['over_cnt'], _node(node))
+        fact = '%d个滞留超90天%s' % (b['over_cnt'], wan(b['amt']))
     else:
-        title = '%s：%d个项目在%s待处理' % (sc['scope'], b['cnt'], _node(node))
-    return {'type': 'node_stay_overdue', 'title': title, 'total': b['cnt'], 'amount': b['amt'],
+        fact = '%d个待办' % b['cnt']
+    return {'type': 'node_stay_overdue',
+            'title': W.compose('node_stay_overdue', _short(_head(sc)), fact,
+                               sc['scope_type'], sc['role_code']),
+            'total': b['cnt'], 'amount': b['amt'],
             'data': {'node': node, 'cnt': b['cnt'], 'over_90': b['over_cnt'],
                      'max_days': b['max_days'], 'amount': round(b['amt'], 2)}}
 
@@ -319,10 +335,11 @@ def _node_backlog(facts, sc, today):
     for node, b in facts['by_node'].items():
         a = agg.setdefault(node, {'cnt': 0})
         a['cnt'] += b['cnt']
-    top = sorted(agg.items(), key=lambda kv: -kv[1]['cnt'])[:2]
-    detail = '、'.join('%s%d个' % (_node(n), v['cnt']) for n, v in top)
-    title = '%s：%d个项目待审批，%s' % (_head(sc), sum(v['cnt'] for _, v in top), detail)
-    return {'type': 'node_backlog', 'title': title,
+    top = sorted(agg.items(), key=lambda kv: -kv[1]['cnt'])[:1]
+    n0, v0 = top[0]
+    fact = '%d个待审批、%d在%s' % (sum(v['cnt'] for _, v in top), v0['cnt'], _node(n0))
+    return {'type': 'node_backlog',
+            'title': W.compose('node_backlog', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
             'total': sum(v['cnt'] for _, v in top),
             'data': {'by_node': {n: v['cnt'] for n, v in top}}}
 
@@ -332,8 +349,10 @@ def _data_quality_amount(facts, sc, today):
     if not rows:
         return None
     tot = sum(_f(r['budget_total']) for r in rows)
-    title = '%s：%d个项目工程费或物资费为零' % (_head(sc), len(rows))
-    return {'type': 'data_quality_amount', 'title': title, 'total': len(rows), 'amount': tot,
+    fact = '%d个工程费或物资费为零' % len(rows)
+    return {'type': 'data_quality_amount',
+            'title': W.compose('data_quality_amount', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+            'total': len(rows), 'amount': tot,
             'data': {'cnt': len(rows), 'amount': round(tot, 2)},
             'items': [{'work_order_id': _i(r['id']), 'name': r['work_name'],
                        'station': r['power_company_name'], 'amount': _f(r['budget_total']),
@@ -348,8 +367,10 @@ def _data_quality_status(facts, sc, today):
         amt += _sum_wo(r['wo'], (R.STATUS_UNREGISTERED,))
     if not cnt:
         return None
-    title = '%s：%d个项目状态未登记%s' % (_head(sc), cnt, wan(amt))
-    return {'type': 'data_quality_status', 'title': title, 'total': cnt, 'amount': amt,
+    fact = '%d个状态未登记' % cnt
+    return {'type': 'data_quality_status',
+            'title': W.compose('data_quality_status', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+            'total': cnt, 'amount': amt,
             'data': {'cnt': cnt, 'amount': round(amt, 2)}}
 
 
@@ -365,8 +386,10 @@ def _data_quality_missing(facts, sc, today):
     cnt, miss = _i(r.get('cnt')), _i(r.get('miss'))
     if not cnt or not miss:
         return None
-    title = '%s：今年%d个项目均未填计划完工日期' % (_head(sc), cnt)
-    return {'type': 'data_quality_missing', 'title': title, 'total': miss,
+    fact = '今年%d个未填计划完工日期' % cnt
+    return {'type': 'data_quality_missing',
+            'title': W.compose('data_quality_missing', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+            'total': miss,
             'data': {'cnt': cnt, 'missing': miss}}
 
 
@@ -386,10 +409,10 @@ def _metric_deteriorated(facts, sc, today):
         return None
     worst = max(hit, key=lambda m: abs(_f(m['change_rate'])))
     pct = _f(worst['change_rate']) * 100.0
-    title = '%s：%s同比%s%.1f%%（%s→%s）' % (
-        _head(sc), worst['metric_name'], '上升' if pct > 0 else '下降', abs(pct),
-        _num(worst['base_value']), _num(worst['current_value']))
-    return {'type': 'metric_deteriorated', 'title': title, 'total': len(hit),
+    fact = '%s同比%s%.1f%%' % (worst['metric_name'], '上升' if pct > 0 else '下降', abs(pct))
+    return {'type': 'metric_deteriorated',
+            'title': W.compose('metric_deteriorated', _short(_head(sc)), fact, sc['scope_type'], sc['role_code']),
+            'total': len(hit),
             'data': {'period': facts.get('metric_period'),
                      'items': [{'metric': m['metric_name'], 'current': _f(m['current_value']),
                                 'base': _f(m['base_value']),
@@ -465,7 +488,11 @@ def daily(account, today=None, when=None, limit=10):
         a.setdefault('level', R.ALERT_TYPES[code]['level'])
         a['name'] = R.ALERT_TYPES[code]['name']
         if len(a['title']) > TITLE_MAX:
-            a['title'] = a['title'][:TITLE_MAX - 1] + '…'
+            # 兜底：真超长时也不许把催办吃掉（催办句在「，」之后）
+            head, sep, tail = a['title'].partition('，')
+            room = TITLE_MAX - len(tail) - 1
+            a['title'] = (head[:max(1, room)] + '，' + tail) if sep else a['title'][:TITLE_MAX]
+            a['title_truncated'] = True
         if a.get('items'):
             a['returned'] = min(len(a['items']), limit)
             a['items'] = a['items'][:limit]
