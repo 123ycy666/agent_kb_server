@@ -311,6 +311,22 @@ def main() -> int:
         print('      /api/skills：%s' % api(c, '/api/skills', timeout=30)[:90])
         print('      /api/skill/title：%s' % api(c, '/api/skill/title', 'POST',
                                                  '{"skill_id":"flow-monitor","account":"sz002"}', timeout=120)[:200])
+        # 每日预警接口（2026-10-15 新增）：用真实账号探一次，只警示、不阻断部署。
+        # 为什么只警示：这个接口依赖业务库里的身份表（t_employee/t_role/t_department），
+        # 线上数据只要某天变了它就可能回 unknown —— 那是**数据问题，不是部署问题**，
+        # 把部署判成失败会让人误以为代码坏了。
+        _al = api(c, '/api/alerts/daily', 'POST',
+                  '{"account":"sngdssz","today":"%s"}' % time.strftime('%Y-%m-%d'), timeout=120)
+        try:
+            _aj = json.loads(_al)
+            print('      /api/alerts/daily：status=%s role=%s scope=%s 预警=%d 条'
+                  % (_aj.get('status'), _aj.get('role'), _aj.get('scope'),
+                     len(_aj.get('alerts') or [])))
+            if _aj.get('status') == 'unknown':
+                print('      ⚠ 预警接口账号解析失败（error=%s）—— 查身份表数据，不是代码问题'
+                      % _aj.get('error'))
+        except Exception:
+            print('      ⚠ /api/alerts/daily 返回不是 JSON：%s' % _al[:200])
 
         print('[7/7] 冒烟问答' if not args.no_smoke else '[7/7] 已跳过冒烟问答')
         if not args.no_smoke:
