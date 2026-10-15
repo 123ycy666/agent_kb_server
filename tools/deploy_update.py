@@ -58,6 +58,7 @@ ROOT_FILES = ('requirements.txt', '.env.example')
 #   《历史对话与接口_对接手册.md》（旧名不在清单里 ⇒ 切换时会被自动删掉，符合预期）。
 DEPLOY_FILES = ('DEPLOY.md', '部署脚本使用说明.md', '接口对接说明.md', '技能接口文档.md',
                 '历史对话与接口_对接手册.md',
+                '预警接口-前端对接.md', '预警接口-上线部署说明.md',
                 'start.sh', 'start.bat', 'install_service.sh')
 SKIP_DIRS = {'__pycache__', '.git', '.venv', 'node_modules', 'output'}
 SKIP_SUFFIX = {'.pyc', '.pyo', '.log'}
