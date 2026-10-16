@@ -19,8 +19,12 @@ _CACHE_MAX = 200
 def kb_search(query, top_k=3, kb_ids=None, limit=450):
     # 检索范围优先级：显式参数 > 本次请求上下文（问答页选中的库）> 配置默认
     kb_ids = kb_ids or kb_adapter.current_scope() or config.KB_IDS
-    # 缓存键含 kb_ids —— 换库不会命中上一次的结果
-    ck = (str(query), int(top_k), tuple(kb_ids or []), int(limit))
+    # ⚠️ 缓存键**必须含身份**（2026-10-16 修的真实缺陷）：
+    #    底层检索是按登录身份做权限过滤的（公开 + 自己上传的），
+    #    键里不带身份 ⇒ 用户 A 的私有切片会被缓存返回给用户 B。
+    #    另外含 kb_ids —— 换库不会命中上一次的结果。
+    ck = (kb_adapter.current_actor_key(), str(query), int(top_k),
+          tuple(kb_ids or []), int(limit))
     if ck in _CACHE:
         hit = dict(_CACHE[ck])
         hit['cached'] = True

@@ -22,6 +22,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Request
 import json as _json
 from fastapi.responses import HTMLResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from app.core.deps import CurrentActor, get_current_actor
 from app.secretary import agent as agent_mod
@@ -212,7 +213,13 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
     kb_adapter.set_actor(actor)
 
     try:
-        r = agent_mod.ask(
+        # ⚠️ 必须丢线程池执行（2026-10-16 修的真实故障）：
+        #    agent_mod.ask 内部是**同步**调模型（urllib，单次几十秒），
+        #    直接写在 async def 里会占住事件循环 ⇒ 这期间**所有人的请求**都要排队
+        #    （连同步 def 的知识库端点也发不出响应），表现为「一个人提问、全站转圈」。
+        #    anyio 的 to_thread 会**复制上下文** ⇒ kb_adapter 的身份/检索范围不会丢。
+        r = await run_in_threadpool(
+            agent_mod.ask,
             q,
             model=model,
             max_steps=max_steps,
@@ -350,7 +357,7 @@ async def feedback(request: Request, actor: CurrentActor = Depends(get_current_a
     except (TypeError, ValueError):
         return _jr({"error": "feedback 必须是 1（赞）或 0（踩）"}, status_code=400)
     try:
-        n = qa_log.set_feedback(qa_id, fb, data.get("note"))
+        n = await run_in_threadpool(qa_log.set_feedback, qa_id, fb, data.get("note"))
         return _jr({"ok": n > 0, "updated": n, "qa_id": qa_id, "feedback": fb})
     except Exception as e:                         # noqa: BLE001
         return _jr({"error": "%s: %s" % (type(e).__name__, str(e)[:200])}, status_code=500)
@@ -364,7 +371,8 @@ async def feedback(request: Request, actor: CurrentActor = Depends(get_current_a
 async def skill_run(request: Request, actor: CurrentActor = Depends(get_current_actor)):
     data = await _read_json(request)
     try:
-        r = report_mod.run_skill(
+        r = await run_in_threadpool(
+            report_mod.run_skill,
             (data.get("skill_id") or "").strip(),
             model=data.get("model") or None,
             work_name=data.get("work_name") or "",
@@ -383,7 +391,8 @@ async def skill_run(request: Request, actor: CurrentActor = Depends(get_current_
 async def skill_title(request: Request, actor: CurrentActor = Depends(get_current_actor)):
     data = await _read_json(request)
     try:
-        r = report_mod.run_skill_title(
+        r = await run_in_threadpool(
+            report_mod.run_skill_title,
             (data.get("skill_id") or "").strip(),
             model=data.get("model") or None,
             account=data.get("account") or data.get("uid") or actor.username,
@@ -406,8 +415,9 @@ async def report_notice(request: Request, actor: CurrentActor = Depends(get_curr
     if not station:
         return _jr({"error": "缺少 station"})
     try:
-        r = report_mod.build_notice(station, base_year=data.get("base_year"),
-                                    plan_year=data.get("plan_year"))
+        r = await run_in_threadpool(
+            report_mod.build_notice, station,
+            base_year=data.get("base_year"), plan_year=data.get("plan_year"))
     except Exception as e:                         # noqa: BLE001
         r = {"error": type(e).__name__ + " " + str(e)[:200]}
     return _jr(r)
@@ -417,9 +427,10 @@ async def report_notice(request: Request, actor: CurrentActor = Depends(get_curr
 async def report(request: Request, actor: CurrentActor = Depends(get_current_actor)):
     data = await _read_json(request)
     try:
-        r = report_mod.run_report(notice=data.get("notice") or None,
-                                  station=(data.get("station") or "环潭供电所"),
-                                  model=data.get("model") or None)
+        r = await run_in_threadpool(
+            report_mod.run_report, notice=data.get("notice") or None,
+            station=(data.get("station") or "环潭供电所"),
+            model=data.get("model") or None)
     except Exception as e:                         # noqa: BLE001
         r = {"report": "", "trace": [], "notice": {},
              "warnings": ["服务异常：" + type(e).__name__ + " " + str(e)], "elapsed_ms": 0}
@@ -462,7 +473,9 @@ async def asr(request: Request, actor: CurrentActor = Depends(get_current_actor)
     with open(save_to, "wb") as f:
         f.write(raw)
     try:
-        r = tools_asr.transcribe(save_to)
+        # ⚠️ 语音识别是最长的阻塞（内部 time.sleep 轮询，最长 180 秒），
+        #    必须丢线程池 —— 否则一个人录音，全站转圈三分钟。
+        r = await run_in_threadpool(tools_asr.transcribe, save_to)
     except Exception as e:                         # noqa: BLE001
         r = {"text": "", "error": type(e).__name__ + " " + str(e), "stages": []}
     r["saved_to"] = save_to

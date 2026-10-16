@@ -47,6 +47,28 @@ def current_scope():
     return _scope_var.get()
 
 
+def current_actor_key() -> str:
+    """当前请求的身份标识，**专供缓存分桶**（不同用户不共享检索缓存）。
+
+    ⚠️ 为什么需要它（2026-10-16 修的真实缺陷）
+    ------------------------------------------------
+    `tools_kb.kb_search` 原来的缓存键只含 (query, top_k, kb_ids, limit)、
+    **不含身份**；而本模块的检索是**按登录身份做权限过滤**的
+    （见下方 `search()`：actor → visible_document_filter）。
+    两者一叠加 ⇒ 用户 A 检索到的**私有切片**会被缓存、原样返回给用户 B。
+    把本函数的返回值加进缓存键，即可按用户隔离。
+
+    无登录身份时统一返回 "service"：兜底身份只能看公开文档，共享缓存是安全的。
+    """
+    actor = _actor_var.get()
+    if actor is None:
+        return "service"
+    ident = getattr(actor, "user_id", None)
+    if ident is None:
+        ident = getattr(actor, "username", None)
+    return "%s:%s" % (getattr(actor, "type", "?"), ident)
+
+
 def _fallback_actor():
     """无登录身份（离线脚本 / 内部任务）时的兜底服务身份。"""
     from app.core.deps import CurrentActor
