@@ -1,0 +1,296 @@
+# -*- coding: utf-8 -*-
+"""配置：读合并项目根目录的 .env（与知识库后端同一份），模型通道跟随 MODEL_CHANNEL。
+
+2026-10-14 合并改造：
+- .env 位置：优先合并项目根目录（../.env，即 agent/ 的上一级），
+  其次 agent/.env（独立部署时用）。SECRETARY_ENV 仍可强制指定。
+- MySQL 连接：新键名 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD，
+  兼容旧键 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD。
+- 模型端点：不再单独读 LLM_BASE_URL/LLM_API_KEY，改由 MODEL_CHANNEL
+  （mock/local/online）派生；旧键仍可作为覆盖。
+"""
+import os
+import re
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT_ENV = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), '.env')
+_LOCAL_ENV = os.path.join(HERE, '.env')
+# 合并项目：根 .env 是唯一配置源；独立部署时才落到 agent/.env
+ENV_PATH = os.environ.get('SECRETARY_ENV',
+                         _ROOT_ENV if os.path.exists(_ROOT_ENV) else _LOCAL_ENV)
+
+REQUIRED = ('MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD')
+
+_TEMPLATE_HINT = (
+    '\n[配置] 缺少 %s\n'
+    '       这个文件不在仓库里（含密码，刻意不入库），需要自己建一份：\n'
+    '\n'
+    '         cp .env.example .env        # Linux / macOS\n'
+    '         copy .env.example .env      # Windows\n'
+    '\n'
+    '       然后把 6 项填上：%s\n'
+    '       各项说明见 .env.example 里的注释。\n'
+)
+
+
+def load_env(path=ENV_PATH):
+    if not os.path.exists(path):
+        raise SystemExit(_TEMPLATE_HINT % (path, ' / '.join(REQUIRED)))
+    d = {}
+    for line in open(path, encoding='utf-8'):
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        k, _, v = line.partition('=')
+        # 剥离行尾注释：仅当 '#' 前有空白时才算注释，避免截断含 '#' 的密码
+        v = re.split(r'\s+#', v, maxsplit=1)[0]
+        d[k.strip()] = v.strip()
+    missing = [k for k in REQUIRED if not d.get(k)]
+    if missing:
+        raise SystemExit('[配置] %s 里这些项还是空的：%s\n'
+                         '       填好再启动（说明见 .env.example）。'
+                         % (path, ' / '.join(missing)))
+    return d
+
+
+ENV = load_env()
+
+# MySQL 连接：新键 MYSQL_* 优先，兼容旧键 DB_*
+DB = {
+    'host': ENV.get('MYSQL_HOST') or ENV['DB_HOST'],
+    'port': int(ENV.get('MYSQL_PORT') or ENV['DB_PORT']),
+    'user': ENV.get('MYSQL_USER') or ENV['DB_USER'],
+    'password': ENV.get('MYSQL_PASSWORD') or ENV['DB_PASSWORD'],
+    'db': 'dlj_data',
+}
+SCHEMA = 'dlj_data'
+
+# 三个库名（与知识库后端 .env 保持一致）
+AGENT_DB = (os.environ.get('SECRETARY_AGENT_DB')
+            or ENV.get('MYSQL_DB_AGENT') or ENV.get('SECRETARY_AGENT_DB') or 'agent_data')
+
+# 纠错词典的数据源：
+#   db   = 读数据库（默认）。词典在 agent_data 的 6 张 t_nc_* 表里，
+#          **服务启动时一次性全量读进内存**，之后纠错全程不查库。
+#   file = 读 libs/name_correction_lib/data/ 下的 CSV（零依赖，供独立部署/回退用）。
+# 建表见 tools/lexicon_schema.sql，导入见 tools/import_lexicon.py。
+# 环境变量和 .env 都可以配，环境变量优先。
+LEXICON_SOURCE = (os.environ.get('SECRETARY_LEXICON')
+                  or ENV.get('SECRETARY_LEXICON') or 'db').strip().lower()
+
+# 纠错词典库：与对话记录库同一台 MySQL、同一账号，只是库名不同。
+# 键名必须用 database 而不是 db —— pymysql 1.1+ 已把 db 标为废弃，传进去会刷警告。
+LEXICON_DB_NAME = (os.environ.get('SECRETARY_LEXICON_DB')
+                   or ENV.get('SECRETARY_LEXICON_DB') or AGENT_DB)
+LEXICON_DB = {
+    'host': DB['host'],
+    'port': DB['port'],
+    'user': DB['user'],
+    'password': DB['password'],
+    'database': LEXICON_DB_NAME,
+}
+
+# 词典热更新：每隔这么久（秒）查一次版本指纹，发现词典被改过就重建纠错引擎。
+# 这样人工 UPDATE 完词典不用重启服务。设 0 = 关闭探测（只在启动时加载一次）。
+LEXICON_RECHECK_SEC = int(os.environ.get('SECRETARY_LEXICON_RECHECK')
+                          or ENV.get('SECRETARY_LEXICON_RECHECK') or '60')
+
+# 多轮上下文：同一场会话里，把最近 N 轮问答带上作为模型上下文。
+# 作用：理解「那全市的呢」这类省略主语的问法；问题没提时间/地点时沿用上一轮口径。
+# 设 0 = 关闭（每次提问完全独立，与 2.0 之前行为一致）。
+# 2026-09-21 由 3 调到 5：长会话里「上一轮」常常超出 3 轮就丢失指代，
+# 5 轮的上下文增量可接受（每轮最多带 400 字回答，见 qa_log.load_context）。
+HISTORY_TURNS = int(os.environ.get('SECRETARY_HISTORY_TURNS', '5'))
+
+# 规则文档（2026-09-24）：全系统**只维护这一篇**规则 —— 判断标准 + 比较 + 问法归一 + 回答方向
+# （skills/判据规则.md，同一篇同步进知识库）。普通问答不带任何技能 ID，每次先按
+# 「本轮问句 + 上一轮问句」检索它，命中的切片直接当本次的判断标准与回答方向交给模型；
+# 技能调用把整篇注入，两边的规则永远一致。
+# ★ 为什么由服务先检索、而不是等模型自己查：实测让模型"要判断时自己查"会时查时不查，
+#   不查就给不出判断。SECRETARY_RULES=0 可关掉（回到模型自己按需 kb_search）。
+RULE_DOC = (os.environ.get('SECRETARY_RULE_DOC') or '判据规则').strip()
+# 每次注入几条规则切片。2026-09-24 由 3 调到 4：零节（分析框架）相关度高时会排在最前，
+# 只取 3 条容易把场景段（如第二十节的审批类必答四段）挤掉 —— 框架和场景要同时在场。
+RULE_TOP_K = int(os.environ.get('SECRETARY_RULE_TOP_K', '4'))
+# qtype（分析/查数）的判定线：预检索到的规则相关度达到它就算分析题。
+# ★ 它只决定**要不要额外生成分析页面**，不影响回答本身 —— 分流由模型按《规则》第零节做。
+ANALYSIS_SCORE = float(os.environ.get('SECRETARY_ANALYSIS_SCORE', '0.8'))
+RULES_ON = (os.environ.get('SECRETARY_RULES') or '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+
+# ══════════════════════════════════════════════════════════
+#  模型通道（与知识库后端同一套 .env：MODEL_CHANNEL = mock | local | online）
+# ══════════════════════════════════════════════════════════
+# 问答必须用真实模型，没有 mock 档：
+#   local  = 内网自建（vLLM / Xinference / Ollama，OpenAI 兼容）
+#   online = 线上 API（阿里云百炼 compatible-mode）
+# 旧键 LLM_BASE_URL / LLM_API_KEY / SECRETARY_MODEL 仍可作为覆盖。
+MODEL_CHANNEL = (os.environ.get('MODEL_CHANNEL') or ENV.get('MODEL_CHANNEL') or 'local').strip().lower()
+if MODEL_CHANNEL not in ('local', 'online'):
+    raise SystemExit(
+        '[配置] MODEL_CHANNEL=%s 不支持：问答服务需要真实模型（local / online）。\n'
+        '       知识库后端可以用 mock 演示，但问数 agent 不行 —— 没有模型就没有答案。' % MODEL_CHANNEL)
+
+if MODEL_CHANNEL == 'online':
+    LLM_BASE = (os.environ.get('LLM_BASE_URL') or ENV.get('ONLINE_LLM_BASE_URL') or '').rstrip('/')
+    LLM_KEY = os.environ.get('LLM_API_KEY') or ENV.get('ONLINE_LLM_API_KEY') or ''
+    MODEL = os.environ.get('SECRETARY_MODEL') or ENV.get('ONLINE_LLM_MODEL') or 'qwen3.8-max'
+else:  # local
+    LLM_BASE = (os.environ.get('LLM_BASE_URL') or ENV.get('LOCAL_LLM_BASE_URL') or '').rstrip('/')
+    LLM_KEY = os.environ.get('LLM_API_KEY') or ENV.get('LOCAL_LLM_API_KEY') or ''
+    MODEL = os.environ.get('SECRETARY_MODEL') or ENV.get('LOCAL_LLM_MODEL') or 'deepseek-chat'
+
+if not LLM_BASE:
+    raise SystemExit(
+        '[配置] MODEL_CHANNEL=%s 但 LLM 端点为空：\n'
+        '       local  → 填 LOCAL_LLM_BASE_URL\n'
+        '       online → 填 ONLINE_LLM_BASE_URL\n'
+        '       各项说明见 .env.example。' % MODEL_CHANNEL)
+if MODEL_CHANNEL == 'online' and not LLM_KEY:
+    raise SystemExit(
+        '[配置] MODEL_CHANNEL=online 但 ONLINE_LLM_API_KEY 为空。\n'
+        '       线上 API 必须填 Key；本地 vLLM/Ollama 一般无需 Key，可切 local。')
+
+# 可选模型清单（全部来自本端点 GET /models 实测存在，共 250 个；这里挑出适合本场景的）
+# group 用于前端分组；note 写清"什么时候该用它"。
+MODELS = [
+    # 通义千问 · 3.8（最新一代）
+    {'id': 'qwen3.8-max', 'label': 'Qwen3.8-Max', 'group': '通义千问', 'note': '旗舰，默认；工具调用与长回答最稳'},
+    {'id': 'qwen3.8-max-0902', 'label': 'Qwen3.8-Max-0902', 'group': '通义千问', 'note': '旗舰快照版（版本固定，便于复现）'},
+    {'id': 'qwen3.8-flash', 'label': 'Qwen3.8-Flash', 'group': '通义千问', 'note': '同代轻量，最快；实测会查很久不收手'},
+    {'id': 'qwen3.8-27b', 'label': 'Qwen3.8-27B', 'group': '通义千问', 'note': '开源尺寸，可内网自部署对照'},
+    # 通义千问 · 3.7 / 3.6 / 3.5
+    {'id': 'qwen3.7-max', 'label': 'Qwen3.7-Max', 'group': '通义千问（上一代）', 'note': '上一代旗舰'},
+    {'id': 'qwen3.7-plus', 'label': 'Qwen3.7-Plus', 'group': '通义千问（上一代）', 'note': '上一代均衡档'},
+    {'id': 'qwen3.7-flash', 'label': 'Qwen3.7-Flash', 'group': '通义千问（上一代）', 'note': '上一代轻量'},
+    {'id': 'qwen3.6-max-preview', 'label': 'Qwen3.6-Max-Preview', 'group': '通义千问（上一代）', 'note': '更早一代旗舰，可做降级备用'},
+    {'id': 'qwen3.6-plus', 'label': 'Qwen3.6-Plus', 'group': '通义千问（上一代）', 'note': ''},
+    {'id': 'qwen3.6-flash', 'label': 'Qwen3.6-Flash', 'group': '通义千问（上一代）', 'note': ''},
+    {'id': 'qwen3.5-plus', 'label': 'Qwen3.5-Plus', 'group': '通义千问（上一代）', 'note': ''},
+    {'id': 'qwen3.5-flash', 'label': 'Qwen3.5-Flash', 'group': '通义千问（上一代）', 'note': ''},
+    # 专用
+    {'id': 'qwen3-max', 'label': 'Qwen3-Max', 'group': '通义千问（专用）', 'note': '更早旗舰'},
+    {'id': 'qwen3-coder-plus', 'label': 'Qwen3-Coder-Plus', 'group': '通义千问（专用）', 'note': '代码向，写 SQL 可能更强'},
+    {'id': 'qwen3-vl-plus', 'label': 'Qwen3-VL-Plus', 'group': '通义千问（多模态）', 'note': '能看图，适合带图表的问法'},
+    {'id': 'qwen3.5-omni-plus', 'label': 'Qwen3.5-Omni-Plus', 'group': '通义千问（多模态）', 'note': '全模态'},
+    # 其它厂商
+    {'id': 'deepseek-v4-pro', 'label': 'DeepSeek-V4-Pro', 'group': 'DeepSeek', 'note': '强推理，适合复杂口径推导'},
+    {'id': 'deepseek-v4-flash', 'label': 'DeepSeek-V4-Flash', 'group': 'DeepSeek', 'note': 'DeepSeek 轻量档'},
+    {'id': 'deepseek-v3.2', 'label': 'DeepSeek-V3.2', 'group': 'DeepSeek', 'note': ''},
+    {'id': 'kimi-k3', 'label': 'Kimi-K3', 'group': 'Kimi', 'note': '长上下文强'},
+    {'id': 'kimi-k2-thinking', 'label': 'Kimi-K2-Thinking', 'group': 'Kimi', 'note': '思考型；本服务关掉了 thinking，慎用'},
+    {'id': 'kimi-k2.7-code', 'label': 'Kimi-K2.7-Code', 'group': 'Kimi', 'note': '代码向'},
+    {'id': 'glm-5.2', 'label': 'GLM-5.2', 'group': '智谱 GLM', 'note': ''},
+    {'id': 'glm-5', 'label': 'GLM-5', 'group': '智谱 GLM', 'note': ''},
+    {'id': 'MiniMax/MiniMax-M3', 'label': 'MiniMax-M3', 'group': 'MiniMax', 'note': ''},
+    {'id': 'MiniMax/MiniMax-M2.7', 'label': 'MiniMax-M2.7', 'group': 'MiniMax', 'note': ''},
+]
+MODEL_IDS = [m['id'] for m in MODELS]
+
+# ---------------------------------------------------------------------------
+# 知识库（企业级本地知识库系统 · 自建 RAG）
+#
+# 2026-10-13 起**不再使用阿里云百炼知识库**：检索改为调用自建知识库的
+# `POST /api/v1/search`（只取切片，答案仍由本服务自己的模型生成），客户端见 kb_client.py。
+# 知识库的建库/上传/预览/冲突处理都在**它自己的 Web 界面**上做，本服务不再接管。
+#
+# 三条必须记住的线上约定：
+#  1. **必须用公网 IP**：nginx 的 server_name 是 47.121.183.81，
+#     用域名或 127.0.0.1 会落到默认站 → **502**。
+#  2. 认证 = `POST /auth/login` 拿 JWT（**12 小时过期**），kb_client 内建 401 自动重登。
+#  3. 下面几个键**环境变量优先、其次读 .env**（`.env` 里配了才生效，注意占位）。
+# ---------------------------------------------------------------------------
+KB_BASE = (os.environ.get('SECRETARY_KB_BASE')
+           or ENV.get('SECRETARY_KB_BASE') or 'http://127.0.0.1:8000/api/v1').strip()
+# 内部服务令牌（与知识库后端 .env 的 INTERNAL_SERVICE_TOKEN 一致）
+KB_INTERNAL_TOKEN = (os.environ.get('INTERNAL_SERVICE_TOKEN')
+                     or ENV.get('INTERNAL_SERVICE_TOKEN') or '').strip()
+# 兼容保留：连外部知识库（非本地）时才需要账号密码登录
+KB_USER = (os.environ.get('SECRETARY_KB_USER')
+           or ENV.get('SECRETARY_KB_USER') or '').strip()
+KB_PASSWORD = (os.environ.get('SECRETARY_KB_PASSWORD')
+               or ENV.get('SECRETARY_KB_PASSWORD') or '').strip()
+# 问答检索哪些库：新知识库用的是**数字 id**（逗号分隔）。默认 [5, 3]：
+#   5 = 秘书问答规则（判据 / 口径）　3 = 公司知识库（业务背景）
+KB_IDS = [int(x) for x in
+          (os.environ.get('SECRETARY_KB_IDS') or ENV.get('SECRETARY_KB_IDS') or '5,3')
+          .replace(' ', '').split(',') if x.strip().isdigit()]
+
+# AI 只能查这些表（留空 = 用业务字典里登记的全部）。
+# 六项指标已统一到这两张预计算表：快照（本期值）+ 对比（同比/环比）。
+TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').split(',') if x]
+
+# 系统提示从 ai_data.ai_prompt 注入（取 IS_new=1 的最新版），不在代码里写死。
+# 列表里不存在的 key 会自动跳过，所以可以先接好槽位、等内容补上就自动生效。
+#   answer_agent   回答规则（含那 10 条必须遵守）
+#   business_rules 共享业务规则（deleted_flag / 单位 / 层级 / 时间处理）
+#   sql_plan_rules ←【待他们新增】「先拆解任务、再一次性发出互不依赖的查询」这条约束
+#                    （原 `question_splitter` 目前是“原样透传、不做补全”，不能直接用）
+#   work_order_rules 缺陷工单取数口径（默认排除草稿 work_status=0）
+#                    2026-09-23 新增，行在 ai_prompt id=40；改这条规则只改库，不改代码
+PROMPTS = [x for x in os.environ.get('SECRETARY_PROMPTS',
+    'answer_agent,business_rules,sql_plan_rules,work_order_rules').replace(' ', '').split(',') if x]
+
+# 上游「信息补全」工作流应用（含机构名自动纠错，如 凉水供电所→两水供电所）。
+# 已不在问答链路里，但 tools_app.py 还在用它，保留以免打断那个工具。
+COMPLETION_APP_ID = os.environ.get('SECRETARY_COMPLETION_APP', 'e207644fd37247af957b7fbc613e6efc')
+COMPLETION_URL = (LLM_BASE.split('/compatible-mode')[0] +
+                  '/api/v1/apps/' + COMPLETION_APP_ID + '/completion')
+
+# 是否在系统提示**最前面**加一段「规则优先级声明」（内容见 agent.RULES_PRIORITY，默认开）。
+# 为什么需要：system 里的通用规则会和 user 段【统计范围】撞车 —— 典型是
+# `business_rules【时间处理】`写着"未指定年份时默认使用当前年份"，而代码在多轮会话里
+# 会按"沿用上一轮"给出**别的**年份；原文任何地方都没声明谁优先。
+# ★ 这是**纯新增**，不删改任何既有规则，出问题设 0 即恢复原状。
+RULES_PRIORITY = (os.environ.get('SECRETARY_RULES_PRIORITY') or '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+
+# 工具调用步数上限：0 = 不设上限（由模型自己决定什么时候收手）
+MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))
+
+# HTTP 接口的**防呆上限**：历史对话类接口（/api/sessions、/api/history）在「要求全部返回」时，
+# 一次最多给这么多条，超出的截断，并在响应里带 truncated=true 让调用方知道被截了。
+# 为什么要它：这两个接口现在默认就是「全部返回」，历史数据涨到几万条时一次塞进一个 JSON 响应，
+# 服务端序列化与前端渲染都会很难受。要更多就用 limit+offset 分页取。
+API_MAX_ROWS = int(os.environ.get('SECRETARY_API_MAX_ROWS', '5000'))
+
+# 说明：原「知识库文件台账 / 本地原文件目录 / 单库模式 / 异步上传默认」这几个开关
+# （SECRETARY_KB_FILES、SECRETARY_KB_SINGLE、SECRETARY_KB_ASYNC_DEFAULT）已随
+# **管理面（/api/kb/**）一并移除**（2026-10-13）—— 上传、预览、删除都改用
+# 新知识库系统自己的 Web 界面，本服务只保留「检索」这一个动作。
+
+# L2 会话摘要（2026-09-22 新增）：把一场会话的早期轮次压成一段话，续聊时注进提示，
+# 这样"翻出一场很久以前的会话继续聊"时，模型不至于只知道最近的几轮。
+#   SESSION_SUMMARY  ：总开关，0 = 关（既不生成也不注入）
+#   SUMMARY_EVERY    ：未摘要的问答轮数攒够多少才触发一次
+#   SUMMARY_MODEL    ：摘要用哪个模型；留空 = 用主模型（想省钱可填 flash 级）
+#   SUMMARY_MAX_CHARS：摘要正文长度上限（字）。★ 与 SUMMARIZE_SYSTEM 里写的 150 对齐。
+#                     2026-09-22 从 300 降到 150：实测 300 字时摘要会堆到 6~7 条并列断言，
+#                     在 user_content 里占比过大，反而稀释了本轮问题与【统计范围】。
+SESSION_SUMMARY = (os.environ.get('SECRETARY_SESSION_SUMMARY') or '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+SUMMARY_EVERY = int(os.environ.get('SECRETARY_SUMMARY_EVERY', '5'))
+SUMMARY_MODEL = (os.environ.get('SECRETARY_SUMMARY_MODEL') or '').strip()
+SUMMARY_MAX_CHARS = int(os.environ.get('SECRETARY_SUMMARY_MAX_CHARS', '150'))
+# 最近几轮**无论有没有被摘要覆盖，都原样带进【对话历史】**。
+# 为什么要这个：摘要再准也是压缩过的，"那售电量呢"这种紧跟上一轮的追问，
+# 看原话比看摘要可靠得多。实测发现：只靠摘要时，紧邻几轮的明细会被完全替掉
+# （history_injected=0），追问的精细度会下降。
+# ★ 这两个"始终原样带"的轮次**不会再被写进摘要**（见 session_summary._summarize），
+#   否则同一件事在提示里出现两遍：白烧 token，还让摘要里的旧口径更容易干扰本轮。
+SUMMARY_KEEP_RECENT = int(os.environ.get('SECRETARY_SUMMARY_KEEP_RECENT', '2'))
+# 会话**总轮数**达到这个值，才值得把摘要注进提示。
+# 为什么需要：HISTORY_TURNS 默认 5，短会话（≤5 轮）的 history 本来就把全场带上了，
+# 再注入一段摘要纯属重复 —— 实测短会话里摘要与【对话历史】内容几乎完全重叠。
+# 设 0 = 不设门槛（老行为）。
+SUMMARY_MIN_TURNS = int(os.environ.get('SECRETARY_SUMMARY_MIN_TURNS', '6'))
+
+SQL_MAX_ROWS = 200
+SQL_TIMEOUT_MS = 25000
+HTTP_TIMEOUT = 120
+
+# 分析题的「分析页面」：判出题型为分析时，额外调一次模型把结论渲染成单页 HTML 数据大屏。
+# 设 SECRETARY_PAGE=0 可关掉（关掉后 /api/ask 不再返回 page_html，回答不受影响）。
+PAGE_ON = (os.environ.get('SECRETARY_PAGE') or ENV.get('SECRETARY_PAGE') or '1').strip().lower() not in ('0', 'false', 'no')
+# 生成分析页面用的模型：页面是纯前端代码活，用快档就够，实测比旗舰快一倍（48.7s→23.4s）
+PAGE_MODEL = (os.environ.get('SECRETARY_PAGE_MODEL') or ENV.get('SECRETARY_PAGE_MODEL') or 'qwen3.8-flash').strip()

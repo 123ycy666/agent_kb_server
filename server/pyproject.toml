@@ -1,0 +1,58 @@
+[project]
+name = "kb-system-server"
+version = "0.1.0"
+description = "企业级本地知识库系统 - 后端服务"
+requires-python = ">=3.11"
+
+dependencies = [
+    # ── Web 框架 ──────────────────────────────────────────
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.12",
+
+    # ── 数据库 ────────────────────────────────────────────
+    "sqlalchemy>=2.0.36",
+    "psycopg[binary]>=3.2.3",
+    "alembic>=1.14.0",
+    "pgvector>=0.3.6",
+    # MySQL：统一用户表 t_employee（dlj_data）只读认证
+    "pymysql>=1.1.0",
+
+    # ── 配置与校验 ────────────────────────────────────────
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+
+    # ── 认证与安全 ────────────────────────────────────────
+    "pyjwt>=2.10.0",
+    "bcrypt>=4.2.0",
+    # argon2id：t_employee 密码校验（HR 系统哈希格式）
+    "argon2-cffi>=23.1.0",
+    "cryptography>=44.0.0",
+
+    # ── 模型调用（online 档）──────────────────────────────
+    "httpx>=0.28.0",
+
+    # ── 数值与文档解析（P0-B 使用，提前锁版本）────────────
+    "numpy>=2.1.0",
+    "pdfplumber>=0.11.4",
+    "python-docx>=1.1.2",
+    "openpyxl>=3.1.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

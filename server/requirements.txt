@@ -1,0 +1,46 @@
+# 企业级本地知识库系统 — 后端依赖
+#
+# 安装：pip install -r requirements.txt
+#
+# 说明：本文件与 pyproject.toml 保持一致，
+#      使用 requirements.txt 是为了兼容不使用 PEP 517 构建的环境。
+
+# ── Web 框架 ──────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+
+# ── 数据库 ────────────────────────────────────────────────────
+sqlalchemy>=2.0.36
+psycopg[binary]>=3.2.3
+alembic>=1.14.0
+pgvector>=0.3.6
+# MySQL：统一用户表 t_employee（dlj_data）只读认证
+pymysql>=1.1.0
+
+# ── 配置与校验 ────────────────────────────────────────────────
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# ── 认证与安全 ────────────────────────────────────────────────
+pyjwt>=2.10.0
+bcrypt>=4.2.0
+# argon2id：t_employee 密码校验（HR 系统哈希格式）
+argon2-cffi>=23.1.0
+cryptography>=44.0.0
+
+# ── 任务队列（P0-B 使用）──────────────────────────────────────
+celery>=5.4.0
+redis>=5.2.0
+
+# ── 模型调用（online 档）──────────────────────────────────────
+httpx>=0.28.0
+
+# ── 数值与文档解析 ────────────────────────────────────────────
+numpy>=2.1.0
+pdfplumber>=0.11.4
+python-docx>=1.1.2
+openpyxl>=3.1.5
+# Excel 2003 旧版（.xls，BIFF 二进制）。openpyxl 只读 OOXML(.xlsx/.xlsm)，
+# 读不了 .xls。⚠️ xlrd 2.x 起官方只支持 .xls，不要降级到 1.x。
+xlrd>=2.0.1
