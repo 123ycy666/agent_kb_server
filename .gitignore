@@ -25,6 +25,8 @@ data/
 data/uploads/
 *.log
 logs/
+# 运行期产物：缺口清单（gaps.jsonl）与语音识别临时音频，都在 app 包内生成，不入库
+server/app/output/
 
 # ── 编辑器与系统 ──────────────────────────────────────────────
 .vscode/

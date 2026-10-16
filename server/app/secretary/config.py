@@ -151,9 +151,10 @@ if MODEL_CHANNEL == 'online' and not LLM_KEY:
         '[配置] MODEL_CHANNEL=online 但 ONLINE_LLM_API_KEY 为空。\n'
         '       线上 API 必须填 Key；本地 vLLM/Ollama 一般无需 Key，可切 local。')
 
-# 可选模型清单（全部来自本端点 GET /models 实测存在，共 250 个；这里挑出适合本场景的）
+# 公网通道（online）候选清单：挑自网关 GET /models 里适合本场景的。
 # group 用于前端分组；note 写清"什么时候该用它"。
-MODELS = [
+# ⚠️ 这只是 online 档的候选，最终对外清单见文件末尾的 MODELS（要按通道过滤）。
+_MODELS_ONLINE = [
     # 通义千问 · 3.8（最新一代）
     {'id': 'qwen3.8-max', 'label': 'Qwen3.8-Max', 'group': '通义千问', 'note': '旗舰，默认；工具调用与长回答最稳'},
     {'id': 'qwen3.8-max-0902', 'label': 'Qwen3.8-Max-0902', 'group': '通义千问', 'note': '旗舰快照版（版本固定，便于复现）'},
@@ -185,6 +186,38 @@ MODELS = [
     {'id': 'MiniMax/MiniMax-M3', 'label': 'MiniMax-M3', 'group': 'MiniMax', 'note': ''},
     {'id': 'MiniMax/MiniMax-M2.7', 'label': 'MiniMax-M2.7', 'group': 'MiniMax', 'note': ''},
 ]
+
+# 2026-10-16 逐个实测：当前公网网关未部署下面 8 个（选中返 404/400，且会导致整轮
+# 问答失败、连历史记录都不留）。换网关 / 网关上线新模型后请重新实测再更新本清单。
+# 实测方法：逐个 POST /api/ask {"question":"你好","model":"<id>"}，看返回的 qa_id 是否为数字。
+_MODELS_UNAVAILABLE = {
+    'qwen3.6-max-preview',   # HTTP 404
+    'qwen3-max',             # HTTP 404
+    'qwen3-coder-plus',      # HTTP 404
+    'deepseek-v4-flash',     # HTTP 404
+    'deepseek-v3.2',         # HTTP 404
+    'kimi-k2-thinking',      # HTTP 404
+    'MiniMax/MiniMax-M3',    # HTTP 400
+    'MiniMax/MiniMax-M2.7',  # HTTP 400
+}
+
+# ⚠️ 对外模型清单必须**按通道区分**（2026-10-16 修）：
+#   online → 公网网关实测可用的（上面那份，剔除不可用的）；
+#   local  → 内网自建（vLLM / Xinference / Ollama）**实际部署**的那几个，
+#            由 LOCAL_MODELS 指定（逗号分隔）；不配则只有 LOCAL_LLM_MODEL(=MODEL)。
+#   为什么必须区分：内网模型服务上**根本没有** qwen/kimi/glm/MiniMax 这些公网模型，
+#   如果清单不区分，内网部署时下拉框里会列出一堆选了就报错的模型。
+#   注意 MODEL 本身（默认模型）本来就是按通道取的，这里只是让"清单"与它保持一致。
+if MODEL_CHANNEL == 'local':
+    _local_ids = [x.strip() for x in
+                  (os.environ.get('LOCAL_MODELS') or ENV.get('LOCAL_MODELS') or MODEL).split(',')
+                  if x.strip()]
+    MODELS = [{'id': _mid, 'label': _mid, 'group': '内网自建',
+               'note': '内网已部署模型'} for _mid in _local_ids]
+else:
+    MODELS = [m for m in _MODELS_ONLINE if m['id'] not in _MODELS_UNAVAILABLE]
+
+MODEL_IDS = [m['id'] for m in MODELS]
 MODEL_IDS = [m['id'] for m in MODELS]
 
 # ---------------------------------------------------------------------------

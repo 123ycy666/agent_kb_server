@@ -15,6 +15,7 @@ import json
 import re
 import ssl
 import time
+import urllib.error
 import urllib.request
 
 from app.secretary import config
@@ -25,6 +26,19 @@ from app.secretary import semantic
 from app.secretary import time_scope
 from app.secretary import tools_db
 from app.secretary import tools_kb
+
+
+class ModelUnavailable(RuntimeError):
+    """模型服务不可用：网关没这个模型（404/400）、调用失败、或连不上。
+
+    ⚠️ 为什么要单独定义（2026-10-16 修的真实故障）
+    --------------------------------------------------
+    原先 `_chat` 直接把 `urllib.error.HTTPError` 抛出去，用户看到的是
+    「服务异常：HTTPError HTTP Error 404」这种看不懂的东西，而且**这轮问答
+    连历史记录都不会留下**（异常冲出 ask()，末尾的落库代码执行不到）。
+    换成这个类型后，上层能把它翻译成一句人话，并且**照常落库留痕**。
+    """
+
 
 # 数字断言：出现「数字 + 单位」就认为它在给业务数字（这类答案必须有工具出处）
 _CLAIM = re.compile(r'\d+(?:\.\d+)?\s*(?:万|亿|%|％|件|个|条|户|千瓦时|千瓦|kWh|元|次|小时|倍)')
@@ -64,7 +78,24 @@ def _chat(messages, model, use_tools=True, max_tokens=1500):
     body = json.dumps(body).encode('utf-8')
     req = urllib.request.Request(config.LLM_BASE + '/chat/completions', data=body, headers={
         'Authorization': 'Bearer ' + config.LLM_KEY, 'Content-Type': 'application/json'})
-    raw = urllib.request.urlopen(req, timeout=config.HTTP_TIMEOUT, context=_ctx).read().decode('utf-8', 'replace')
+    # ⚠️ 这里必须把异常翻译成人话（2026-10-16）：网关没有该模型会返 404/400，
+    #    直接抛 HTTPError 的话，用户看到「服务异常：HTTPError HTTP Error 404」这种
+    #    完全看不懂的东西，还以为系统坏了。
+    try:
+        raw = urllib.request.urlopen(req, timeout=config.HTTP_TIMEOUT, context=_ctx).read().decode('utf-8', 'replace')
+    except urllib.error.HTTPError as exc:
+        if exc.code in (400, 404):
+            raise ModelUnavailable(
+                '模型「%s」在当前模型网关不可用（HTTP %d）。'
+                '请到「模型」下拉框换一个再问，或联系管理员确认该模型是否已部署。'
+                % (model, exc.code)) from exc
+        raise ModelUnavailable(
+            '模型「%s」调用失败（HTTP %d）。请稍后重试，或换一个模型。'
+            % (model, exc.code)) from exc
+    except urllib.error.URLError as exc:
+        raise ModelUnavailable(
+            '无法连接模型服务（%s）。请确认模型地址与网络是否正常。'
+            % (getattr(exc, 'reason', exc),)) from exc
     return json.loads(raw)
 
 

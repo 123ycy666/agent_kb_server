@@ -227,7 +227,11 @@ function ask(){
   fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({question:q,model:model,profile:profile,
                              kb_ids:pickedKbIds(),
-                             session_id:getSession()||undefined,uid:'PROV-FIN-001'})})
+                             /* 不传 uid：身份一律以服务端登录态为准。
+                                原先硬编码 uid:'PROV-FIN-001' 会把所有用户的会话
+                                都按同一个业务 uid 归属（历史上曾把会话错记到
+                                app_user.id=1），已删除。 */
+                             session_id:getSession()||undefined})})
    .then(function(r){return r.json();})
    .then(function(d){
      if(d.session_id)setSession(d.session_id);      /* 首问服务端会生成并回传 */

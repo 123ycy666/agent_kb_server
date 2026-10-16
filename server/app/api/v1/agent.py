@@ -237,11 +237,30 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
             kb_ids=kb_scope or None,   # None ⇒ kb_adapter 退回配置默认
         )
     except Exception as e:                         # noqa: BLE001
+        # 模型不可用（网关没这个模型 / 连不上）时说人话，不要把 HTTPError 抛给用户看
+        detail = (str(e) if isinstance(e, agent_mod.ModelUnavailable)
+                  else "服务异常：" + type(e).__name__ + " " + str(e))
         r = {
             "input_question": q, "question": q, "session_id": session_id,
-            "answer": "服务异常：" + type(e).__name__ + " " + str(e), "trace": [],
+            "answer": detail, "trace": [],
             "no_db_query": True, "db_query_count": 0, "elapsed_ms": 0, "steps": 0,
+            "model": model or sec_config.MODEL,
         }
+        # ⚠️ 失败也必须留痕（2026-10-16 修的真实故障）
+        #    ask() 的落库在函数末尾，模型一炸异常就冲出去了，那一段执行不到
+        #    ⇒ 用户表现为「问了好几句，历史记录里一条都没有」——而这恰恰是最该
+        #    留下来排查的情况。这里补一次落库，error 文本就当 answer 存进去。
+        #    落库本身再失败也绝不能再抛，否则连错误响应都发不出去。
+        try:
+            rec = qa_log.save(
+                r, session_id=session_id, user_id=actor.user_id,
+                user_code=user_code or actor.username,
+                client_ip=client_ip, channel=channel,
+            )
+            r["qa_id"] = rec.get("qa_id")
+        except Exception as log_exc:               # noqa: BLE001
+            print('[qa_log] 失败轮次落库也失败：%s: %s'
+                  % (type(log_exc).__name__, log_exc), flush=True)
     r["user_name"] = user_name
     return _jr(r)
 
@@ -337,7 +356,7 @@ def page(token: str = Query(default=""), actor: CurrentActor = Depends(get_curre
     return Response("page failed: %s" % got.get("error", ""), status_code=500, media_type="text/plain")
 
 
-@router.get("/models", summary="可选模型清单（当前通道下实测存在）")
+@router.get("/models", summary="可选模型清单（online=公网网关实测可用；local=内网已部署）")
 def models(actor: CurrentActor = Depends(get_current_actor)):
     return _jr({"default": sec_config.MODEL, "models": sec_config.MODELS})
 
