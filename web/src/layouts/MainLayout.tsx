@@ -18,6 +18,7 @@ import {
   DashboardOutlined,
   DeploymentUnitOutlined,
   ExclamationCircleOutlined,
+  HistoryOutlined,
   LogoutOutlined,
   MessageOutlined,
   SearchOutlined,
@@ -58,6 +59,7 @@ export default function MainLayout() {
       // 因此用 <Link> 在框架内切换 —— 侧边栏、身份区保留，不再整页跳出。
       label: <Link to="/agent">智能问答</Link>,
     },
+    { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">历史对话</Link> },
     {
       key: '/conflicts',
       icon: <ExclamationCircleOutlined />,

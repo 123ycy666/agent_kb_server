@@ -1,4 +1,4 @@
-import { http } from './client'
+import { agentHttp, http } from './client'
 
 // ══════════════════════════════════════════════════════════════
 //  类型
@@ -530,4 +530,130 @@ export const systemApi = {
   health: () => http.get<any, any>('/system/health'),
   formats: () => http.get<any, any>('/system/formats'),
   info: () => http.get<any, any>('/system/info'),
+}
+
+// ══════════════════════════════════════════════════════════════
+//  问数：历史对话
+//
+//  ⚠️ 这两个接口在 `/api/*`（**不是** /api/v1），所以走 agentHttp。
+//  服务端已按「当前登录用户」过滤，前端拿到的就是自己的会话。
+// ══════════════════════════════════════════════════════════════
+
+/** 会话列表项（GET /api/sessions） */
+export interface ChatSession {
+  session_id: string
+  user_code?: string | null
+  /** 会话标题（建会话时取首个问题前 50 字） */
+  title?: string | null
+  ai_model?: string | null
+  channel?: string | null
+  client_ip?: string | null
+  /** 消息数（一轮 = 用户 + AI 两条） */
+  msg_count?: number
+  status?: number | null
+  create_time?: string | null
+  last_msg_at?: string | null
+  ended_at?: string | null
+  /** 该会话的问答轮次总数 */
+  ask_count: number
+  /** 其中「知识缺口」（模型答不了）的轮次数 */
+  gap_count: number
+}
+
+export interface ChatSessionListResult {
+  total: number
+  returned: number
+  limit: number
+  offset: number
+  truncated: boolean
+  sessions: ChatSession[]
+  error?: string
+}
+
+/** 工具调用轨迹的一步（t_chat_trace_step） */
+export interface TraceStep {
+  trace_id: number
+  step_no: number
+  step_kind?: string | null
+  round_no?: number | null
+  tool_name?: string | null
+  sql_text?: string | null
+  result_rows?: number | null
+  cost_ms?: number | null
+  model_ms?: number | null
+  /** 0 = 成功，1 = 失败（后端 `_save_steps`: `1 if err else 0`） */
+  status?: number | null
+  error_msg?: string | null
+}
+
+/** 一条消息（含该轮的问答口径与质量信息） */
+export interface ChatMessage {
+  id: number
+  seq_no: number
+  /** 1 = 用户提问，2 = AI 回答 */
+  direction?: number | null
+  sender_type?: number | null
+  sender_id?: number | null
+  reply_to_id?: number | null
+  msg_type?: number | null
+  content?: string | null
+  model?: string | null
+  latency_ms?: number | null
+  create_time?: string | null
+
+  // ── 以下来自 t_chat_query_trace，只有 AI 回答那条有 ──
+  qa_id?: number | null
+  /** 名称纠错后的问题 */
+  fixed_question?: string | null
+  /** 补全时间/地点后的问题 */
+  completed_question?: string | null
+  name_fix_used?: number | null
+  completion_used?: number | null
+  period_type?: string | null
+  period_key?: string | null
+  /** 时间口径文本 */
+  time_text?: string | null
+  /** 1 = 时间是系统默认（用户没说） */
+  time_is_default?: number | null
+  place?: string | null
+  /** 1 = 地点是系统默认（用户没说） */
+  place_is_default?: number | null
+  db_query_count?: number | null
+  sql_query_count?: number | null
+  kb_query_count?: number | null
+  /**
+   * ⚠️ 服务端字段复用：`with_steps=false` 时是「轨迹步数」(number)；
+   * `with_steps=true` 时被覆盖为轨迹数组。用前先判断类型。
+   */
+  steps?: number | TraceStep[] | null
+  no_db_query?: number | null
+  /** 1 = 证据不足而拒答（正常行为，不是故障） */
+  unverified?: number | null
+  /** 1 = 知识缺口 */
+  is_gap?: number | null
+  elapsed_ms?: number | null
+  /** 1 = 赞 / 0 = 踩 / null = 未评 */
+  feedback?: number | null
+  feedback_note?: string | null
+}
+
+export interface ChatHistoryResult {
+  session: Omit<ChatSession, 'ask_count' | 'gap_count'>
+  total: number
+  returned: number
+  limit: number
+  truncated: boolean
+  messages: ChatMessage[]
+  error?: string
+}
+
+export const chatHistoryApi = {
+  /** 我的会话列表（服务端按登录用户过滤，按最后活动时间倒序） */
+  sessions: (params?: { limit?: number; offset?: number }) =>
+    agentHttp.get<any, ChatSessionListResult>('/api/sessions', { params }),
+  /** 某场会话的完整对话记录；withSteps=true 时每轮附带工具轨迹 */
+  history: (sessionId: string, withSteps = false) =>
+    agentHttp.get<any, ChatHistoryResult>('/api/history', {
+      params: { session_id: sessionId, with_steps: withSteps },
+    }),
 }

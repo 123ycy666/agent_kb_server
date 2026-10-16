@@ -15,6 +15,7 @@ import AuditLogs from './pages/AuditLogs'
 import ModelConfig from './pages/ModelConfig'
 import TaskCenter from './pages/TaskCenter'
 import AgentChat from './pages/AgentChat'
+import ChatHistory from './pages/ChatHistory'
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useAuth()
@@ -64,6 +65,7 @@ export default function App() {
           <Route path="search" element={<SearchTest />} />
           {/* 智能问答：SPA 内页面，iframe 嵌后端 /agent/（侧边栏与身份区保留） */}
           <Route path="agent" element={<AgentChat />} />
+          <Route path="history" element={<ChatHistory />} />
           <Route path="conflicts" element={<ConflictList />} />
           <Route
             path="tags"
