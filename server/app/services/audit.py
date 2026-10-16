@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 from fastapi import Request
@@ -17,6 +18,38 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentActor
 from app.models import AuditLog
+
+
+def _safe_ip(value: str | None) -> str | None:
+    """把客户端 IP 归一成 audit_log.ip 能接受的合法值，非法则降级为 None。
+
+    ⚠️ 这里必须兜住，否则**登录会直接 500**：
+
+    1. `audit_log.ip` 是 PG 的 `inet` 类型，写入 `"testclient"`、`"unknown"` 这类
+       非 IP 字符串会抛 `DataError`；而审计在登录流程里是**同步落库**的，
+       异常会一路冒到接口，用户只看到"登录失败"。
+    2. `X-Forwarded-For` 由**客户端可控** —— 不校验就等于给外部开了一个
+       "塞垃圾值打崩登录口"的廉价开关（审计写入失败 → 500）。
+       注意：校验只解决崩溃；XFF 的**可信度**仍需在反向代理层保证
+       （只信任自己那层代理覆盖的值），否则审计里的 IP 可被伪造。
+    """
+    if not value:
+        return None
+    candidate = value.strip()
+    try:
+        ipaddress.ip_address(candidate)
+        return candidate
+    except ValueError:
+        pass
+    # 兼容 "1.2.3.4:5678" 这种带端口的写法（IPv4 只有一个冒号）
+    host, sep, port = candidate.rpartition(":")
+    if sep and port.isdigit() and host:
+        try:
+            ipaddress.ip_address(host)
+            return host
+        except ValueError:
+            pass
+    return None
 
 
 class AuditAction:
@@ -110,8 +143,10 @@ def log_action(
 
     if request is not None:
         forwarded = request.headers.get("x-forwarded-for")
-        entry.ip = forwarded.split(",")[0].strip() if forwarded else (
-            request.client.host if request.client else None
+        entry.ip = _safe_ip(
+            forwarded.split(",")[0].strip()
+            if forwarded
+            else (request.client.host if request.client else None)
         )
         ua = request.headers.get("user-agent")
         entry.user_agent = ua[:256] if ua else None

@@ -11,7 +11,9 @@
 
 同步时机：每次登录时 upsert（员工信息以 HR 为准，本地不提供修改入口）。
 
-密码：t_employee.login_pwd 为 argon2id，由 security.verify_employee_password 校验；
+密码：t_employee.login_pwd 为 argon2id，但**原文不是裸密码** —— 对方系统先拼
+`password + "_" + employee_uid.upper() + "_" + employee_uid.lower()` 再 argon2，
+校验统一走 security.verify_employee_password（内部含该规则 + 裸明文兜底）。
 本系统**不存也不改**员工密码。
 """
 
@@ -31,6 +33,10 @@ class EmployeeInfo:
     """t_employee 行（只读视图）。"""
 
     employee_id: int
+    # 员工 UID（32 位 hex）。**密码校验必需**：对方系统的密码原文是
+    # `password + "_" + uid.upper() + "_" + uid.lower()`，
+    # 见 security.employee_password_raws。
+    employee_uid: str | None
     login_name: str
     actual_name: str
     email: str | None
@@ -46,7 +52,7 @@ def fetch_employee(mysql_db: Session, login_name: str) -> EmployeeInfo | None:
 
     row = mysql_db.execute(
         text(
-            "SELECT employee_id, login_name, actual_name, email, phone, "
+            "SELECT employee_id, employee_uid, login_name, actual_name, email, phone, "
             "administrator_flag, disabled_flag, deleted_flag "
             "FROM t_employee WHERE login_name = :name LIMIT 1"
         ),
@@ -56,6 +62,7 @@ def fetch_employee(mysql_db: Session, login_name: str) -> EmployeeInfo | None:
         return None
     return EmployeeInfo(
         employee_id=int(row["employee_id"]),
+        employee_uid=row["employee_uid"],
         login_name=row["login_name"],
         actual_name=row["actual_name"],
         email=row["email"],
@@ -81,7 +88,7 @@ def authenticate(mysql_db: Session, username: str, password: str) -> EmployeeInf
         text("SELECT login_pwd FROM t_employee WHERE employee_id = :eid LIMIT 1"),
         {"eid": emp.employee_id},
     ).scalar_one_or_none()
-    if not row or not verify_employee_password(password, row):
+    if not row or not verify_employee_password(password, row, emp.employee_uid):
         return None
     return emp
 

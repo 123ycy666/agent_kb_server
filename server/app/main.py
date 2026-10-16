@@ -42,10 +42,15 @@ async def lifespan(app: FastAPI):
             result.get("admin_sync"),
         )
     except Exception as exc:  # noqa: BLE001
+        # ⚠️ 这里**不中断启动**（老库表已存在时服务仍可用），但必须把「哪一步失败」说清楚。
+        #    曾经这条日志只写"请确认 PostgreSQL 已启动"，把 `NameError` 这类代码问题
+        #    也伪装成数据库连接问题，白排查了很久 —— 所以现在带上异常类型。
         logger.error(
-            "数据库初始化失败：%s\n"
-            "请确认 PostgreSQL 已启动（docker compose up -d），"
-            "且 .env 中的 DATABASE_URL 正确。",
+            "数据库初始化失败（%s: %s）\n"
+            "服务会继续启动，但建表 / 扩展 / 增量迁移 / 管理员同步都**未执行**。\n"
+            "若是首次部署，请确认 PostgreSQL 已启动（docker compose up -d）"
+            "且 .env 的 DATABASE_URL 正确。",
+            type(exc).__name__,
             exc,
         )
 

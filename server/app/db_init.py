@@ -1,15 +1,12 @@
-"""数据库初始化：建表、建扩展、写入种子数据。
+"""数据库初始化：建扩展、建表、增量迁移、写入种子数据。
 
-设计说明
---------
-P0-A 阶段使用 `metadata.create_all()` 快速建表（开发友好），
-同时保留 Alembic 配置供后续演进使用。两者不冲突：
-create_all 只在表不存在时创建，不会破坏已有结构。
+⚠️ 必须按顺序做四件事（顺序不能乱）：
+1. `ensure_extensions()` —— 启用 pgvector（否则下面 vector 类型的表建不出来）
+2. `create_tables()`    —— 建表（含 HNSW 向量索引与 GIN 标签索引）
+3. `ensure_extra_columns()` —— 对**已存在**的表做幂等增量 DDL（`create_all` 补不了列）
+4. `seed_admin()`       —— 同步统一用户表里的管理员到投影表
 
-⚠️ 必须按顺序做三件事：
-1. 启用 pgvector 扩展（否则 vector 类型的表建不出来）
-2. 建表（含 HNSW 向量索引与 GIN 标签索引）
-3. 写入种子数据（权限点、内置角色、管理员账号）
+全部幂等，可重复执行。
 """
 
 from __future__ import annotations
@@ -93,6 +90,30 @@ EXTRA_DDL: list[tuple[str, str]] = [
 ]
 
 
+def ensure_extensions() -> list[str]:
+    """启用必需扩展 —— **必须在建表之前**，否则 `vector` 类型的列建不出来。
+
+    ⚠️ 只启用 `vector`：pgvector 官方镜像**不含 pg_bigm**，项目有意避开它
+    （中文检索方案见 `app/core/text.py`，用的是内置 tsvector + 自己分词），
+    所以这里不去尝试启用 pg_bigm，免得每次启动都刷一条无意义的警告。
+
+    幂等：`CREATE EXTENSION IF NOT EXISTS` 重复执行无副作用。
+    """
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    return ["vector"]
+
+
+def create_tables() -> None:
+    """建表（含 HNSW 向量索引与 GIN 标签索引）。
+
+    ⚠️ `create_all` 只在**表不存在**时创建，**不会**给已有表补列/补索引。
+    因此后续阶段新增的字段必须登记到 `EXTRA_DDL`（见文件头注释），
+    由 `ensure_extra_columns()` 负责增量迁移 —— 两者缺一不可。
+    """
+    Base.metadata.create_all(bind=engine)
+
+
 def ensure_extra_columns() -> list[str]:
     """补齐后续阶段新增的列与索引。幂等，可反复执行。"""
     applied: list[str] = []
@@ -126,7 +147,7 @@ def seed_admin(db: Session) -> dict:
         try:
             rows = mysql_db.execute(
                 text(
-                    "SELECT employee_id, login_name, actual_name, email, phone, "
+                    "SELECT employee_id, employee_uid, login_name, actual_name, email, phone, "
                     "administrator_flag, disabled_flag, deleted_flag "
                     "FROM t_employee WHERE administrator_flag = 1 AND deleted_flag = 0"
                 )
@@ -138,6 +159,7 @@ def seed_admin(db: Session) -> dict:
         for row in rows:
             emp = employee.EmployeeInfo(
                 employee_id=int(row["employee_id"]),
+                employee_uid=row["employee_uid"],
                 login_name=row["login_name"],
                 actual_name=row["actual_name"],
                 email=row["email"],
