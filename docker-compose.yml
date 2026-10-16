@@ -26,7 +26,9 @@ services:
     environment:
       POSTGRES_USER: kb
       POSTGRES_PASSWORD: kb_dev_pwd
-      POSTGRES_DB: kb_system
+      # ⚠️ 库名必须与 .env 的 DATABASE_URL 一致（应用连的是 ad_new）。
+      #    这里原为 kb_system，与 .env 不符 ⇒ 全新部署会连不上库，2026-10-16 已改。
+      POSTGRES_DB: ad_new
       # 中文排序与全文检索需要合适的 locale
       POSTGRES_INITDB_ARGS: "--encoding=UTF8"
     ports:
@@ -36,7 +38,7 @@ services:
       # 初始化脚本：自动启用扩展
       - ./docker/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kb -d kb_system"]
+      test: ["CMD-SHELL", "pg_isready -U kb -d ad_new"]
       interval: 5s
       timeout: 5s
       retries: 12
