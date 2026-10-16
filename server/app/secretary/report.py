@@ -13,7 +13,16 @@ from app.secretary import semantic
 from app.secretary import tools_db
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SKILL_DIR = os.path.join(os.path.dirname(HERE), 'skills')   # 技能文档放在仓库根 skills/，跨服务复用
+# 技能文档与两个规则 JSON 都在 secretary/skills/ 下（预算分配.md / 判据规则.md /
+# 数据表说明书.md / 技能触发配置.json / 状态变更规则.json）。
+#
+# ⚠️ 2026-10-16 修正：原为 os.path.join(os.path.dirname(HERE), 'skills')，
+#    即 app/skills —— 该目录**不存在**（多算了一层 dirname）。
+#    受害的不止 SKILL_DOC，而是 SKILL_DIR 下全部内容：
+#      · list_skill_docs() 的 os.listdir 抛异常被静默吞掉 → 返回 []（技能台空白）
+#      · list_triggers() / state_change_sim() 读不到两个 JSON → 技能触发与状态变更为空
+#      · _read(SKILL_DOC/TABLE_DOC/RULE_DOC) → 报告技能读不到技能文档
+SKILL_DIR = os.path.join(HERE, 'skills')
 SKILL_DOC = os.path.join(SKILL_DIR, '预算分配.md')
 TABLE_DOC = os.path.join(SKILL_DIR, '数据表说明书.md')
 RULE_DOC = os.path.join(SKILL_DIR, '判据规则.md')
@@ -354,8 +363,12 @@ def list_skill_docs():
                     title = ln[2:].strip()
                     break
             out.append({'name': fn, 'title': title, 'chars': len(txt), 'content': txt})
-    except Exception:
-        pass
+    except Exception as e:                          # noqa: BLE001
+        # ⚠️ 这里原来是 `pass`：目录不存在时**静默返回空列表**，页面表现成
+        #    「技能台什么都没有」，排查时完全没有线索（2026-10-16 就被这个坑到，
+        #    实际是 SKILL_DIR 路径算错）。改成打日志，别再吞。
+        print('[report] 读取技能文档目录失败（%s）：%s: %s'
+              % (SKILL_DIR, type(e).__name__, e), flush=True)
     return out
 
 
