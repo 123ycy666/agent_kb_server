@@ -176,9 +176,8 @@ export default function TaskCenter() {
         message="文档上传、解析、向量化、冲突检测都是耗时操作，统一走异步任务"
         description={
           <Paragraph style={{ marginBottom: 0, fontSize: 12 }}>
-            当前阶段任务在请求内同步执行完毕（接口形态已是异步契约）。
-            接入 Celery 后，上传会立即返回 <Text code>task_id</Text>，
-            调用方轮询本页面对应的接口获取进度，接口契约无需变更。
+            上传会立即返回 <Text code>task_id</Text>，解析、向量化、冲突检测
+            在后台异步执行；调用方轮询本页面对应的接口获取进度。
           </Paragraph>
         }
       />

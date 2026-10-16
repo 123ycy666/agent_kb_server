@@ -9,7 +9,7 @@
 接入方式
 --------
 这三个类**已经写好了**，只是默认不启用。启用步骤：
-1. 修改 .env：PROVIDER_MODE=local
+1. 修改 .env：MODEL_CHANNEL=local
 2. 填写 LOCAL_* 三个地址（公司内网服务地址）
 3. 重启服务
 

@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════
-#  后端镜像（FastAPI API 与 Celery worker 共用同一镜像）
+#  后端镜像（统一 FastAPI 服务：知识库 API + 问数 agent + 前端页面托管）
 #
 #  构建上下文：server/ 目录
 #  用法见项目根目录 docker-compose.prod.yml
@@ -36,8 +36,7 @@ COPY . .
 # 上传目录占位；运行时由 compose 挂载持久化卷覆盖为 /data/uploads
 RUN mkdir -p /data/uploads
 
-EXPOSE 8000
+EXPOSE 8200
 
-# 默认命令 = 后端 API 进程。
-# Celery worker 在 compose 中用 command 覆盖本命令（同一镜像，不同入口）。
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 默认命令 = 统一后端进程（单进程承载知识库 API + 问数 agent + 页面托管）。
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8200"]

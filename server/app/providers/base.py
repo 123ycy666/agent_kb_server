@@ -9,7 +9,7 @@
 - online : 线上 API（阿里云百炼 + DeepSeek），用于全链路真实测试
 - local  : 公司本地部署（bge-m3 / bge-rerank-m3 / DeepSeek / 千问3.6）
 
-切换方式：环境变量 PROVIDER_MODE，业务代码零改动。
+切换方式：环境变量 MODEL_CHANNEL，业务代码零改动。
 """
 
 from __future__ import annotations

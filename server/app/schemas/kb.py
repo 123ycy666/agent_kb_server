@@ -12,7 +12,7 @@ from app.schemas.common import ORMModel
 class KnowledgeBaseCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = None
-    # 不传则使用当前 PROVIDER_MODE 下的默认 embedding 模型
+    # 不传则使用当前 MODEL_CHANNEL 下的默认 embedding 模型
     embedding_model: str | None = None
     chunk_size: int = Field(default=512, ge=64, le=4096)
     chunk_overlap: int = Field(default=64, ge=0, le=1024)

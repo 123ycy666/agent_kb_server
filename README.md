@@ -41,7 +41,7 @@
 ├── 启动全部.bat / 启动知识库后端.bat / 启动前端.bat / 自检.bat
 ├── .env.example / .env          # 唯一配置源
 ├── docker-compose.yml           # 仅 PostgreSQL+pgvector
-├── README.md / docs/合并设计方案.md / docs/接口契约.md
+├── README.md / docs/接口契约.md / docs/数据库设计说明.md
 ├── server/                      # 统一后端（FastAPI，:8200）
 │   ├── app/
 │   │   ├── main.py              # 入口：路由 + /agent/ 静态 + SPA 托管
@@ -136,15 +136,15 @@ ONLINE_RERANK_MODEL=gte-rerank-v2
 ## 七、测试
 
 ```bash
-自检.bat                              # 三级：逻辑自检 → 语义层 → 全链路验收(31项)
+自检.bat                              # 三级：逻辑自检 → 语义层 → 全链路验收(33项)
 # 或手动：
 cd server && python tests/selfcheck.py            # 47 项逻辑自检（无数据库）
-cd server && python tests/acceptance.py           # 31 项全链路验收（需服务在 8200）
+cd server && python tests/acceptance.py           # 33 项全链路验收（需服务在 8200）
 cd server && python -X utf8 tests/agent/test_semantic.py   # 语义层断言
 ```
 
 - `server/tests/e2e_check.py`：端到端（需数据库 + 后端运行，会自动清理测试数据）
-- `agent/tests/e2e_test.py` / `regression.py`：问数链路（会真实调用大模型）
+- `server/tests/agent/e2e_test.py` / `regression.py`：问数链路（会真实调用大模型）
 
 ## 八、与两个原项目的关系
 

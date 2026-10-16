@@ -55,7 +55,7 @@ class OpenAICompatibleLLM(LLMProvider):
         if not self._api_key:
             raise ProviderNotConfigured(
                 f"{self.provider_name} 的 API Key 未配置。请在模型配置页填写，"
-                f"或把 PROVIDER_MODE 切回 mock。",
+                f"或把 MODEL_CHANNEL 切回 mock。",
                 provider=self.provider_name,
             )
         return {

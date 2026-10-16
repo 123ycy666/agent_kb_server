@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════
-#  生产编排 —— PostgreSQL(pgvector) + Redis + 后端 API + Celery worker
+#  生产编排 —— PostgreSQL(pgvector) + 统一后端 API
 #
 #  用法：
 #    docker compose -f docker-compose.prod.yml up -d --build
@@ -7,13 +7,13 @@
 #    docker compose -f docker-compose.prod.yml logs -f backend
 #    docker compose -f docker-compose.prod.yml down        # 保留数据
 #
-#  ⚠️ 前端不在此编排内：本地 `npm run build` 出 dist 后交 nginx 托管。
-#  ⚠️ 数据库/Redis 不映射到宿主机，仅容器网络内可达（更安全）。
-#  ⚠️ 后端仅绑定 127.0.0.1:8000，由宿主机 nginx 反代对外。
+#  2026-10-15 单进程合并：Redis / Celery worker 已移除，
+#  文档入库改 FastAPI BackgroundTasks（在后端进程内执行）。
 #
-#  与 docker-compose.yml（开发用）的区别：
-#    - 开发：只跑 PG+Redis，端口映射到宿主机 5433/6380
-#    - 生产：多出 backend + worker，服务间用服务名+内部端口互访
+#  ⚠️ 前端不在此编排内：本地 `npm run build` 出 dist 后由后端 SPA 托管
+#     （或由宿主机 nginx 托管）。
+#  ⚠️ 数据库不映射到宿主机，仅容器网络内可达（更安全）。
+#  ⚠️ 后端仅绑定 127.0.0.1:8200，由宿主机 nginx 反代对外。
 # ══════════════════════════════════════════════════════════════
 name: kb-prod
 
@@ -28,13 +28,13 @@ services:
     environment:
       POSTGRES_USER: kb
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kb_dev_pwd}
-      POSTGRES_DB: kb_system
+      POSTGRES_DB: ad_new
       POSTGRES_INITDB_ARGS: "--encoding=UTF8"
     volumes:
       - kb_prod_pgdata:/var/lib/postgresql/data
       - ./docker/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kb -d kb_system"]
+      test: ["CMD-SHELL", "pg_isready -U kb -d ad_new"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -43,33 +43,7 @@ services:
       - "5432"
     networks: [kbnet]
 
-  # ── 缓存 / 任务队列 broker（Celery 复用）────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: kb-redis
-    restart: unless-stopped
-    mem_limit: 128m
-    command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      # 内存紧张，给 Redis 设上限并启用淘汰，避免拖垮整机
-      - --maxmemory
-      - "96mb"
-      - --maxmemory-policy
-      - allkeys-lru
-    volumes:
-      - kb_prod_redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    expose:
-      - "6379"
-    networks: [kbnet]
-
-  # ── 后端 API（uvicorn）───────────────────────────────────────
+  # ── 统一后端（uvicorn：知识库 API + 问数 agent + 前端 SPA 托管）──
   backend:
     build:
       context: ./server
@@ -77,65 +51,32 @@ services:
     image: kb-backend:latest
     container_name: kb-backend
     restart: unless-stopped
-    mem_limit: 384m
+    # 合并后单进程承载全部功能（原 backend + worker 两进程），内存上限相应合并。
+    mem_limit: 768m
     env_file:
       - .env.production
     environment:
       # ⚠️ 覆盖 .env 中的连接串：容器内用「服务名+内部端口」互访，
-      #    而非宿主机的 127.0.0.1:5433/6380。
-      DATABASE_URL: postgresql+psycopg://kb:${POSTGRES_PASSWORD:-kb_dev_pwd}@postgres:5432/kb_system
-      REDIS_URL: redis://redis:6379/0
+      #    而非宿主机的 127.0.0.1:5433。
+      DATABASE_URL: postgresql+psycopg://kb:${POSTGRES_PASSWORD:-kb_dev_pwd}@postgres:5432/ad_new
       UPLOAD_DIR: /data/uploads
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     volumes:
       - kb_prod_uploads:/data/uploads
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8200:8200"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/health', timeout=5).status==200 else 1)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8200/api/v1/system/health', timeout=5).status==200 else 1)\""]
       interval: 15s
       timeout: 8s
       retries: 5
       start_period: 40s
     networks: [kbnet]
 
-  # ── 文档入库异步 worker（⚠️ 必须常驻，否则上传永远停「处理中」）─
-  worker:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-    image: kb-backend:latest
-    container_name: kb-worker
-    restart: unless-stopped
-    mem_limit: 384m
-    # 与 backend 同镜像，仅入口不同。
-    # ⚠️ --concurrency=1：prefork 池每个子进程各加载一份 numpy，内存占用成倍增长；
-    #    内存充足时可提到 2~4 提速。
-    command: ["python", "-m", "celery", "-A", "app.celery_app.celery", "worker", "--loglevel=info", "--queues=doc_ingest", "--concurrency=1"]
-    env_file:
-      - .env.production
-    environment:
-      DATABASE_URL: postgresql+psycopg://kb:${POSTGRES_PASSWORD:-kb_dev_pwd}@postgres:5432/kb_system
-      REDIS_URL: redis://redis:6379/0
-      UPLOAD_DIR: /data/uploads
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_started
-    volumes:
-      - kb_prod_uploads:/data/uploads
-    networks: [kbnet]
-
 volumes:
   kb_prod_pgdata:
-  kb_prod_redisdata:
   kb_prod_uploads:
 
 networks:

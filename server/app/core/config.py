@@ -136,18 +136,8 @@ class Settings(BaseSettings):
     #    用户会以为系统卡死。超出上限时返回警告，并建议管理员跑全库扫描。
     conflict_max_llm_calls: int = 12
 
-    # ─── 限流 ────────────────────────────────────────────────
-    default_qps_limit: int = 5
-    default_daily_quota: int = 10000
-
     # ─── CORS ────────────────────────────────────────────────
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
-
-    # ─── 初始管理员 ──────────────────────────────────────────
-    # ⚠️ 统一用户表后不再本地建管理员：管理员来自 dlj_data.t_employee
-    #    （administrator_flag=1 → admin 角色）。以下两个字段仅作兼容保留，不生效。
-    bootstrap_admin_username: str = "admin"
-    bootstrap_admin_password: str = "admin123456"
 
     # ══════════════════════════════════════════════════════════
     #  派生属性
