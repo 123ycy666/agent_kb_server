@@ -49,7 +49,10 @@ _LOAD_LOCK = threading.Lock()
 _RELOAD_LOCK = threading.Lock()         # 保护热重载
 _RETRY_SEC = 60                         # 加载失败后多久允许再试一次（数据库恢复能自愈）
 
-# 词典数据源：db = 读 agent_data 的 t_nc_* 表（默认）；file = 读 libs 下的 CSV
+# 词典数据源：db = 读 PG(ad_new) 的 6 张 t_nc_* 表（默认）；file = 读 libs 下的 CSV
+# 2026-10-17 更正：2026-10-15 数据层合并后，词典已从 MySQL agent_data 迁到 PG ad_new，
+#   实际连接由 lex_source → pgdb（DSN 硬编码 ad_new）完成。config.LEXICON_DB/LEXICON_DB_NAME
+#   已不再参与连接，仅剩"历史上叫什么"的意义，别照它去连 MySQL。
 _SOURCE_MODE = (getattr(config, 'LEXICON_SOURCE', None)
                 or os.environ.get('SECRETARY_LEXICON', 'db')).strip().lower()
 _DB_MODE = _SOURCE_MODE == 'db'
@@ -64,10 +67,15 @@ if _RECHECK_SEC is None:
 
 
 def _source_label():
-    """数据源标签，供 /health 显示（file / db:agent_data）。"""
+    """数据源标签，供 /health 显示（file / db:pg）。
+
+    ⚠️ 别再显示 config.LEXICON_DB_NAME（默认值仍是 agent_data）：那会让人以为
+    纠错要连 MySQL，而实际读的是 PG ad_new 的 t_nc_* 表（见 lex_source → pgdb.DSN）。
+    部署时按错误标签去配 MySQL，纠错会静默失效（词典为空 → fix() 退化为原文）。
+    """
     if not _DB_MODE:
         return 'file'
-    return 'db:%s' % (getattr(config, 'LEXICON_DB_NAME', None) or 'agent_data')
+    return 'db:pg'
 
 
 def _enabled():
@@ -194,14 +202,16 @@ def status():
 
     词典可能**静默失效**，所以要能一眼看出来：
       · file 模式：libs/name_correction_lib/data/ 不在（clone 下来默认是缺的）
-      · db   模式：agent_data 的 t_nc_* 表没建 / 表是空的 / 连接不上
+      · db   模式：PG ad_new 的 6 张 t_nc_* 表没建 / 表是空的 / 连接不上
+                   （全新部署必须执行 db/lexicon.sql 导入，系统不会自己生成词典）
     不报出来就只能靠比对 name_fix_used 才发现了。
     """
     if not _enabled():
         return {'available': False, 'reason': '已通过 SECRETARY_NAMEFIX=0 关闭',
                 'source': _source_label()}
     if _corrector() is None:
-        reason = ('纠错词典未就绪（数据源 db：agent_data 的 t_nc_* 表没建、为空或连不上）'
+        reason = ('纠错词典未就绪（数据源 db：PG ad_new 的 6 张 t_nc_* 表没建、为空或连不上；'
+                  '请先导入 db/lexicon.sql）'
                   if _DB_MODE else
                   '纠错词典未就绪（libs/name_correction_lib/data/ 缺失）')
         return {'available': False, 'reason': reason + '，本步已降级',

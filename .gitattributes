@@ -6,6 +6,13 @@
 # 这个错误极难从日志看出原因，所以用 .gitattributes 钉死。
 *.sh text eol=lf
 
+# SQL 必须保持 LF。
+# db/lexicon.sql 是要拷到 Linux 上用 psql -f 导入的；CRLF 虽然 PG 的 COPY 能容忍，
+# 但用 stdin 管道传入时会因二次换行转换导致 COPY 列错位
+# （实测报错：invalid input syntax for type bigint: "" / COPY t_nc_ambiguous line 2 column id）。
+# 生成该文件时也一律用 bytes 写入，不要用 write_text（Windows 上会转成 CRLF）。
+*.sql text eol=lf
+
 # Windows 批处理保持 CRLF（cmd 对 LF 的兼容性差）
 *.bat text eol=crlf
 *.cmd text eol=crlf
