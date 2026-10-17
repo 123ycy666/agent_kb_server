@@ -1,0 +1,11 @@
+# ── 换行符规则（重要）────────────────────────────────────────────
+# shell 脚本必须保持 LF。
+# 本仓所在机器的 core.autocrlf 为 true，若不加这条，git 在 checkout 时
+# 会把 *.sh 改写成 CRLF —— 拿到 Linux 上跑就会报：
+#     bash: ./start_backend.sh: /usr/bin/env bash^M: bad interpreter
+# 这个错误极难从日志看出原因，所以用 .gitattributes 钉死。
+*.sh text eol=lf
+
+# Windows 批处理保持 CRLF（cmd 对 LF 的兼容性差）
+*.bat text eol=crlf
+*.cmd text eol=crlf
