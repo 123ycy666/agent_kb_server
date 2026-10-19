@@ -39,6 +39,7 @@ class PlanIn(BaseModel):
 class ReplyIn(BaseModel):
     content: str = Field(..., min_length=1)
     attachments: list[dict[str, Any]] | None = None
+    attachment_ids: list[int] | None = Field(None, description='先调附件上传拿到的 id 列表')
 
 
 class NoteIn(BaseModel):

@@ -261,6 +261,16 @@ def main():
                 '/api/tasks', '/api/tasks/{task_id}/accept', '/api/dispatch/tick']
         miss = [p for p in need if p not in paths]
         check(31, '新接口全部注册（%d 条）' % len(need), not miss, '缺：%s' % miss)
+
+        # ── 15) 单账号扫描只关自己的预警 ──────────────────────
+        before = db.execute(select(func.count()).select_from(AlertItem).where(
+            AlertItem.status == 'open')).scalar_one()
+        r = alert_service.scan(db, accounts=['sngdssz'], cadence='all', today=TODAY)
+        after = db.execute(select(func.count()).select_from(AlertItem).where(
+            AlertItem.status == 'open')).scalar_one()
+        check(32, '单账号扫描不关闭其他人的预警',
+              r['resolved'] == 0 and int(before) == int(after),
+              'resolved=%s open %s->%s' % (r['resolved'], before, after))
     finally:
         db.close()
 

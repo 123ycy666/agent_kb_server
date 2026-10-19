@@ -10,10 +10,14 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
@@ -21,6 +25,7 @@ from sqlalchemy.orm import Session
 from app import dispatch_rules as DR
 from app.models.dispatch import (
     AlertItem,
+    DispatchAttachment,
     DispatchCheck,
     DispatchNotice,
     DispatchTask,
@@ -194,12 +199,15 @@ def recommend(db: Session, alert: AlertItem) -> dict:
 
 def _event(db: Session, task: DispatchTask, action: str, actor: dict | None,
            from_status=None, to_status=None, content=None, payload=None):
-    db.add(DispatchTaskEvent(
+    ev = DispatchTaskEvent(
         task_id=task.id, action=action,
         actor_id=(actor or {}).get('app_user_id') or (actor or {}).get('employee_id'),
         actor_name=(actor or {}).get('name'), actor_role=(actor or {}).get('role_code'),
         from_status=from_status, to_status=to_status, content=content,
-        payload=payload or {}))
+        payload=payload or {})
+    db.add(ev)
+    db.flush()
+    return ev
 
 
 def _notice(db: Session, task: DispatchTask | None, ntype: str, receiver: dict,
@@ -470,7 +478,8 @@ def accept_plan(db: Session, account: str, task_id: int, plan_id: int, ok: bool 
     return task_detail(db, account, t.id)
 
 
-def reply(db: Session, account: str, task_id: int, content: str, attachments=None) -> dict:
+def reply(db: Session, account: str, task_id: int, content: str, attachments=None,
+          attachment_ids=None) -> dict:
     act = _actor(account)
     t = _get_task(db, task_id)
     _need(db, t, act, 'owner')
@@ -481,8 +490,15 @@ def reply(db: Session, account: str, task_id: int, content: str, attachments=Non
         if a.employee_id == act['employee_id'] and a.part == 'owner':
             a.state = 'replied'
             a.replied_at = _now()
-    _event(db, t, 'reply', act, fs, 'verify', content,
-           {'attachments': attachments or []})
+    ev = _event(db, t, 'reply', act, fs, 'verify', content,
+                {'attachments': attachments or [], 'attachment_ids': attachment_ids or []})
+    db.flush()
+    if attachment_ids:
+        rows = db.execute(select(DispatchAttachment).where(
+            DispatchAttachment.task_id == t.id,
+            DispatchAttachment.id.in_([int(x) for x in attachment_ids]))).scalars().all()
+        for att in rows:
+            att.event_id = ev.id
     _notify_creator(db, t, 'reply', '【回执待核销】%s' % t.title, '%s 提交了回执' % act['name'])
     db.commit()
     return task_detail(db, account, t.id)
@@ -1119,6 +1135,178 @@ def stats(db: Session) -> dict:
     return out
 
 
+# ─────────────────────────────────────────────────────────── 附件 / 报告 / 追问
+
+# 附件/报告落盘根目录：默认 <server>/data/dispatch（与 cwd 无关，测试与服务一致）
+FILES_ROOT = Path(os.environ.get('DISPATCH_FILES_DIR')
+                  or (Path(__file__).resolve().parents[2] / 'data' / 'dispatch'))
+MAX_ATTACH_MB = 20
+
+
+def _safe_name(name) -> str:
+    base = os.path.basename(str(name or 'file'))
+    for ch in '\\/:*?"<>|\r\n\t':
+        base = base.replace(ch, '_')
+    return (base or 'file')[:120]
+
+
+def _task_dir(task_id) -> Path:
+    d = FILES_ROOT / ('t%d' % int(task_id))
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def serialize_attachment(a: DispatchAttachment) -> dict:
+    return {'id': a.id, 'task_id': a.task_id, 'file_name': a.file_name,
+            'size_bytes': a.size_bytes, 'md5': a.md5,
+            'uploader_name': a.uploader_name,
+            'create_time': _iso(a.create_time),
+            'download_url': '/api/tasks/%d/attachments/%d/download' % (a.task_id, a.id)}
+
+
+def add_attachment(db: Session, account: str, task_id: int, file_name: str, content: bytes) -> dict:
+    """上传附件（回执材料/报告/复盘）：落盘 + 记 `dispatch_attachment`。"""
+    act = _actor(account)
+    t = _get_task(db, task_id)
+    _need(db, t, act, 'owner', 'collaborator', 'creator', 'superior', 'admin')
+    if len(content) > MAX_ATTACH_MB * 1024 * 1024:
+        raise DispatchError('FILE_TOO_LARGE', '附件超过 %d MB' % MAX_ATTACH_MB, 422)
+    if not content:
+        raise DispatchError('EMPTY_FILE', '空文件', 422)
+    name = _safe_name(file_name)
+    md5 = hashlib.md5(content).hexdigest()
+    path = _task_dir(t.id) / ('%s_%s' % (md5[:8], name))
+    path.write_bytes(content)
+    att = DispatchAttachment(task_id=t.id, file_name=name, storage_path=str(path),
+                             size_bytes=len(content), md5=md5,
+                             uploader_id=act['employee_id'], uploader_name=act['name'])
+    db.add(att)
+    db.flush()
+    _event(db, t, 'comment', act, t.status, t.status, '上传附件：%s' % name,
+           {'attachment_id': att.id})
+    db.commit()
+    return serialize_attachment(att)
+
+
+def list_attachments(db: Session, account: str, task_id: int) -> dict:
+    act = _actor(account)
+    t = _get_task(db, task_id)
+    if _access(db, t, act) is None:
+        raise DispatchError('NOT_PARTICIPANT', '无权查看该任务', 403)
+    rows = db.execute(select(DispatchAttachment).where(
+        DispatchAttachment.task_id == t.id).order_by(DispatchAttachment.id)).scalars().all()
+    return {'total': len(rows), 'items': [serialize_attachment(a) for a in rows]}
+
+
+def attachment_file(db: Session, account: str, task_id: int, att_id: int) -> tuple[Path, str]:
+    act = _actor(account)
+    t = _get_task(db, task_id)
+    if _access(db, t, act) is None:
+        raise DispatchError('NOT_PARTICIPANT', '无权下载', 403)
+    a = db.get(DispatchAttachment, int(att_id))
+    if a is None or a.task_id != t.id:
+        raise DispatchError('ATTACHMENT_NOT_FOUND', '附件不存在', 404)
+    p = Path(a.storage_path)
+    if not p.is_file():
+        raise DispatchError('ATTACHMENT_MISSING', '附件文件已丢失', 404)
+    return p, a.file_name
+
+
+def report_docx(db: Session, account: str, task_id: int) -> dict:
+    """生成上报报告 docx（复用 docgen 的公文样式），落盘并登记附件。"""
+    from app.secretary import docgen
+    from app.services import dispatch_ai
+
+    d = task_detail(db, account, task_id)
+    alert = None
+    if d.get('alert_id'):
+        a = db.get(AlertItem, int(d['alert_id']))
+        if a is not None:
+            alert = {'id': a.id, 'title': a.title, 'level': a.level, 'subtype': a.subtype,
+                     'scope_name': a.scope_name, 'data': a.data or {}}
+    spec = dispatch_ai.report_sections(d, alert)
+    name = '处置情况报告_%s.docx' % (d.get('task_no') or task_id)
+    path = _task_dir(task_id) / name
+    docgen.write_docx(path, spec['title'], spec['sections'], spec['tables'])
+    data = path.read_bytes()
+    md5 = hashlib.md5(data).hexdigest()
+    att = DispatchAttachment(task_id=int(task_id), file_name=name, storage_path=str(path),
+                             size_bytes=len(data), md5=md5,
+                             uploader_id=None, uploader_name='系统生成')
+    db.add(att)
+    db.flush()
+    _event(db, _get_task(db, task_id), 'comment', None, None, None,
+           '生成处置报告 docx', {'attachment_id': att.id})
+    db.commit()
+    return {'attachment': serialize_attachment(att),
+            'markdown': dispatch_ai.report_markdown(d, alert)['markdown']}
+
+
+def ask(db: Session, account: str, task_id: int, question: str, today: str | None = None,
+        history_turns: int = 5) -> dict:
+    """任务内追问：把任务上下文塞进问题 → 复用 agent.ask → 消息落到任务会话。"""
+    act = _actor(account)
+    t = _get_task(db, task_id)
+    who = _access(db, t, act)
+    if who is None:
+        raise DispatchError('NOT_PARTICIPANT', '无权在该任务里提问', 403)
+    q = (question or '').strip()
+    if not q:
+        raise DispatchError('EMPTY_QUESTION', '问题不能为空', 422)
+
+    sid = None
+    field = None
+    if t.creator_id == act['employee_id']:
+        sid, field = t.creator_session_id, 'creator_session_id'
+    else:
+        for a in _assignees(db, t.id):
+            if a.employee_id == act['employee_id']:
+                sid, field = a.session_id, 'assignee'
+                break
+    new_session = not sid
+    if not sid:
+        sid = 'task-%d-%s' % (t.id, uuid.uuid4().hex[:8])
+
+    prompt = (
+        '【任务上下文】编号 %s｜%s｜责任单位 %s｜状态 %s｜回执时限 %s｜完成时限 %s\n'
+        '任务要求：%s\n'
+        '我的问题：%s'
+        % (t.task_no, t.title, t.scope_name or '', t.status,
+           _iso(t.reply_due_at) or '—', _iso(t.due_at) or '—',
+           (t.requirement or '')[:600], q)
+    )
+    from app.secretary import agent as agent_mod
+    try:
+        r = agent_mod.ask(prompt, scope=t.scope_name or None, session_id=sid,
+                          user_code=act['login_name'], today=today,
+                          history_turns=max(0, int(history_turns)))
+    except Exception as exc:  # noqa: BLE001 - 模型不可用不影响任务
+        logger.warning('任务追问失败 task=%s：%s', t.id, exc)
+        r = {'answer': '（模型暂不可用）%s: %s' % (type(exc).__name__, str(exc)[:200]),
+             'session_id': sid, 'trace': [], 'elapsed_ms': 0}
+
+    if field and field != 'assignee':
+        t.creator_session_id = sid
+    elif field == 'assignee':
+        for a in _assignees(db, t.id):
+            if a.employee_id == act['employee_id']:
+                a.session_id = sid
+    db.commit()
+    if new_session:
+        try:
+            db.execute(text("UPDATE t_chat_session SET title=:ti WHERE session_id=:s"),
+                       {'ti': ('【任务】%s %s' % (t.task_no, t.title))[:255], 's': sid})
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+    return {'task_id': t.id, 'session_id': r.get('session_id') or sid,
+            'question': q, 'answer': r.get('answer') or '',
+            'elapsed_ms': r.get('elapsed_ms'), 'model': r.get('model'),
+            'trace_steps': len(r.get('trace') or [])}
+
+
+# ─────────────────────────────────────────────────────────── 通知
+
 def list_notices(db: Session, account: str, unread: bool = False, limit: int = 50) -> dict:
     act = _actor(account)
     q = select(DispatchNotice).where(
@@ -1153,4 +1341,5 @@ __all__ = ['DispatchError', 'recommend', 'preview', 'create', 'accept', 'decline
            'submit_plan', 'accept_plan', 'reply', 'close', 'reopen', 'transfer',
            'subtask', 'urge', 'supervise', 'escalate', 'cancel', 'archive',
            'tick', 'check_task', 'list_tasks', 'task_detail', 'stats',
-           'list_notices', 'read_notice']
+           'list_notices', 'read_notice',
+           'add_attachment', 'list_attachments', 'attachment_file', 'report_docx', 'ask']

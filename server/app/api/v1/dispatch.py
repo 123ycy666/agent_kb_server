@@ -5,7 +5,8 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from app.core.database import get_db
 from app.core.deps import CurrentActor, get_current_actor
 from app.models.dispatch import AlertItem, DispatchCheck, DispatchNotice, DispatchTask
 from app.schemas.dispatch import (
+    AskIn,
     CloseIn,
     DeclineIn,
     NoteIn,
@@ -141,7 +143,8 @@ def reply(task_id: int, body: ReplyIn,
           actor: CurrentActor = Depends(get_current_actor), db: Session = Depends(get_db)):
     _guard()
     try:
-        return dispatch_service.reply(db, actor.username, task_id, body.content, body.attachments)
+        return dispatch_service.reply(db, actor.username, task_id, body.content,
+                                      body.attachments, body.attachment_ids)
     except DispatchError as exc:
         _fail(exc)
 
@@ -263,12 +266,14 @@ def ai_plan(task_id: int, actor: CurrentActor = Depends(get_current_actor),
     return {'draft': '\n'.join(b['steps']), 'markdown': b['markdown'], 'ai_used': b['ai_used']}
 
 
-@router_tasks.post('/{task_id}/ai/report', summary='上报报告（Markdown；docx 后续接）')
-def ai_report(task_id: int, actor: CurrentActor = Depends(get_current_actor),
-              db: Session = Depends(get_db)):
+@router_tasks.post('/{task_id}/ai/report', summary='上报报告（markdown 或 docx）')
+def ai_report(task_id: int, format: str = Query('markdown', pattern='^(markdown|docx)$'),
+              actor: CurrentActor = Depends(get_current_actor), db: Session = Depends(get_db)):
     _guard()
     try:
         d = dispatch_service.task_detail(db, actor.username, task_id)
+        if format == 'docx':
+            return dispatch_service.report_docx(db, actor.username, task_id)
     except DispatchError as exc:
         _fail(exc)
     return dispatch_ai.report_markdown(d, _alert_dict(db, d.get('alert_id')))
@@ -283,6 +288,54 @@ def ai_polish(task_id: int, body: PolishIn,
     except DispatchError as exc:
         _fail(exc)
     return dispatch_ai.polish(body.content)
+
+
+# ── 附件 / 追问 ───────────────────────────────────────────────
+
+@router_tasks.post('/{task_id}/attachments', summary='上传附件（回执材料/报告）')
+def upload_attachment(task_id: int, file: UploadFile = File(...),
+                      actor: CurrentActor = Depends(get_current_actor),
+                      db: Session = Depends(get_db)):
+    _guard()
+    try:
+        data = file.file.read()
+        return dispatch_service.add_attachment(db, actor.username, task_id,
+                                               file.filename or 'file', data)
+    except DispatchError as exc:
+        _fail(exc)
+
+
+@router_tasks.get('/{task_id}/attachments', summary='附件列表')
+def list_attachments(task_id: int, actor: CurrentActor = Depends(get_current_actor),
+                      db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return dispatch_service.list_attachments(db, actor.username, task_id)
+    except DispatchError as exc:
+        _fail(exc)
+
+
+@router_tasks.get('/{task_id}/attachments/{att_id}/download', summary='下载附件')
+def download_attachment(task_id: int, att_id: int,
+                        actor: CurrentActor = Depends(get_current_actor),
+                        db: Session = Depends(get_db)):
+    _guard()
+    try:
+        path, name = dispatch_service.attachment_file(db, actor.username, task_id, att_id)
+    except DispatchError as exc:
+        _fail(exc)
+    return FileResponse(str(path), filename=name,
+                        media_type='application/octet-stream')
+
+
+@router_tasks.post('/{task_id}/ask', summary='任务内追问（复用 agent，带任务上下文）')
+def task_ask(task_id: int, body: AskIn,
+             actor: CurrentActor = Depends(get_current_actor), db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return dispatch_service.ask(db, actor.username, task_id, body.question)
+    except DispatchError as exc:
+        _fail(exc)
 
 
 # ══════════════════════════════════════════════════════════════

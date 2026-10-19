@@ -181,6 +181,39 @@ def main():
         db.close()
     check(22, '卡片与首段话已写入会话表', int(n) == 2, 'msgs=%s' % n)
 
+    # 23 附件上传（回执材料）
+    r = c.post('/api/tasks/%d/attachments' % tid,
+               files={'file': ('回执材料.txt', '整改完成，附现场照片'.encode('utf-8'), 'text/plain')})
+    att = r.json()
+    check(23, 'POST /tasks/{id}/attachments → 200 + id',
+          r.status_code == 200 and att.get('id'), {'code': r.status_code, 'id': att.get('id')})
+    aid2 = att.get('id')
+    r = c.get('/api/tasks/%d/attachments' % tid)
+    check(24, 'GET 附件列表 200', r.status_code == 200 and r.json()['total'] >= 1, r.status_code)
+    r = c.get('/api/tasks/%d/attachments/%d/download' % (tid, aid2))
+    check(25, 'GET 附件下载返回内容', r.status_code == 200 and len(r.content) > 0, len(r.content))
+
+    # 26 报告 docx
+    r = c.post('/api/tasks/%d/ai/report' % tid, params={'format': 'docx'})
+    j = r.json()
+    check(26, 'POST /ai/report?format=docx 生成文件',
+          r.status_code == 200 and (j.get('attachment') or {}).get('file_name', '').endswith('.docx')
+          and (j.get('attachment') or {}).get('size_bytes', 0) > 1000,
+          (j.get('attachment') or {}).get('file_name'))
+
+    # 27 任务追问越权
+    M.app.dependency_overrides[get_current_actor] = lambda: actor('xgscwb')
+    r = c.post('/api/tasks/%d/ask' % tid, json={'question': '这单怎么办'})
+    check(27, '非参与人任务追问 → 403', r.status_code == 403 and
+          r.json()['detail']['code'] == 'NOT_PARTICIPANT', r.status_code)
+
+    # 28 追问接口已注册
+    M.app.dependency_overrides[get_current_actor] = lambda: actor('sngdssz')
+    paths = set(M.app.openapi()['paths'])
+    check(28, '附件/追问/报告接口已注册',
+          {'/api/tasks/{task_id}/attachments', '/api/tasks/{task_id}/ask'} <= paths,
+          [p for p in paths if '/attachments' in p or p.endswith('/ask')])
+
     M.app.dependency_overrides.clear()
     (OUT / 'raw-api.json').write_text(json.dumps(RESULTS, ensure_ascii=False, indent=1),
                                       encoding='utf-8')

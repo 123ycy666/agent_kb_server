@@ -82,11 +82,57 @@ def _num(v):
 
 # ─────────────────────────────────────────────────────────── 取数
 
-def _facts(station_ids, year, today):
-    """一次把该范围需要的数全取出来。**每条 SQL 都带 station_id IN (范围) + 年度。**"""
+def _facts(station_ids, year, today, need_quality=True, need_metrics=True, need_mid=True,
+           need_core=True):
+    """一次把该范围需要的数全取出来。**每条 SQL 都带 station_id IN (范围) + 年度。**
+
+    need_* 四个开关只影响「这一步查不查」：
+      · need_core    分配额/工单状态/审批待办/节点（预算与审批停留用）
+      · need_mid     中位金额（只有 forecast_mode=pipeline 才用）
+      · need_quality 金额结构/极端金额（只有 amount_structure 子判据用）
+      · need_metrics 指标同比（只有指标类子判据用）
+    默认全 True = 旧行为，老调用方零改动；扫描按 cadence/角色传 False 省掉不用的 SQL。
+    """
     ids = [int(x) for x in station_ids]
     mk = _marks(len(ids))
-    f = {'year': year, 'today': today, 'station_ids': ids}
+    f = {'year': year, 'today': today, 'station_ids': ids,
+         'alloc': {}, 'wo': {}, 'audit': {}, 'by_node': {}, 'mid_amount': 0.0,
+         'struct_zero': [], 'big_amount': [], 'metrics': [], 'metric_period': ''}
+    if not need_core:
+        # 只跑指标/金额结构时，不查分配与审批（省 4 条 SQL/范围）
+        if need_mid:
+            vals = sorted(_f(r['b']) for r in _all(
+                'SELECT budget_total AS b FROM t_power_work_order WHERE deleted_flag=%s '
+                'AND YEAR(create_time)=%s AND budget_total>0 AND power_company_id IN (' + mk + ')',
+                ['0', year] + ids, limit=20000))
+            f['mid_amount'] = vals[len(vals) // 2] if vals else 0.0
+        if need_quality:
+            f['struct_zero'] = _all(
+                'SELECT id, work_name, power_company_name, budget_total, '
+                'budget_engineering, budget_material FROM t_power_work_order '
+                'WHERE deleted_flag=%s AND YEAR(create_time)=%s AND power_company_id IN (' + mk + ') '
+                'AND (budget_engineering=0 OR budget_material=0) ORDER BY budget_total DESC',
+                ['0', year] + ids, limit=200)
+            f['big_amount'] = _all(
+                'SELECT id, work_name, power_company_name, budget_total, budget_engineering, '
+                'budget_material, work_status FROM t_power_work_order '
+                'WHERE deleted_flag=%s AND YEAR(create_time)=%s AND power_company_id IN (' + mk + ') '
+                'AND budget_total >= %s ORDER BY budget_total DESC',
+                ['0', year] + ids + [R.EXTREME_AMOUNT], limit=100)
+        if need_metrics and R.ABNORMAL_METRICS:
+            per = _one('SELECT MAX(current_period_key) AS k FROM t_power_ai_metric_comparison '
+                       "WHERE deleted_flag=0 AND period_type='year'")
+            key = per.get('k')
+            if key:
+                f['metric_period'] = str(key)
+                mnames = _marks(len(R.ABNORMAL_METRICS))
+                f['metrics'] = _all(
+                    'SELECT scope_type, scope_name, metric_code, metric_name, current_value, '
+                    'base_value, change_rate, trend_result FROM t_power_ai_metric_comparison '
+                    'WHERE deleted_flag=0 AND current_period_key=%s AND period_type=%s '
+                    'AND metric_code IN (' + mnames + ') AND trend_result=%s',
+                    [key, 'year'] + list(R.ABNORMAL_METRICS) + ['deteriorated'])
+        return f
 
     # 1) 分配额（所级，该年唯一有效行）
     f['alloc'] = {}
@@ -108,11 +154,13 @@ def _facts(station_ids, year, today):
 
     # 2.5) 本范围当年单项目金额中位数（pipeline 口径要用）。
     #      单独查、只取预算列，避免把 work_order 宽表整行拉回来（实测宽表拉 2 万行要 20 秒）。
-    vals = sorted(_f(r['b']) for r in _all(
-        'SELECT budget_total AS b FROM t_power_work_order WHERE deleted_flag=%s '
-        'AND YEAR(create_time)=%s AND budget_total>0 AND power_company_id IN (' + mk + ')',
-        ['0', year] + ids, limit=20000))
-    f['mid_amount'] = vals[len(vals) // 2] if vals else 0.0
+    f['mid_amount'] = 0.0
+    if need_mid:
+        vals = sorted(_f(r['b']) for r in _all(
+            'SELECT budget_total AS b FROM t_power_work_order WHERE deleted_flag=%s '
+            'AND YEAR(create_time)=%s AND budget_total>0 AND power_company_id IN (' + mk + ')',
+            ['0', year] + ids, limit=20000))
+        f['mid_amount'] = vals[len(vals) // 2] if vals else 0.0
 
     # 3) 审批待办（停留天数 + 节点），按所汇总
     f['audit'] = {}
@@ -141,26 +189,29 @@ def _facts(station_ids, year, today):
             'max_days': _i(r['max_days']), 'over_cnt': _i(r['over_cnt'])}
 
     # 5) 金额结构异常（工程费或物资费为 0）
-    f['struct_zero'] = _all(
-        'SELECT id, work_name, power_company_name, budget_total, '
-        'budget_engineering, budget_material FROM t_power_work_order '
-        'WHERE deleted_flag=%s AND YEAR(create_time)=%s AND power_company_id IN (' + mk + ') '
-        'AND (budget_engineering=0 OR budget_material=0) ORDER BY budget_total DESC',
-        ['0', year] + ids, limit=200)
+    f['struct_zero'] = []
+    f['big_amount'] = []
+    if need_quality:
+        f['struct_zero'] = _all(
+            'SELECT id, work_name, power_company_name, budget_total, '
+            'budget_engineering, budget_material FROM t_power_work_order '
+            'WHERE deleted_flag=%s AND YEAR(create_time)=%s AND power_company_id IN (' + mk + ') '
+            'AND (budget_engineering=0 OR budget_material=0) ORDER BY budget_total DESC',
+            ['0', year] + ids, limit=200)
 
-    # 5.5) 大金额单（金额异常预警用）
-    f['big_amount'] = _all(
-        'SELECT id, work_name, power_company_name, budget_total, budget_engineering, '
-        'budget_material, work_status FROM t_power_work_order '
-        'WHERE deleted_flag=%s AND YEAR(create_time)=%s AND power_company_id IN (' + mk + ') '
-        'AND budget_total >= %s ORDER BY budget_total DESC',
-        ['0', year] + ids + [R.EXTREME_AMOUNT], limit=100)
+        # 5.5) 大金额单（金额异常预警用）
+        f['big_amount'] = _all(
+            'SELECT id, work_name, power_company_name, budget_total, budget_engineering, '
+            'budget_material, work_status FROM t_power_work_order '
+            'WHERE deleted_flag=%s AND YEAR(create_time)=%s AND power_company_id IN (' + mk + ') '
+            'AND budget_total >= %s ORDER BY budget_total DESC',
+            ['0', year] + ids + [R.EXTREME_AMOUNT], limit=100)
 
     # 6) 指标恶化：只取**年度同比**口径（跳闸/线损的同比记在 period_type='year' 上；
     #    月度口径里恶化的只有售电量，而售电量的累计口径没对齐 = 假恶化，必须排除）。
     f['metrics'] = []
     f['metric_period'] = ''
-    if R.ABNORMAL_METRICS:
+    if need_metrics and R.ABNORMAL_METRICS:
         per = _one('SELECT MAX(current_period_key) AS k FROM t_power_ai_metric_comparison '
                    "WHERE deleted_flag=0 AND period_type='year'")
         key = per.get('k')

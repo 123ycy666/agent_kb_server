@@ -97,8 +97,58 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("问数智能体预热启动失败（不影响服务）：%s", exc)
 
+    # 任务流转：内部 tick 循环（催办/升级/自动核销）
+    # ⚠️ 单进程部署才开；多 worker 会让每个进程各跑一遍（tick 幂等，但白耗 DB）
+    #    设 DISPATCH_TICK_MINUTES=0 关掉，改由外部定时任务调 POST /api/dispatch/tick
+    _tick = {"stop": None, "task": None}
+    try:
+        import asyncio
+
+        from starlette.concurrency import run_in_threadpool
+
+        from app import dispatch_rules as _dr
+        from app.core.database import SessionLocal
+        from app.services import dispatch_service
+
+        if _dr.dispatch_on() and _dr.tick_minutes() > 0:
+            minutes = _dr.tick_minutes()
+            stop = asyncio.Event()
+
+            async def _tick_loop():
+                while not stop.is_set():
+
+                    def _run():
+                        db = SessionLocal()
+                        try:
+                            return dispatch_service.tick(db)
+                        finally:
+                            db.close()
+
+                    try:
+                        await run_in_threadpool(_run)
+                    except Exception as exc:  # noqa: BLE001 - 单轮失败不许拖垮服务
+                        logger.warning("dispatch tick 失败：%s", exc)
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=minutes * 60)
+                    except asyncio.TimeoutError:
+                        pass
+
+            _tick["stop"] = stop
+            _tick["task"] = asyncio.create_task(_tick_loop())
+            logger.info("dispatch tick 循环已启动 | 间隔=%s 分钟", minutes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("dispatch tick 循环启动失败（不影响服务）：%s", exc)
+
     logger.info("API 文档： http://127.0.0.1:8200/docs")
     yield
+    if _tick["stop"] is not None:
+        _tick["stop"].set()
+    if _tick["task"] is not None:
+        _tick["task"].cancel()
+        try:
+            await _tick["task"]
+        except Exception:  # noqa: BLE001 - 关闭时任务被取消是正常路径
+            pass
     logger.info("服务已停止")
 
 

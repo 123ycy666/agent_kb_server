@@ -156,3 +156,110 @@ def resolve(account):
         'station_names': [s.get('name') or '' for s in stations],
         'ledger_role': role_code, 'ledger_node': node,
     }
+
+
+# ══════════════════════════════════════════════════════════════
+#  批量解析（全量扫描用：122 个账号从 ~58s 降到 ~1s）
+# ══════════════════════════════════════════════════════════════
+
+def resolve_many(accounts):
+    """一次把多个账号解析完：4 条批量 SQL + 纯内存计算。
+
+    与 `resolve()` **结果必须完全一致**（有对照测试 `test_dispatch_scope_bulk.py`）。
+    单账号接口仍用 resolve()；批量扫描用这个。
+    """
+    accts = [str(a).strip() for a in (accounts or []) if str(a or '').strip()]
+    if not accts:
+        return {}
+
+    mk = ','.join(['%s'] * len(accts))
+    emps = _rows('SELECT employee_id, login_name, actual_name, department_id, '
+                 'disabled_flag, deleted_flag FROM t_employee '
+                 'WHERE login_name IN (' + mk + ') ORDER BY deleted_flag', accts, limit=5000)
+    emp_by_login = {}
+    for e in emps:
+        login = str(e.get('login_name') or '')
+        if login not in emp_by_login:
+            emp_by_login[login] = e
+
+    emp_ids = [int(e['employee_id']) for e in emp_by_login.values()]
+    roles_by_emp = {}
+    if emp_ids:
+        mk2 = ','.join(['%s'] * len(emp_ids))
+        for r in _rows('SELECT re.employee_id AS eid, r.role_code AS code '
+                       'FROM t_role_employee re JOIN t_role r ON r.role_id=re.role_id '
+                       'WHERE re.employee_id IN (' + mk2 + ')', emp_ids, limit=20000):
+            roles_by_emp.setdefault(int(r['eid']), []).append(str(r['code']))
+
+    depts = {int(d['department_id']): d for d in _rows(
+        'SELECT department_id, department_name, parent_id FROM t_department', limit=500)}
+    stations_all = _rows('SELECT id, name, department_id FROM t_power_company '
+                         'WHERE deleted_flag=0 ORDER BY id', limit=500)
+    stations_by_dept = {}
+    for s in stations_all:
+        stations_by_dept.setdefault(int(s['department_id']), []).append(s)
+
+    def tree_ids(root):
+        out, stack = {root}, [root]
+        while stack:
+            cur = stack.pop()
+            for d, row in depts.items():
+                if int(row.get('parent_id') or 0) == cur and d not in out:
+                    out.add(d)
+                    stack.append(d)
+        return sorted(out)
+
+    def stations_of(dept_ids):
+        out = []
+        for d in dept_ids:
+            out.extend(stations_by_dept.get(d) or [])
+        # 与单账号路径一致：SQL 是 ORDER BY id，这里也要按所 id 排序（不是按部门分组顺序）
+        return sorted(out, key=lambda s: int(s['id']))
+
+    result = {}
+    for acct in accts:
+        e = emp_by_login.get(acct)
+        if not e:
+            result[acct] = _fail(acct, 'no_such_account')
+            continue
+        if int(e.get('deleted_flag') or 0) == 1 or int(e.get('disabled_flag') or 0) == 1:
+            result[acct] = _fail(acct, 'account_disabled', e.get('actual_name') or '')
+            continue
+        codes = roles_by_emp.get(int(e['employee_id'])) or []
+        if not codes:
+            result[acct] = _fail(acct, 'no_role', e.get('actual_name') or '')
+            continue
+        role_code = next((c for c in alert_rules.ROLE_PRIORITY if c in codes), codes[0])
+        dept_id = int(e['department_id'])
+        dept = depts.get(dept_id) or {}
+        stations = stations_of(tree_ids(dept_id))
+        if role_code in ('cto', 'yxb', 'xgscwb') and not _is_org_level(dept_id, dept):
+            parent_id = dept.get('parent_id')
+            up = None
+            if parent_id is not None and int(parent_id) not in (0, dept_id):
+                up = stations_of(tree_ids(int(parent_id)))
+            if up and len(up) > len(stations):
+                dept = depts.get(int(parent_id)) or {}
+                dept_id = int(parent_id)
+                stations = up
+        if not stations:
+            result[acct] = _fail(acct, 'no_station', e.get('actual_name') or '', role_code)
+            continue
+        sc = _scope_of(dept_id, dept, stations)
+        node = ''
+        for n, c in alert_rules.LEDGER_ROLE_BY_NODE.items():
+            if c == role_code:
+                node = n
+                break
+        result[acct] = {
+            'ok': True, 'account': acct, 'employee_id': int(e['employee_id']),
+            'name': e.get('actual_name') or '', 'role_code': role_code,
+            'role_name': alert_rules.ROLE_NAMES.get(role_code, role_code),
+            'dept_id': dept_id, 'dept_name': dept.get('department_name') or '',
+            'parent_dept_id': dept.get('parent_id'),
+            'scope': sc['scope'], 'scope_type': sc['scope_type'],
+            'station_ids': [int(s['id']) for s in stations],
+            'station_names': [s.get('name') or '' for s in stations],
+            'ledger_role': role_code, 'ledger_node': node,
+        }
+    return result

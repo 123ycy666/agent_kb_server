@@ -377,3 +377,46 @@ def report_markdown(task: dict, alert: dict | None = None) -> dict:
     text = '\n'.join(lines)
     polished, used = _safe_polish(text, text)
     return {'markdown': polished, 'ai_used': used}
+
+
+def report_sections(task: dict, alert: dict | None = None) -> dict:
+    """docx 用的结构化报告：标题 + 四段正文 + 一张事件表。"""
+    creator = (task.get('creator') or {})
+    assignees = '、'.join('%s(%s)' % (a.get('name') or '', a.get('part') or '')
+                          for a in (task.get('assignees') or [])) or '—'
+    sec1 = '\n'.join([
+        '任务编号：%s' % (task.get('task_no') or ''),
+        '责任单位：%s' % (task.get('scope_name') or ''),
+        '发起人：%s（%s）' % (creator.get('name') or '', creator.get('login_name') or ''),
+        '承办人：%s' % assignees,
+        '回执时限：%s' % (task.get('reply_due_at') or '—'),
+        '完成时限：%s' % (task.get('due_at') or '—'),
+        '当前状态：%s' % (task.get('status') or ''),
+    ])
+    sec2 = ''
+    if alert:
+        sec2 = '\n'.join([
+            '预警：%s' % (alert.get('title') or ''),
+            '级别：%s / %s' % (alert.get('level') or '', alert.get('subtype') or ''),
+            '关键数据：%s' % (alert.get('data') or {}),
+        ])
+    sec2 = sec2 or '无关联预警（由对话/人工发起）。'
+    events = task.get('events') or []
+    sec3 = '\n'.join('%s %s：%s' % (e.get('create_time') or '', e.get('action') or '',
+                                    (e.get('content') or '')[:120]) for e in events[-10:]) or '暂无。'
+    checks = task.get('checks') or []
+    sec4 = '\n'.join([
+        '核销方式：%s' % ('自动（数据实测）' if task.get('verifier_type') == 'auto' else '人工确认'),
+        '最近一次实测：%s' % ((checks[0].get('message') if checks else '—') or '—'),
+        '结果：待填',
+        '下一步：待填',
+    ])
+    rows = [[e.get('create_time'), e.get('action'), (e.get('actor_name') or ''),
+             (e.get('from_status') or '') + '→' + (e.get('to_status') or ''),
+             (e.get('content') or '')[:60]] for e in events]
+    return {
+        'title': task.get('title') or '处置情况报告',
+        'sections': [('一、基本情况', sec1), ('二、问题与依据', sec2),
+                     ('三、已采取措施', sec3), ('四、结果与下一步', sec4)],
+        'tables': [('处置过程', ['时间', '动作', '操作人', '状态变化', '说明'], rows)] if rows else [],
+    }

@@ -112,8 +112,10 @@ def scan(db: Session, accounts=None, cadence: str = 'daily',
 
     try:
         accts = list(accounts or DR.scan_accounts() or all_role_accounts())
+        # 批量解析：122 个账号 4 条 SQL（单账号 resolve 是 4 条/人，全量要 58 秒）
+        scopes = alert_scope.resolve_many(accts)
         for acct in accts:
-            sc = alert_scope.resolve(acct)
+            sc = scopes.get(acct) or {'ok': False, 'error': 'resolve_failed', 'account': acct}
             if not sc.get('ok'):
                 errors.append({'account': acct, 'error': sc.get('error') or 'resolve_failed'})
                 continue
@@ -124,15 +126,30 @@ def scan(db: Session, accounts=None, cadence: str = 'daily',
             scanned_subtypes.update(types)
             key = (role, sc['scope_type'], _scope_key(sc))
             if key not in groups:
-                groups[key] = {'sc': sc, 'accounts': []}
+                groups[key] = {'sc': sc, 'accounts': [], 'types': types}
             groups[key]['accounts'].append(acct)
 
         for (role, _st, _sk), g in groups.items():
             sc = g['sc']
-            ck = tuple(sc['station_ids'])
-            if ck not in facts_cache:
-                facts_cache[ck] = A._facts(sc['station_ids'], today[:4], today)
-            items, errs = alerts4.detect(role, sc, today, facts_cache[ck], cadence=cadence)
+            types = set(g.get('types') or [])
+            need_metrics = any(t.startswith('metric.') for t in types)
+            need_quality = 'project.amount_structure' in types
+            need_mid = (A.R.forecast_mode() == 'pipeline'
+                        and any(t.startswith('budget.') for t in types))
+            need_core = any(t.startswith('budget.') or t == 'project.approval_stay'
+                            for t in types)
+            uses_facts = need_core or need_quality or need_metrics
+            if uses_facts:
+                ck = (tuple(sc['station_ids']), need_metrics, need_quality, need_mid, need_core)
+                if ck not in facts_cache:
+                    facts_cache[ck] = A._facts(sc['station_ids'], today[:4], today,
+                                               need_quality=need_quality,
+                                               need_metrics=need_metrics,
+                                               need_mid=need_mid, need_core=need_core)
+                facts = facts_cache[ck]
+            else:
+                facts = {}
+            items, errs = alerts4.detect(role, sc, today, facts, cadence=cadence)
             errors.extend([dict(e, role=role, scope=sc.get('scope')) for e in errs])
             items = _post_filter(db, items)
             found += len(items)
@@ -140,10 +157,19 @@ def scan(db: Session, accounts=None, cadence: str = 'daily',
                 got = _upsert(db, a, seen_at)
                 new += 1 if got == 'new' else 0
 
-        if scanned_subtypes:
+        if scanned_subtypes and groups:
+            # ⚠️ 必须先 flush：会话是 autoflush=False，不 flush 的话下面这条"本轮没命中"的查询
+            #    看不到刚更新的 last_seen，会把**本轮明明命中的**预警也关掉（实测踩过：resolved=2）
+            db.flush()
+            # ⚠️ 只关"本轮真正扫过的那几个口径"的预警：
+            #    单账号扫描（accounts=[x]）绝不能把别人的预警关掉（实测踩过：resolved=73）
+            scope_conds = [and_(AlertItem.assignee_role == r,
+                                AlertItem.scope_type == st,
+                                AlertItem.scope_key == sk) for (r, st, sk) in groups]
             q = (select(AlertItem).where(AlertItem.status == 'open',
                                          AlertItem.last_seen < seen_at,
-                                         AlertItem.subtype.in_(sorted(scanned_subtypes))))
+                                         AlertItem.subtype.in_(sorted(scanned_subtypes)),
+                                         or_(*scope_conds)))
             stale = db.execute(q).scalars().all()
             for a in stale:
                 a.status = 'resolved'
