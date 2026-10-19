@@ -179,6 +179,14 @@ KB_IDS = [int(x) for x in
 # 六项指标已统一到这两张预计算表：快照（本期值）+ 对比（同比/环比）。
 TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').split(',') if x]
 
+# 单题时间预算（秒）：超过就停止继续查数，用已查到的内容作答，并在回答里说明还缺什么。
+# 实测「不指定对象」的问题（「这单钱都花哪了」）会一直翻表到客户端超时（600 s 无响应）。
+QUESTION_BUDGET_S = float(ENV.get('SECRETARY_QUESTION_BUDGET') or '240')
+
+# 数字闸：回答里的金额必须能在本轮 SQL 结果（含 summary、成对和差比）里找到出处，
+# 找不到就重问一次。关掉设 SECRETARY_NUMBER_GUARD=0。
+NUMBER_GUARD_ON = (ENV.get('SECRETARY_NUMBER_GUARD') or '1') not in ('0', 'false', 'False')
+
 # 系统提示从 ai_data.ai_prompt 注入（取 IS_new=1 的最新版），不在代码里写死。
 # 列表里不存在的 key 会自动跳过，所以可以先接好槽位、等内容补上就自动生效。
 #   answer_agent   回答规则（含那 10 条必须遵守）
@@ -257,8 +265,9 @@ HTTP_TIMEOUT = 120
 # 不影响作答；也免得把整轮问答拖死。
 KB_TIMEOUT = int(os.environ.get('SECRETARY_KB_TIMEOUT', '15'))
 
-# 分析题的「分析页面」：判出题型为分析时，额外调一次模型把结论渲染成单页 HTML 数据大屏。
-# 设 SECRETARY_PAGE=0 可关掉（关掉后 /api/ask 不再返回 page_html，回答不受影响）。
-PAGE_ON = (os.environ.get('SECRETARY_PAGE') or ENV.get('SECRETARY_PAGE') or '1').strip().lower() not in ('0', 'false', 'no')
+# 分析题的「分析页面」：额外调一次模型把结论渲染成单页 HTML 数据大屏。
+# **2026-10-15 起默认关闭**（Fred：正常流程不需要这个生成页面，把它关掉）。
+# 需要时设 SECRETARY_PAGE=1 打开；关掉后 /api/ask 不再返回 page_html，回答完全不受影响。
+PAGE_ON = (os.environ.get('SECRETARY_PAGE') or ENV.get('SECRETARY_PAGE') or '0').strip().lower() in ('1', 'true', 'yes', 'on')
 # 生成分析页面用的模型：页面是纯前端代码活，用快档就够，实测比旗舰快一倍（48.7s→23.4s）
 PAGE_MODEL = (os.environ.get('SECRETARY_PAGE_MODEL') or ENV.get('SECRETARY_PAGE_MODEL') or 'qwen3.8-flash').strip()

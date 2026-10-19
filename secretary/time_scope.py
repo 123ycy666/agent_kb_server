@@ -138,6 +138,11 @@ def _mk(matched, text, ptype, pkey, is_default=False, note='', q=None):
     rewritten = q
     if q and matched and matched != text:
         rewritten = q.replace(matched, text, 1)
+        # 拼接边界：「今年分了多少钱」→「2026年1-9月份了多少钱」，读起来像「9月份了」。
+        # 「月」后面紧跟「分 / 份」时补一个顿开，避免把紧跟的字吃成时间词；其余情况不加。
+        i = rewritten.find(text) + len(text)
+        if i < len(rewritten) and rewritten[i] in ('分', '份'):
+            rewritten = rewritten[:i] + '，' + rewritten[i:]
     return {'matched': matched, 'time_text': text, 'period_type': ptype,
             'period_key': pkey, 'is_default': is_default, 'note': note,
             'rewritten': rewritten}
@@ -344,7 +349,7 @@ def _says_whole_city(question):
     return any(w in q for w in _WHOLE_CITY)
 
 
-def describe(question, fixed=None, prev=None, today=None):
+def describe(question, fixed=None, prev=None, today=None, force_place=None):
     """一步到位：返回 {time, place, scope_text, question, inherited}。
 
     scope_text 是给模型看的【统计范围】说明；question 是补全后的完整问题。
@@ -354,9 +359,16 @@ def describe(question, fixed=None, prev=None, today=None):
           只附说明，免得把用户的原话改得面目全非。
 
     prev = 上一轮的统计范围（同一场会话）：{period_type, period_key, time_text, place}
+    force_place = 上游（业务系统）指定的数据范围，**强制**：提问人是谁、在哪个页面只有上游知道，
+        所以给了它就压过「问题里认出的地点」与「沿用上一轮的地点」。
     """
     t = resolve(question, today=today, prev=prev)
-    place = place_of(fixed, question)
+    forced = (force_place or '').strip()
+    if forced and _says_whole_city(question):
+        # 上游给的是「这个人默认可看的范围」，但本轮用户**明说**要全市（「全市几个节点最慢？」）
+        # —— 明说的优先，范围按问题里的来。
+        forced = ''
+    place = forced or place_of(fixed, question)
     place_default = False
     place_inherited = False
     if not place:
@@ -380,7 +392,10 @@ def describe(question, fixed=None, prev=None, today=None):
     # 「用的默认值 / 沿用上一轮」这类说明由 note 给出（resolve 里已写好），这里不重复
     if t['note']:
         lines.append('      ' + t['note'])
-    if place_inherited:
+    if forced:
+        lines.append('地点：%s（**上游业务系统指定的数据范围，强制按此范围取数**；'
+                     '本轮问题里若出现别的地名，指的是该范围内的对象，不改范围）' % place)
+    elif place_inherited:
         # 沿用的地点是**推断**出来的，不是用户这轮说的 —— 必须允许模型推翻，
         # 否则用户换成别的简称（我们没认出来的）就会被错误地按上一轮的口径查。
         lines.append('地点：%s（本轮问题里没认出地点，沿用上一轮。'

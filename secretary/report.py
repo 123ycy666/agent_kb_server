@@ -328,6 +328,10 @@ def list_triggers():
     try:
         with open(p, encoding='utf-8') as f:
             cfg = _json.load(f)
+    except FileNotFoundError:
+        # 触发配置已经不参与问答链路（问答只认《判据规则》），文件被撤掉是正常状态：
+        # 这里返回空触发台即可，不要把「文件不存在」当成错误回给前端。
+        return {'trigger_types': {}, 'skills': [], 'note': '触发配置未启用（问答只按《判据规则》）'}
     except Exception as e:
         return {'trigger_types': {}, 'skills': [], 'error': str(e)[:200]}
     docs = {d['name']: d['content'] for d in list_skill_docs()}

@@ -91,6 +91,30 @@ def safe_select(sql):
     return s
 
 
+def _summarize(columns, rows):
+    """给结果集配一份「合计/均值/最小/最大」—— 汇总数由库算，别让模型把几十行自己相加。
+
+    ★ 必须有：实测模型对着 47 行分配额自己加总，报出来的全市合计与库不符
+      （1910 万被写成 1950 万 / 1880 万）。明细看得见，不等于加得对。
+    只对「至少两个值都能当数字读」的列生成；单行结果（COUNT/SUM 之类）不生成，它本来就一个数。
+    """
+    out = {}
+    for c in columns:
+        vals = []
+        for row in rows:
+            try:
+                vals.append(float(row.get(c)))
+            except (TypeError, ValueError, AttributeError):
+                pass
+        if len(vals) < 2:
+            continue
+        out[c] = {'sum': round(sum(vals), 2), 'mean': round(sum(vals) / len(vals), 2),
+                  'min': min(vals), 'max': max(vals), 'n': len(vals)}
+        if len(out) >= 12:                      # 宽表别把 summary 撑成第二份明细
+            break
+    return out
+
+
 def run_sql(sql):
     """只读 SELECT；表名必须在业务字典里，否则拒绝并回可用表名。"""
     s = safe_select(sql)
@@ -111,6 +135,7 @@ def run_sql(sql):
         return {'error': str(e)[:300], 'hint': hint, 'sql': s,
                 'columns': [], 'rows': [], 'row_count': 0}
     r['sql'] = s
+    r['summary'] = _summarize(r.get('columns') or [], r.get('rows') or [])
     return r
 
 def find_column(keyword):

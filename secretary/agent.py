@@ -98,13 +98,25 @@ def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_cho
         try:
             raw = urllib.request.urlopen(req, timeout=tmo, context=_ctx).read().decode('utf-8', 'replace')
             return json.loads(raw)
+        except urllib.error.HTTPError as e:
+            # 429/5xx 是**端点侧暂时不可用**：实测 3 并发时页面调用被 429 打回，
+            # 一次不重试就白丢一张页面（日志证据见 output/test_results/…/EV-0005）。
+            # 4xx（除 429）是请求本身的问题，重试没意义，照样抛。
+            if e.code not in (429, 500, 502, 503, 504):
+                raise
+            last = e
+            time.sleep(5)
+            print('[agent] 模型端点暂时不可用（HTTP %s），等 5 秒重试一次' % e.code, flush=True)
         except (socket.timeout, TimeoutError) as e:
             last = e
-        except urllib.error.URLError as e:
-            if not isinstance(getattr(e, 'reason', None), (socket.timeout, TimeoutError)):
+            print('[agent] 模型调用超时（%ss），重试一次' % tmo, flush=True)
+        except (urllib.error.URLError, ConnectionResetError) as e:
+            if isinstance(e, urllib.error.URLError) and not isinstance(
+                    getattr(e, 'reason', None), (socket.timeout, TimeoutError, ConnectionResetError)):
                 raise                                   # 不是超时（DNS/连接被拒…）就别重试
             last = e
-        print('[agent] 模型调用超时（%ss），重试一次' % tmo, flush=True)
+            time.sleep(2)
+            print('[agent] 模型连接被重置，重试一次', flush=True)
     raise last
 
 
@@ -129,8 +141,234 @@ def _final_answer(messages, model, max_tokens=2500):
     return ''
 
 
+_TOOL_RESULT_CHARS = 4000      # 单个工具结果给模型的字符上限（可用 config 覆盖）
+
+
+def _dump(obj):
+    return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+# 按 create_time 分期的表：漏了时间条件就查成了「历年累计」，实测会被拿去和当年数比（报出 44 个所超支）
+_TIME_TABLES = ('t_power_work_order',)
+
+
+def _time_guard(sql, scope):
+    """本轮口径有时间、这条 SQL 却没带时间条件 → 在结果后面直接点破它是历年累计。
+
+    ★ 为什么在**工具返回值**上下手：规则是**按问句检索**注入的，这类通用条不一定被检索到；
+      而「查历年数当当年」恰恰是在这一轮查询里犯的，就地提醒才拦得住。
+    """
+    s = ' '.join(str(sql or '').split()).lower()
+    if not s or not any(t in s for t in _TIME_TABLES):
+        return ''
+    if 'create_time' in s or 'year(' in s:
+        return ''
+    t = (scope or {}).get('time') or {}
+    if t.get('period_type') not in ('yearToDate', 'month', 'year'):
+        return ''
+    return ('\n\n⚠️ 本条 SQL **没有时间条件** —— 查出来的是**历年累计**，不是本轮口径「%s」。'
+            '历年数不能和当年分配额 / 当年已审批放一起比（比出来的「超支 / 缺口」是假的）：'
+            '要跟当年数对齐就补上 create_time 条件重查，否则只能单独作为「含往年」的背景说明。'
+            % t.get('time_text'))
+
+
+# 每张表里「范围」落在哪个字段上：SQL 里一个都没出现 → 它查的是全市
+_SCOPE_COLUMNS = {
+    't_power_work_order': ('power_company_name', 'power_company_id'),
+    't_power_company_budget_result': ('power_station_name', 'county_company_name', 'power_station_id'),
+    't_power_ai_metric_snapshot': ('scope_name',),
+    't_power_ai_metric_comparison': ('scope_name',),
+    't_power_push_station_score': ('obj_name',),
+}
+
+
+def _scope_guard(sql, scope):
+    """本轮范围不是全市、而这条 SQL 没真正带上范围 → 就地提醒它查的是全市。
+
+    ★ 实测两类：① `scope=随县供电公司` 那轮直接查全市（把已审批 19 件 / 112.11 万当随县数）；
+      ② 写了 `power_company_name IN (SELECT name FROM t_power_company WHERE deleted_flag=0)`
+      —— 看着像筛了，其实把 47 个所全选进来。所以判断标准是**范围有没有真的被表达出来**：
+      出现范围名、parent_id、scope_key 之一才算带上了。
+    """
+    sql = ' '.join(str(sql or '').split())
+    low = sql.lower()
+    place = ((scope or {}).get('place') or '').strip()
+    if not low or not place or place == '全市':
+        return ''
+    if not any(t in low for t in _SCOPE_COLUMNS):
+        return ''
+    head = place
+    for suf in ('供电服务站', '供电公司', '供电中心', '供电所'):
+        if head.endswith(suf):
+            head = head[:-len(suf)]
+            break
+    if place in sql or (head and head in sql) or 'parent_id' in low or 'scope_key' in low:
+        return ''
+    return ('\n\n⚠️ 这条 SQL **没有真正带范围条件**，查出来的是**全市**数据，而本轮口径是「%s」——'
+            '不能把全市数当成本范围的数。按所取：power_company_name / power_station_name 等值；'
+            '按县公司取：power_company_id IN (该公司的所 id 列表，见【统计范围】里给的名单)。'
+            % place)
+
+
+def _scope_detail(place):
+    """公司级范围：把该公司下辖的所名与所 id 直接列出来。
+
+    ★ 为什么必须由系统给：实测模型要么写成 `power_company_name IN (SELECT name FROM t_power_company
+      WHERE deleted_flag=0)`（等于没筛，把全市当本县），要么干脆不带范围条件。名单由系统查一次，
+      模型只剩「按等值筛」这一件事。
+    """
+    p = (place or '').strip()
+    if not p or p == '全市' or not (p.endswith('公司') or p.endswith('中心')):
+        return ''
+    try:
+        r = tools_db.run_sql('SELECT pc.id, pc.name FROM t_power_company pc '
+                             'JOIN t_power_supply_company sc ON sc.id = pc.parent_id '
+                             "WHERE sc.name = %r AND pc.deleted_flag=0" % p)
+        rows = r.get('rows') or []
+    except Exception:                                          # noqa: BLE001
+        return ''
+    if not rows:
+        return ''
+    names = '、'.join(str(x.get('name')) for x in rows[:40])
+    ids = ','.join(str(x.get('id')) for x in rows[:40])
+    return ('\n      **该范围下辖 %d 个所**：%s\n'
+            '      按所筛：power_company_name / power_station_name 等值，或 power_company_id / power_station_id 在 [%s] 之内；'
+            '**不要写成 t_power_company 的整表子查询**。' % (len(rows), names, ids))
+
+
+def _unit_guard(sql):
+    """查了指标表就把原始单位说清楚 —— 实测把「0.18%」写成「1.85%」（亿/万混算）。"""
+    low = ' '.join(str(sql or '').split()).lower()
+    if 't_power_ai_metric' not in low:
+        return ''
+    return ('\n\n📏 单位：本表 metric_value / current_value 是**原始值** —— 售电量=**千瓦时**'
+            '（所/县报万千瓦时＝值÷10000，全市报亿千瓦时＝值÷100000000）、线损率=%、'
+            '停电时长=小时/户、工单与跳闸=件/次；change_rate 已是百分数。'
+            '**算占比/倍数/同比之前先把两边化成同一单位**，算完自查量级。')
+
+
+# 回答里的金额对账（数字闸）：金额必须在**本轮** SQL 结果里找得到出处，否则重问一次。
+# ★ 为什么需要：汇总数已经改成由库算（summary），但实测仍有「76.26 万写成 762.62 万」这类
+#   抄写错；这类错看一眼回答发现不了，只能拿本轮结果去对。
+_MONEY_RE = re.compile(r'(\d+(?:\.\d+)?)\s*万元')
+
+
+def _num_pool(trace):
+    """本轮所有 SQL 结果构成的可追溯数值池（单位：万元）。
+
+    池子 = 行值 + summary 的 sum/mean/min/max，再补上两两的「和 / 差 / 比值」——
+    余额、缺口、占比、两所合计这些合规的再计算才不会误报。
+    """
+    vals = set()
+    for t in (trace or []):
+        if not isinstance(t, dict) or t.get('kind') != 'tool':
+            continue
+        res = t.get('result') or {}
+        raw = []
+        for row in (res.get('rows') or []):
+            if isinstance(row, dict):
+                raw.extend(row.values())
+        for col in (res.get('summary') or {}).values():
+            if isinstance(col, dict):
+                raw.extend([col.get('sum'), col.get('mean'), col.get('min'), col.get('max')])
+        for v in raw:
+            try:
+                x = float(str(v))
+            except (TypeError, ValueError):
+                continue
+            vals.add(round(x, 2))
+            vals.add(round(x / 10000.0, 2))
+    out = set(vals)
+    base = sorted(v for v in vals if abs(v) < 1e7)
+    for a in base:
+        for b in base:
+            out.add(round(a + b, 2))
+            out.add(round(abs(a - b), 2))
+            if b:
+                out.add(round(a / b, 4))
+    return out
+
+
+def _untraceable_money(answer, pool, floor=10.0):
+    """回答里 >= floor 万元的金额，哪些在池子里找不到（容差 0.06 万或 0.2%）。"""
+    bad = []
+    for m in _MONEY_RE.finditer(answer or ''):
+        try:
+            x = float(m.group(1))
+        except ValueError:
+            continue
+        if x < floor:
+            continue
+        if any(abs(x - s) <= max(0.06, abs(s) * 0.002) for s in pool):
+            continue
+        if x not in bad:
+            bad.append(x)
+    return bad
+
+
+# 内部系数（0.6 达标系数那类）不许写成人看的「基准线 / 进度要求」—— 实测模型会写
+# 「41 个所预算执行率低于 45% 的进度要求」。命中就重问一次。
+_COEF_RE = re.compile(r'\d+(?:\.\d+)?\s*%\s*(?:的)?\s*(基准线|达标线|考核线|进度线|进度要求)')
+_COEF_LOOSE_RE = re.compile(r'(?:低于|不低于|高于|达到)\s*\d+(?:\.\d+)?\s*%')
+_COEF_CONTEXT = ('执行率', '进度', '达标', '完成率')
+
+
+def _coefficient_talk(text):
+    """回答里有没有把内部系数当标准讲 —— 有就返回那句（没有返回空串）。"""
+    for ln in (text or '').splitlines():
+        if _COEF_RE.search(ln):
+            return ln.strip()[:80]
+        if _COEF_LOOSE_RE.search(ln) and any(w in ln for w in _COEF_CONTEXT):
+            return ln.strip()[:80]
+    return ''
+
+
 def _trim(name, res):
-    return json.dumps(res, ensure_ascii=False, default=str)[:4000]
+    """工具结果 → 给模型的 JSON 文本；超上限就**少列明细行**，绝不把 JSON 从中间切断。
+
+    ★ 这里原来是 `json.dumps(res)[:4000]` —— 实测 47 行的分配结果就切在数字中间，
+      模型拿到的是**坏 JSON**（Unterminated string），既看不到整份、还可能自己把可见行相加。
+      改成整行进出之后：JSON 始终合法，row_count 保留真实行数，明细被丢这件事写在 note 里，
+      并明确告诉它汇总去取 summary（tools_db 已随结果一起给）。
+    """
+    cap = int(getattr(config, 'TOOL_RESULT_CHARS', _TOOL_RESULT_CHARS) or _TOOL_RESULT_CHARS)
+    text = _dump(res)
+    if len(text) <= cap:
+        return text
+    obj = dict(res) if isinstance(res, dict) else {'value': res}
+    # 最占地方的明细列表：整行地丢，直到放得下
+    list_key = ''
+    for k, v in obj.items():
+        if isinstance(v, list) and v and (not list_key or len(_dump(v)) > len(_dump(obj[list_key]))):
+            list_key = k
+    if list_key:
+        rows = obj[list_key]
+
+        def build(n):
+            o = dict(obj)
+            o[list_key] = rows[:n]
+            o['note'] = ('%s 共 %d 条，为省篇幅只列出前 %d 条（其余未列出）。'
+                         '**合计 / 均值 / 最大最小一律取本结果的 summary —— 不要拿看得见的这几行自己相加**。'
+                         % (list_key, len(rows), n))
+            return o
+
+        lo, hi = 0, len(rows)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(_dump(build(mid))) <= cap:
+                lo = mid
+            else:
+                hi = mid - 1
+        while lo > 0 and len(_dump(build(lo))) > cap:
+            lo -= 1
+        return _dump(build(lo))
+    # 没有明细列表：截断最长的字符串值（仍保证是合法 JSON）
+    for k in sorted([k for k, v in obj.items() if isinstance(v, str)], key=lambda k: -len(obj[k])):
+        if len(_dump(obj)) <= cap:
+            break
+        over = len(_dump(obj)) - cap
+        obj[k] = obj[k][:max(0, len(obj[k]) - over - 40)] + '……（本条已截断，需要就去查更具体的对象）'
+    return _dump(obj)
 
 
 # ---------------------------------------------------------------------------
@@ -220,23 +458,31 @@ def execute(name, args):
 #   那些写在 skills/判据规则.md 零节，**走知识库检索**注入。要改分析规矩改文档，不改这里。
 CALIBER = (
     '【固定口径】（每次都必须遵守，不用去检索）\n'
-    '1. **已审批 = 工单状态 2、3、6、7**（2＝所长已审核通过、在上级审批中；3＝审核通过待施工；'
-    '6＝施工中；7＝施工完成待验收）。**不算** 0 草稿、1 提交审核、4 已驳回、5 已取消、9 驳回已修改。\n'
-    '2. **实际投入 = 已审批工单的预算金额**（budget_total）。库里的实际发生金额字段没有数据'
-    '（全库仅 62 条有值、2026 年为 0），**一律不用** —— 包括「钱花了没动」这类题，'
+    '1. **已审批 = 工单状态 3、6、7**（3＝审核通过待施工；6＝施工中；7＝施工完成待验收）。'
+    '**状态 2 不算** —— 它在审批流里（按项目类型分别送县公司运检部或营销部审核，没审完就不是通过）。'
+    '**不算** 0 草稿、1 提交审核、2 审核中、4 已驳回、5 已取消、9 驳回已修改。\n'
+    '1.1 **「未审批」= 状态 0 草稿、1 提交审核、9 驳回已修改**（不含已驳回、已取消）。'
+    '报未审批数量时要写明含哪几类；**一次回答里只用一个口径**，不许一会儿按 0/1/9、一会儿按 0/1/2 报两个数。\n'
+    '2. **实际投入 = 已审批工单的预算金额**（budget_total）。库里的实际发生金额字段实测基本为空'
+    '（**用前先 COUNT 一次确认，不要把零星有值的几条当全部**），**一律不用** —— 包括「钱花了没动」这类题，'
     '也一律用预算金额（判据见《规则》第七节第 4 条）。\n'
     '3. **执行率 = 当年已审批工单预算合计 ÷ 当年分配预算**。分配预算**只取供电所级分配结果**'
     '（t_power_company_budget_result，条件 = 该所 + 问的年度 + deleted_flag=0 的唯一有效行）；'
-    '**全市 = 各所之和（2026 年 = 1880.00 万）**，**不要用公司级总预算表**（2026 年 = 1910.00 万，那是分配计算的输入）。\n'
+    '**全市 = 各所分配额之和（现查）**，**不要用公司级总预算表当分配额**（那是分配计算的输入）。\n'
     '4. 分配、已审批、未审批**必须同年度、同层级**。对齐后占比 >100% 或余额为负 → **如实报**'
     '「已审批已超出当年分配预算 X 万元」并提示需核实（分配额未更新 / 工单跨年 / 重复申报）；'
     '**不许用「含往年结转」解释掉，也不许静默当成正常**。\n'
-    '4.1 **不许把内部的 0.6 达标系数换算成「基准线」写给人看** —— 回答里不许出现「44.38%」「45% 基准线」'
-    '这类内部换算；要么直接给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「要达标还需再完成多少」。\n'
+    '4.1 **不许把内部的 0.6 达标系数换算成「基准线」写给人看** —— 回答里不许出现「XX% 基准线」这类内部换算；'
+    '要么直接给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「要达标还需再完成多少」。\n'
     '5. **空集就是答案**：第一次查到 0 行就按 0 行答（写清按什么口径没有记录）；'
     '**不许摘掉时间 / 状态 / 范围条件再查一遍凑数字**。\n'
     '6. 问「实际花了多少 / 决算金额 / 实际与申报差多少」→ 写「系统未采集实际投入数据，只能用预算金额」。\n'
-    '7. 状态与缺陷类型编号**一律翻中文**；查不到要写清口径，**不要回「未找到相关信息」**。\n'
+    '7. 状态与缺陷类型编号**一律翻中文**；查不到要写清口径，**不要回「未找到相关信息」**。'
+    '**翻出来的中文如果和字段名一模一样**（例如「缺陷类型：缺陷类型」「项目类型：项目类型」），'
+    '说明这条码值没登记 —— 要写「未登记（编号 X）」，**不许把字段名当值写**。\n'
+    '8.1 **指代词要有对象**：问句里的「这单 / 这条线 / 这个台区 / 那几张」如果在本场会话里'
+    '找不到明确对象（没提过编号、名称，也没有上一轮的对象），**先问清是哪一张 / 哪一条**，'
+    '不要自己挑一个来凑答。**宁可反问，不要猜。**\n'
     '8. **「能不能批 / 能不能报」类问题：第一句给结论，结论只能是「符合 / 不符合 / 无法判定」三种**，'
     '而且**必须与后面的依据一致** —— 依据里写了"超出余额 X 万元"，就**不许**写"可以批 / 符合"。\n'
     '9. **「预算装得下」只对还没批的单判**（状态 0/1/2）。状态已是 3/6/7 的单，'
@@ -295,8 +541,10 @@ COMMON = (
     '· 你只负责回答领导的问题：**不要复述你的思考过程、判断过程或工作步骤**'
     '（例如"这是分析题""这是对策题""数据已齐""现在给出回答""让我组织一下"），也不要把中间推理写成英文句子。\n'
     '\u00b7 纯文本、一行一句：**正文里不要出现 **、#、|、>、反引号 这些符号**，也不要小标题；要分条就用"1. 2. 3."。\n'
+    '\u00b7 **长度随题型**：查数题（只问一个数/差值/名单/排第几）**1–3 行、只给数 + 口径**，不许加建议/成效/做到什么程度/需审定；分析题与预测题不超过 8 行，方案题不超过 10 行 —— 超了砍明细，不要重复。\n'
     '\u00b7 不提 SQL、表名、字段名、数据库、工具过程。\n'
-    '\u00b7 数字必须来自本次查询：不许估算、不许补 0、不许拿别的年份顶。\n'
+    '\u00b7 数字必须来自本次查询，或本轮**写清依据的推算**：不许无依据估算、不许补 0、不许拿别的年份顶；'
+    '**预测 / 推荐类问题（投完会怎样、年底到多少、明年能多拿、该做什么）必须推算并标注「推算」**。\n'
     '\u00b7 查到 0 行就是答案：写清"按什么口径没有记录"，不要回"未找到相关信息"，也不要放宽条件重查。\n'
     '\u00b7 问"有哪些"要逐条列全（一行一条），说 N 条就得正好 N 条。\n'
 )
@@ -503,12 +751,13 @@ def _strip_html(out):
         if t[:4].lower() == 'html':
             t = t[4:].lstrip()
     low = t.lower()
-    i = low.find('<!doctype')
-    if i < 0:
-        i = low.find('<html')
-    if i < 0:
-        return ''
-    return t[i:].strip()
+    # 整页优先；没有根标签就退一步认**片段**（实测模型常只给 div/table 片段，
+    # 以前一律返回空 → 分析题白丢一张页面）。片段交前端照样能渲染。
+    for tag in ('<!doctype', '<html', '<body', '<div', '<table', '<section', '<main'):
+        i = low.find(tag)
+        if i >= 0:
+            return t[i:].strip()
+    return ''
 
 
 _PAGE_CACHE = {}          # md5(答案+数据) -> 已生成的页面 HTML
@@ -558,15 +807,41 @@ def render_page(content, extra='', model=None, max_tokens=6000, cache_key=None):
         return _PAGE_CACHE[key]
     if extra:
         text += ('\n\n【这次查到的原始数据（可直接用来作图，数字不要改、不要新增）】\n' + extra)
+    out = ''
     try:
-        resp = _chat([{'role': 'system', 'content': PAGE_SYSTEM},
-                      {'role': 'user', 'content': text}],
-                     model or config.PAGE_MODEL, use_tools=False, max_tokens=max_tokens)
-        out = (resp['choices'][0]['message'].get('content') or '')
+        # ★ 开思考时 reasoning 会吃掉 completion token，**正文可能是空的**（实测同一批里 3/7 轮页面
+        #   就这样白白丢掉）。空正文就换 thinking 再来一次 —— 与 _final_answer 同一套路。
+        for think in (True, False):
+            resp = _chat([{'role': 'system', 'content': PAGE_SYSTEM},
+                          {'role': 'user', 'content': text}],
+                         model or config.PAGE_MODEL, use_tools=False, max_tokens=max_tokens, think=think)
+            out = (resp['choices'][0]['message'].get('content') or '').strip()
+            if out:
+                break
+            print('[agent] 页面模型返回空正文（thinking=%s），换一种再来一次' % think, flush=True)
     except Exception as e:
         print('[agent] 分析页面渲染失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
         return ''
     html = _strip_html(out)
+    # 薄页面重试一次：实测有 11% 的页面不到 1.5 KB（只有一两行结论，图/表都没画），
+    # 与「空正文」同一类问题 —— 明确告诉它要几个板块就有，再要一次。
+    if 0 < len(html) < 1200:
+        try:
+            _r2 = _chat([{'role': 'system', 'content': PAGE_SYSTEM},
+                         {'role': 'user', 'content': text +
+                          '\n\n【这次生成的页面太单薄（不到 1.5KB）】请至少给出 4 个板块：'
+                          '① 一句话结论卡；② 3–5 个关键数字卡；③ 一张按对象排序的明细表（没有数据就不放图）；'
+                          '④ 一句下一步动作。数字只能来自上面给的数据。'}],
+                        model or config.PAGE_MODEL, use_tools=False, max_tokens=max_tokens, think=False)
+            _out2 = (_r2['choices'][0]['message'].get('content') or '').strip()
+            _h2 = _strip_html(_out2)
+            if len(_h2) > len(html):
+                print('[agent] 页面偏薄（%d 字节），重生成后 %d 字节' % (len(html), len(_h2)), flush=True)
+                html = _h2
+        except Exception as e:                              # noqa: BLE001
+            print('[agent] 薄页面重生成失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
+    if not html:                                # 页面失败必须留痕：以前只写「未生成」，查不出原因
+        print('[agent] 页面模型没给出 HTML（%d 字，前 120 字）：%s' % (len(out), out[:120].replace('\n', ' ')), flush=True)
     if html:
         if len(_PAGE_CACHE) >= _PAGE_CACHE_MAX:
             _PAGE_CACHE.clear()
@@ -625,6 +900,10 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     t_all = time.time()
     trace = []
     raw_question = question
+    # 上游（业务系统）指定的数据范围：提问人是谁、在哪个页面只有上游知道，所以它**强制**。
+    # 必须先存下来：下面 time_scope 的结果也叫 scope，直接 scope = … 会把形参吞掉
+    # （曾经的 bug：传了范围却全按「全市」作答，证据 output/test_results/…/EV-0003）。
+    force_scope = (scope or '').strip() or None
     # ⓪ 字面纠错 + 名称归一（阶段①的「字面」部分，在问题补全之前）。
     #    必须先做：字没改对，后面检索知识库、补全、写 SQL 全是白费。
     t_fix = time.time()
@@ -691,7 +970,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # ⓪·5 时间与范围补全：相对时间词换成具体期间；没说的优先沿用上一轮，再没有才补默认值。
     #       这种换算是确定性的（「上月」是几月取决于今天），交给代码，不留给模型去猜日期。
     t_scope = time.time()
-    scope = time_scope.describe(question, fixed, prev=prev_scope, today=today)
+    scope = time_scope.describe(question, fixed, prev=prev_scope, today=today,
+                               force_place=force_scope)
     if scope['question'] and scope['question'] != question:
         question = scope['question']
     trace.append({'seq': len(trace) + 1, 'kind': 'scope', 'tool': 'time_scope',
@@ -764,7 +1044,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 统计范围必须明确交给模型：六项指标是按「范围 + 期间」预计算的，
     # 不给这一句，它就得自己猜该取 month 还是 yearToDate、该取哪个月。
     user_content += ('\n\n【统计范围】（已按今天日期算好，直接采用，不要自行推算日期）\n'
-                     + scope['scope_text'])
+                     + scope['scope_text'] + _scope_detail(scope['place']))
     if fixed['hint']:
         # 名称被归到「地名层」时（库里没有这个精确名），必须告诉模型用前缀查，
         # 否则它很可能拿合成名做等值匹配，一条都查不到还以为是空数据。
@@ -786,16 +1066,35 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         # 这是"分析问答"的质量闸 —— 实测缺的从来不是数据，而是"建议 / 依据 / 预计效果"三段。
         user_content += (
             '\n\n【交卷前自检一遍，缺哪段就补哪段】\n'
+            '0. **这题是哪一类？**（查数 / 分析 / 预测 / 方案）—— 先判准题型，再决定写哪几段：'
+            '**查数题（只问一个数 / 差值 / 名单 / 排第几）就只给「数 + 口径」1–3 行**，'
+            '**不要**再加建议、成效、下一步、做到什么程度、需审定这些段落（多写一段就是错）；'
+            '分析 / 预测一般不超过 8 行、方案不超过 10 行，超了砍明细（见《规则》20.0）。\n'
             '1. 结论有没有？第一句就要给判断（好/差、达标/不达标、是/不是、哪几个）。\n'
             '2. 依据有没有？每条结论后面跟着数字，并说清"跟谁比、怎么算出来的"。\n'
             '3. 原因有没有？说清是哪几个数据共同造成的，不要只罗列。\n'
-            '4. **建议有没有？必须落到"谁该做什么"**（哪个岗位/哪个所，做什么）。没有建议 = 没答完。\n'
-            '5. 预计效果有没有？能推算的给出"做完会变成什么样"。\n'
+            '4. **建议有没有？必须落到「谁 · 做什么 · 多少 · 什么时候」** —— 四样缺一样就是没答完；'
+            '**不许**写「要加强」「需关注」「尽快审批」这类没有对象、没有量、没有做法的话。\n'
+            '5. **做完能达到什么程度？必须给数**（指标到 X、额度到 Y 万元、排名到第 Z、风险降到什么档）。'
+            '要推算就**先去找参照**（往年 / 同类投了多少、投完指标动了多少），按单位投入的效果推；'
+            '**不许一句「系统里没有记录」就收尾** —— 放宽一档也要找（同类所 → 同县 → 全市）。标「推算」。\n'
             '6. 有没有夹带思考过程、英文句、Markdown 符号？有就删掉。\n'
             '7. 要点里要求的「差多少 / 是几倍 / 占百分之几」要**自己算出来写在正文里**，'
             '不能只把两头的数字摆着让领导自己算。\n'
             '8. 有没有重复？同一件事不要在开头说一遍、分条里再说一遍。\n'
-            '9. **回到【各类问题的必答项】，找到你这类问题的那一行，把 ①②③… 逐项对一遍**'
+            '9. **本轮查的所有 SQL，时间 / 范围 / 状态条件是不是同一套**（含 JOIN 的子查询）？'
+        '有没有一条带年份、一条不带，然后把**历年累计**当成当年数比出来的「超支 / 缺口」？有就统一条件重查。\n'
+        '10. **问句里问了不止一件事吗**（「分了多少还剩多少」「新增几个、批了几个」）？'
+        '**逐问逐答**，一件一件回答，不许只答前半句。\n'
+        '11. **有没有出现「XX% 基准线 / 达标线」这类内部换算**？有就删掉 —— '
+        '要么给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「还差多少」（这是硬规则）。\n'
+        '12. **本轮用到的数字是不是上一轮查的**？如果是（本轮没再查），要么本轮重查一次，'
+        '要么在回答里写明「沿用上一轮口径」—— 不许默认读者知道这个数从哪来。\n'
+        '14. **把回答里的数字全删掉，剩下的话还有信息量吗？** 如果只剩「建议尽快审批 / 加快花钱 / 加强治理」，'
+        '说明你在复述数据 —— 重写：给出该做什么、怎么做、做完到什么程度（见《规则》二十二节）。\n'
+        '15. **有没有废话、重复、套话？** 一个事实只说一遍；结论 3 行内说清；'
+        '「综上所述」「需进一步关注」「持续跟踪」这类一律删掉。\n'
+        '13. **回到【各类问题的必答项】，找到你这类问题的那一行，把 ①②③… 逐项对一遍**'
             '（不要整体感觉"都有"，要一项一项确认），缺哪项补哪项 —— 这是交卷前最后一道关。\n')
     if rule_hits:
         parts = []
@@ -816,13 +1115,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                          % config.RULE_DOC)
     if profile:
         user_content += ('\n\n【提问人身份与数据范围】（判断标准与关注重点按它来，不要因此增减问题里已经要求的必答项）：\n' + profile)
-    if scope:
-        # 身份范围必须**压过**【统计范围】里的默认「全市」——否则上游传了范围，模型还是按全市答。
-        user_content += ('\n\n【本题数据范围（强制）】%s\n'
-                         '上面【统计范围】里的地点若是「全市」，那只是默认值；'
-                         '**本题一律只取 %s 范围内的数据**，并在回答里写明这个范围。'
-                         '**这条优先于上一轮继承来的对象** —— 本轮给了范围就按本轮，'
-                         '不要因为上一轮问的是某个所就把本题也答成那个所。' % (scope, scope))
+    # 上游强制范围不在这里再注入一遍：它已经在【统计范围】的地点行里写明「强制按此范围取数」，
+    # 口径只留一个出处（以前这里注入的是 scope 这个 dict 的 repr，纯属噪声）。
     messages = [{'role': 'system', 'content': _system(today)}, {'role': 'user', 'content': user_content}]
     answer = ''
     nudged = False
@@ -830,11 +1124,21 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     step = 0
     while True:
         step += 1
-        if max_steps and step > max_steps:
+        _over_step = bool(max_steps) and step > max_steps
+        _budget = float(getattr(config, 'QUESTION_BUDGET_S', 0) or 0)
+        _over_time = _budget > 0 and (time.time() - t_all) > _budget
+        if _over_step or _over_time:
             # 到顶不再空转：关掉工具直接要正文。原来回一句「已超过最大步骤」等于把这题废了。
-            answer = _final_answer(messages, model)
-            trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content':
-                          '已到查询步数上限 %d，强制出正文' % max_steps})
+            # 时间预算同理：实测「没给对象」的问题（「这单钱都花哪了」）会一直翻表到客户端 600 s 超时，
+            # 什么都拿不到；宁可给一份「已查到什么 + 还缺什么」的回答。
+            _why = ('已到查询步数上限 %d' % max_steps) if _over_step else ('已到单题时间预算 %.0f 秒' % config.QUESTION_BUDGET_S)
+            answer = _final_answer(
+                list(messages) + [{'role': 'user', 'content':
+                                  '时间/步数预算到了，请**用已查到的数据**给出结论；'
+                                  '如果还缺关键前提（例如具体是哪张单、哪个所），'
+                                  '就在回答里一句话说清需要补什么，不要再查。'}] if _over_time else messages,
+                model)
+            trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content': _why + '，强制出正文'})
             break
         t0 = time.time()
         # 查数轮：关思考（省内心独白）+ tool_choice=required（不许写散文，只准发工具调用）。
@@ -898,10 +1202,18 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         fins = [c for c in calls if ((c.get('function') or {}).get('name')) == 'finish']
         live = [c for c in calls if ((c.get('function') or {}).get('name')) != 'finish']
         outs = _exec_calls(live) if live else []
+        # 每轮一行日志：单题跑超 10 分钟时，只有这里能看出是「轮次太多」还是「某次调用卡住」
+        # （实测场景 17 第 1 问、场景 22 前两问都出现过 600 s 无响应，日志里什么都没有）。
+        print('[agent] 第 %d 轮：工具 %d 次，本轮模型 %d ms，累计 %.1f s'
+              % (step, len(live), llm_ms, time.time() - t_all), flush=True)
         for tc, o in zip(live, outs):
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
-            messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _trim(o['name'], o['result'])})
+            _body = _trim(o['name'], o['result'])
+            if o['name'] == 'run_sql':
+                _sql = (o.get('args') or {}).get('sql')
+                _body += _time_guard(_sql, scope) + _scope_guard(_sql, scope) + _unit_guard(_sql)
+            messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _body})
         if fins:
             # 模型自己说「数据够了」→ 由系统另起一次调用写正文（不用它这轮的 content，那是散文草稿）
             answer = _final_answer(messages, model)
@@ -913,6 +1225,48 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # （实测 dsv4 禁不掉，只能代码层兜）。**必须在 qtype 与页面之前** —— 页面是从 answer 生成的，
     # 洗晚了页面里还是脏的。
     answer = _clean_answer(answer)
+    # 数字闸（对账）：回答里的金额必须能在**本轮** SQL 结果或其确定性派生里找到出处。
+    # 找不到就带着清单重问一次；第二次仍对不上就保留「错得更少」的那版，并把对账结果记进 trace。
+    _queried = any(isinstance(t, dict) and t.get('tool') == 'run_sql' for t in trace)
+    if config.NUMBER_GUARD_ON and _queried and not blocked:
+        _pool = _num_pool(trace)
+        _bad1 = _untraceable_money(answer, _pool)
+        if _bad1:
+            _msgs = list(messages) + [
+                {'role': 'assistant', 'content': answer},
+                {'role': 'user', 'content':
+                 '对账不通过：回答里这些金额在你本轮查询结果里找不到出处 —— %s 万元。'
+                 '请只使用你本轮查到的数（合计/均值取结果里的 summary），逐条改正后重写正文；'
+                 '不要改口径、不要新增没查过的数，也不要提这条提示。' % '、'.join(str(x) for x in _bad1[:8])}]
+            try:
+                _ans2 = _final_answer(_msgs, model)
+            except Exception:                                  # noqa: BLE001
+                _ans2 = ''
+            _bad2 = _untraceable_money(_ans2, _pool)
+            if _ans2 and len(_bad2) < len(_bad1):
+                answer = _ans2
+            trace.append({'seq': len(trace) + 1, 'kind': 'number_guard',
+                          'before': _bad1[:8], 'after': _bad2[:8],
+                          'kept': 'rewrite' if _ans2 and len(_bad2) < len(_bad1) else 'original'})
+    # 内部系数闸：把 0.6 达标系数换算成「XX% 基准线 / 进度要求」写给人看是明令禁止的。
+    # 与数字闸同一套路：点出原句、重写一次；第二次还有就保留更干净的那版。
+    if config.NUMBER_GUARD_ON and answer:
+        _coef1 = _coefficient_talk(answer)
+        if _coef1:
+            _cmsgs = list(messages) + [
+                {'role': 'assistant', 'content': answer},
+                {'role': 'user', 'content':
+                 '回答里出现了「%s」—— 把内部系数写成标准是禁止的。请重写：要么只给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「还差多少、还需完成多少」，不要出现任何「XX%% 基准线 / 达标线 / 进度要求」。' % _coef1}],
+            try:
+                _cans2 = _final_answer(_cmsgs, model)
+            except Exception:                                  # noqa: BLE001
+                _cans2 = ''
+            _coef2 = _coefficient_talk(_cans2)
+            if _cans2 and not _coef2:
+                answer = _cans2
+            trace.append({'seq': len(trace) + 1, 'kind': 'coef_guard', 'before': _coef1,
+                          'after': _coef2,
+                          'kept': 'rewrite' if (_cans2 and not _coef2) else 'original'})
     # qtype：**只用来决定要不要出分析页面**（前端要页面可以直接传 want_page）。
     # 真正的分流由模型按《规则》第零节做（分析题走五步、查数题取到数直接答）。
     # 这里取两个"实际发生的事"的信号，任一成立即算分析：
@@ -941,7 +1295,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         t_page = time.time()
         page_token = ''
         # 页面缓存键：同一业务日 + 同一个问题 + 同一个范围 = 同一张页面
-        pkey = 'q=%s|d=%s|s=%s' % (question, today or time.strftime('%Y-%m-%d'), scope or '')
+        pkey = 'q=%s|d=%s|s=%s' % (question, today or time.strftime('%Y-%m-%d'),
+                                   force_scope or scope['place'])
         if page_async:
             # 异步：先把答案返回，页面在后台生成，避免 30–55s 的页面把回答堵住。
             page_token = render_page_async(answer, extra=extra, model=model, cache_key=pkey)
