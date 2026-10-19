@@ -64,10 +64,16 @@ if _RECHECK_SEC is None:
 
 
 def _source_label():
-    """数据源标签，供 /health 显示（file / db:agent_data）。"""
+    """数据源标签，供 /health 显示（file / db:pg）。
+
+    ⚠️ 标签写死 `db:pg`，不要用 LEXICON_DB_NAME：
+    词典数据 2026-10-15 已从 MySQL agent_data 迁到 PG `ad_new` 的 t_nc_* 表，
+    读取路径是 lex_source → pgdb（DSN 见 pgdb.py）。沿用 agent_data 这个名字
+    会把运维引去配 MySQL，属于误导性标签。
+    """
     if not _DB_MODE:
         return 'file'
-    return 'db:%s' % (getattr(config, 'LEXICON_DB_NAME', None) or 'agent_data')
+    return 'db:pg'
 
 
 def _enabled():
