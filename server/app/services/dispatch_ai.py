@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -21,6 +22,87 @@ from app import dispatch_rules as DR
 logger = logging.getLogger(__name__)
 
 MAX_AI_WAIT_S = 12
+
+
+# ─────────────────────────────────────────────────────────── 意图判断（语义，不靠关键词）
+# 为什么用模型判：有"任务/完成/下发"这些词也可能只是提问或汇报；
+# 没有这些词也可能是在让人办事（"这执行率得有人盯到月底"）。
+# 判错的代价由「人工确认」兜住：模型只负责**提议**，建不建由人回「确认」。
+
+INTENT_SYSTEM = (
+    '你是供电公司督办助手。判断【最后一条用户消息】是不是在"要求某个单位/某个人，'
+    '在某个时限内完成一件具体的事"（适合派成任务）。\n'
+    '判定要点：\n'
+    '1) 问句、查数、咨询、评价、抱怨、假设、征求意见、问进度 → 不是任务。\n'
+    '2) 即使没有"任务/下发/安排"等词，只要语义上是明确要求某人去做某事（含隐含要求） → 是任务。\n'
+    '3) 有"任务/完成/落实"等词，但只是询问进度或汇报 → 不是任务。\n'
+    '4) 信息不足时宁可判 false，让人补一句。\n'
+    '只输出 JSON：{"is_task":true/false,"confidence":0~1,"reason":"一句话",'
+    '"scope":"单位名，没有就空","action":"要办的事，没有就空",'
+    '"deadline":"时限原话，没有就空"}'
+)
+
+
+def classify_task_intent(question: str, history: list[dict] | None = None,
+                         timeout: int = MAX_AI_WAIT_S) -> dict:
+    """语义判断"这句话是否在让人办事"。
+
+    返回 {available, is_task, confidence, reason, scope, action, deadline}。
+    available=False 表示模型不可用/被关闭 —— 调用方应退回**保守规则**（只认明确指令）。
+    """
+    if not DR.ai_on():
+        return {'available': False, 'reason': 'AI 已关闭'}
+    q = (question or '').strip()
+    if not q:
+        return {'available': False, 'reason': '空问题'}
+    try:
+        from app.providers import get_providers
+        bundle = get_providers()
+        if getattr(bundle, 'mode', '') == 'mock':
+            return {'available': False, 'reason': 'mock 档位'}
+        msgs = [{'role': 'system', 'content': INTENT_SYSTEM}]
+        for h in (history or [])[-6:]:
+            role = h.get('role') if h.get('role') in ('user', 'assistant') else 'user'
+            msgs.append({'role': role, 'content': str(h.get('content') or '')[:600]})
+        msgs.append({'role': 'user', 'content': q})
+        import concurrent.futures as cf
+        with cf.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(bundle.llm.chat, msgs, temperature=0.0, max_tokens=300,
+                            json_mode=True)
+            raw = str(fut.result(timeout=timeout) or '').strip()
+        data = _load_json(raw)
+        if not isinstance(data, dict) or 'is_task' not in data:
+            return {'available': False, 'reason': '模型输出不是合法 JSON'}
+        try:
+            conf = float(data.get('confidence') or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        return {'available': True, 'is_task': bool(data.get('is_task')),
+                'confidence': max(0.0, min(1.0, conf)),
+                'reason': str(data.get('reason') or '')[:200],
+                'scope': str(data.get('scope') or '')[:80],
+                'action': str(data.get('action') or '')[:200],
+                'deadline': str(data.get('deadline') or '')[:60]}
+    except Exception as exc:  # noqa: BLE001 - 模型不可用退回规则
+        logger.info('意图判断跳过（%s: %s）', type(exc).__name__, exc)
+        return {'available': False, 'reason': '%s: %s' % (type(exc).__name__, str(exc)[:120])}
+
+
+def _load_json(raw: str):
+    t = (raw or '').strip()
+    if t.startswith('```'):
+        t = re.sub(r'^```[a-zA-Z]*\s*', '', t)
+        t = re.sub(r'\s*```$', '', t).strip()
+    try:
+        return json.loads(t)
+    except Exception:  # noqa: BLE001
+        m = re.search(r'\{.*\}', t, flags=re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:  # noqa: BLE001
+                return None
+        return None
 
 
 def _wan(v):

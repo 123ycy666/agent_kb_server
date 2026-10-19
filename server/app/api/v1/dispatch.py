@@ -17,6 +17,7 @@ from app.models.dispatch import AlertItem, DispatchCheck, DispatchNotice, Dispat
 from app.schemas.dispatch import (
     AskIn,
     CloseIn,
+    ConversationDraftIn,
     DeclineIn,
     DraftConfirmIn,
     DraftIn,
@@ -252,6 +253,18 @@ def task_draft(body: DraftIn, actor: CurrentActor = Depends(get_current_actor),
     try:
         return dispatch_service.propose_from_chat(
             db, actor.username, body.session_id, body.question, body.alert_id, body.today)
+    except DispatchError as exc:
+        _fail(exc)
+
+
+@router_tasks.post('/draft/from-conversation', summary='把这段对话变成任务草稿（不判意图，需人工确认）')
+def task_draft_from_conversation(body: ConversationDraftIn,
+                                 actor: CurrentActor = Depends(get_current_actor),
+                                 db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return dispatch_service.draft_from_conversation(
+            db, actor.username, body.session_id, body.alert_id, body.today, body.instruction)
     except DispatchError as exc:
         _fail(exc)
 

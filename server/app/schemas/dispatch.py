@@ -108,3 +108,11 @@ class DraftConfirmIn(BaseModel):
     message: str | None = Field(None, max_length=200)
     overrides: dict[str, Any] | None = Field(
         None, description='确认前改：assignees/title/requirement/时间/核销')
+
+
+class ConversationDraftIn(BaseModel):
+    """把整段对话变成任务草稿（前端"把这段对话变成任务"按钮，不判意图）。"""
+    session_id: str = Field(..., min_length=1, max_length=64)
+    instruction: str = Field('', max_length=4000, description='可补充一句要求；空=用最后一条用户原话')
+    alert_id: int | None = None
+    today: str | None = None

@@ -1333,26 +1333,20 @@ def ask(db: Session, account: str, task_id: int, question: str, today: str | Non
 
 CONFIRM_WORDS = ('确认', '确定', '可以', '同意', '下发', '就这', '没问题', 'ok', 'OK', '行')
 CANCEL_WORDS = ('取消', '算了', '不办', '先不发', '不用了')
-INTENT_EXPLICIT = ('建任务', '创建任务', '发起任务', '下发', '派给', '安排', '督办')
-INTENT_ACTION = ('让', '要求', '整改', '回执', '交方案', '给方案', '花完', '提升', '降', '催',
-                 '落实', '盯', '处理', '解决', '完成')
+# ⚠️ 这里**不做关键词意图判断**：实测四个象限都存在（有词不是任务 / 无词是任务 /
+#    有词是任务 / 无词不是任务）。意图交给 `dispatch_ai.classify_task_intent`（语义），
+#    模型不可用时**只认明确指令**（保守降级），且最终由人确认兜底。
+INTENT_EXPLICIT = ('建任务', '创建任务', '发起任务', '下发', '派给', '督办')
 
 
-def _detect_intent(text: str, strict: bool = False) -> tuple[bool, str]:
+def _fallback_intent(text: str) -> tuple[bool, str]:
+    """模型不可用时的保守规则：只认"明确说要建任务/下发"的指令。"""
     t = (text or '').strip()
     if len(t) < 4:
         return False, '太短'
-    explicit = any(k in t for k in INTENT_EXPLICIT)
-    action = any(k in t for k in INTENT_ACTION)
-    if not (explicit or action):
-        return False, '没有"要办一件事"的动作词'
-    if not explicit and t.rstrip('。.!！ ').endswith(('吗', '呢', '？', '?')):
-        return False, '是提问，不是要办一件事'
-    if strict and not explicit:
-        has_due = bool(re.search(r'\d+\s*(天|日|周|个?月)|月底|年底|本周', t))
-        if not has_due:
-            return False, '自动模式：没有明确时限，先不打扰'
-    return True, ''
+    if any(k in t for k in INTENT_EXPLICIT):
+        return True, ''
+    return False, '模型不可用，且没有明确指令（建任务/创建任务/发起任务/下发/派给/督办）'
 
 
 def _parse_due(text: str, today: str):
@@ -1451,21 +1445,51 @@ def _draft_confirm_text(task: DispatchTask, assignee_names: list[str]) -> str:
 
 def propose_from_chat(db: Session, account: str, session_id: str, question: str,
                       alert_id: int | None = None, today: str | None = None,
-                      strict: bool = False) -> dict:
-    """对话触发：识别意图 → 拟任务草稿（status=draft）→ 往会话里发确认消息。"""
-    from app.services import alert_service
+                      strict: bool = False, mode: str = 'explicit',
+                      history: list[dict] | None = None) -> dict:
+    """对话触发：**语义判断**意图 → 拟任务草稿（draft）→ 往会话里发确认消息。
+
+    mode：
+      · `auto`     —— `/api/ask` 自动挂：置信度 ≥0.7 才拟稿（不打扰）
+      · `explicit` —— 用户主动调 `/api/tasks/draft`：置信度 ≥0.4 就拟稿
+      · `force`    —— 用户点了"把这段对话变成任务"：不再判意图，直接拟稿
+    模型不可用时退回保守规则（只认明确指令），并仍由人确认兜底。
+    """
+    from app.services import alert_service, dispatch_ai
 
     act = _actor(account)
     q = (question or '').strip()
     today = (today or time.strftime('%Y-%m-%d'))[:10]
     alert = db.get(AlertItem, int(alert_id)) if alert_id else None
 
-    ok, why = _detect_intent(q, strict=strict)
+    cls: dict = {'available': False, 'reason': 'force'}
+    if mode == 'force':
+        ok, why = True, '用户要求把这段对话变成任务'
+    else:
+        hist = history if history is not None else (
+            alert_service.recent_messages(db, session_id, 8) if session_id else [])
+        cls = dispatch_ai.classify_task_intent(q, hist)
+        if cls.get('available'):
+            conf = float(cls.get('confidence') or 0)
+            thr = 0.7 if mode == 'auto' else 0.4
+            ok = bool(cls.get('is_task')) and conf >= thr
+            if ok:
+                why = cls.get('reason') or ''
+            elif cls.get('is_task'):
+                why = '有办一件事的意思，但置信度 %.2f 低于 %.2f' % (conf, thr)
+            else:
+                why = cls.get('reason') or '不是要办一件事'
+        else:
+            ok, why = _fallback_intent(q)
+            if not ok:
+                why = (why + '（原因：' + str(cls.get('reason') or '') + '）')[:200]
     if not ok and not alert_id:
-        return {'intent': False, 'reason': why, 'task_id': None,
-                'message': '这段话我没听出"要办一件事"。要建任务请说：让谁、办什么、几号前。'}
+        return {'intent': False, 'reason': why, 'task_id': None, 'classifier': cls,
+                'message': '这段话我没听出"要办一件事"。要建任务请说：让谁、办什么、几号前；'
+                           '或者点"把这段对话变成任务"。'}
     if alert_id and not ok:
-        ok = True   # 从预警对话里发起，默认就是要办
+        ok = True   # 从预警对话里发起，上下文已经说明是要处置
+        why = '预警上下文'
 
     existing = db.execute(select(DispatchTask).where(
         DispatchTask.creator_id == act['employee_id'],
@@ -1530,7 +1554,8 @@ def propose_from_chat(db: Session, account: str, session_id: str, question: str,
             role_code=_role_of(c['employee_id']), state='pending'))
     _event(db, task, 'create', act, None, 'draft', q,
            {'source': 'chat', 'question': q, 'due_note': due_note,
-            'alert_id': task.alert_id})
+            'alert_id': task.alert_id, 'mode': mode, 'classifier': cls,
+            'intent_reason': why})
     db.commit()
 
     names = [c['name'] or c['login_name'] for c in cands]
@@ -1548,7 +1573,8 @@ def propose_from_chat(db: Session, account: str, session_id: str, question: str,
         meta={'kind': 'task_draft', 'task_id': task.id, 'draft': card},
         title='【任务草稿】%s' % task.title)
     return {'intent': True, 'task_id': task.id, 'status': 'draft', 'draft': card,
-            'message': text, 'session_id': session_id, 'reused': False}
+            'message': text, 'session_id': session_id, 'reused': False,
+            'classifier': cls, 'mode': mode}
 
 
 def confirm_draft(db: Session, account: str, task_id: int | None = None,
@@ -1654,6 +1680,26 @@ def pending_draft(db: Session, account: str, session_id: str) -> dict:
             'message': _draft_confirm_text(t, names)}
 
 
+def draft_from_conversation(db: Session, account: str, session_id: str,
+                            alert_id: int | None = None, today: str | None = None,
+                            instruction: str = '') -> dict:
+    """把**整段对话**变成任务草稿（前端"把这段对话变成任务"按钮）。
+
+    与 /draft 的区别：这里**不判意图**（用户已明确要求），直接用最近一轮用户原话/指令拟稿。
+    """
+    from app.services import alert_service
+
+    hist = alert_service.recent_messages(db, session_id, 10)
+    if not hist:
+        raise DispatchError('EMPTY_CONVERSATION', '这段会话还没有内容，没法变成任务', 422)
+    q = (instruction or '').strip()
+    if not q:
+        users = [h['content'] for h in hist if h.get('role') == 'user']
+        q = users[-1] if users else hist[-1].get('content') or ''
+    return propose_from_chat(db, account, session_id, q, alert_id=alert_id,
+                             today=today, mode='force', history=hist)
+
+
 # ─────────────────────────────────────────────────────────── 通知
 
 def list_notices(db: Session, account: str, unread: bool = False, limit: int = 50) -> dict:
@@ -1692,4 +1738,4 @@ __all__ = ['DispatchError', 'recommend', 'preview', 'create', 'accept', 'decline
            'tick', 'check_task', 'list_tasks', 'task_detail', 'stats',
            'list_notices', 'read_notice',
            'add_attachment', 'list_attachments', 'attachment_file', 'report_docx', 'ask',
-           'propose_from_chat', 'confirm_draft', 'pending_draft']
+           'propose_from_chat', 'confirm_draft', 'pending_draft', 'draft_from_conversation']

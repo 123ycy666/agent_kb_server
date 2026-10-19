@@ -326,7 +326,7 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
             try:
                 prop = _ds.propose_from_chat(
                     _db, actor.username, sid_for_task, q,
-                    alert_id=data.get("alert_id"), today=today, strict=True)
+                    alert_id=data.get("alert_id"), today=today, mode="auto")
                 if prop.get("intent"):
                     r["task_draft"] = prop
             finally:

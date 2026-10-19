@@ -393,7 +393,6 @@ def ensure_chat_session(db: Session, session_id: str, account: str,
 def append_chat_message(db: Session, session_id: str, account: str, sender_type: int,
                         content: str, msg_type: int = 1, meta: dict | None = None,
                         title: str = '') -> dict | None:
-    """往任意会话追加一条消息（sender_type：2=AI / 3=系统），返回消息 dict。"""
     skey = ensure_chat_session(db, session_id, account, title)
     if skey is None:
         return None
@@ -469,6 +468,17 @@ def _append(db: Session, skey: int, sid: str, sender_type: int, content: str,
     db.commit()
     return {'id': int(row['id']), 'seq_no': int(row['seq_no']), 'sender_type': sender_type,
             'msg_type': msg_type, 'content': content, 'meta': meta}
+
+
+def recent_messages(db: Session, session_id: str, limit: int = 8) -> list[dict]:
+    """取会话最近几条消息（给"这句话是不是任务"的语义判断做上下文）。"""
+    rows = _msg_rows(db, session_id) or []
+    out = []
+    for r in rows[-max(1, int(limit)):]:
+        st = r.get('sender_type')
+        role = 'user' if st == 1 else ('assistant' if st == 2 else 'system')
+        out.append({'role': role, 'content': str(r.get('content') or '')[:800]})
+    return out
 
 
 def open_chat(db: Session, account: str, alert_id: int, today: str | None = None) -> dict | None:
