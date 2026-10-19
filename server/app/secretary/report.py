@@ -13,15 +13,9 @@ from app.secretary import semantic
 from app.secretary import tools_db
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# 技能文档与两个规则 JSON 都在 secretary/skills/ 下（预算分配.md / 判据规则.md /
-# 数据表说明书.md / 技能触发配置.json / 状态变更规则.json）。
-#
-# ⚠️ 2026-10-16 修正：原为 os.path.join(os.path.dirname(HERE), 'skills')，
-#    即 app/skills —— 该目录**不存在**（多算了一层 dirname）。
-#    受害的不止 SKILL_DOC，而是 SKILL_DIR 下全部内容：
-#      · list_skill_docs() 的 os.listdir 抛异常被静默吞掉 → 返回 []（技能台空白）
-#      · list_triggers() / state_change_sim() 读不到两个 JSON → 技能触发与状态变更为空
-#      · _read(SKILL_DOC/TABLE_DOC/RULE_DOC) → 报告技能读不到技能文档
+# 技能文档与两个规则 JSON 就在 secretary/skills/ 下（跟代码同目录，打包不会漏）。
+# ⚠️ 2026-10-16 平台线修正过这个路径：原来写 dirname(HERE)/skills（= app/skills，不存在），
+#    list_skill_docs 的异常被静默吞掉 ⇒ 技能台整片空白且没有任何报错。
 SKILL_DIR = os.path.join(HERE, 'skills')
 SKILL_DOC = os.path.join(SKILL_DIR, '预算分配.md')
 TABLE_DOC = os.path.join(SKILL_DIR, '数据表说明书.md')
@@ -337,6 +331,10 @@ def list_triggers():
     try:
         with open(p, encoding='utf-8') as f:
             cfg = _json.load(f)
+    except FileNotFoundError:
+        # 触发配置已经不参与问答链路（问答只认《判据规则》），文件被撤掉是正常状态：
+        # 这里返回空触发台即可，不要把「文件不存在」当成错误回给前端。
+        return {'trigger_types': {}, 'skills': [], 'note': '触发配置未启用（问答只按《判据规则》）'}
     except Exception as e:
         return {'trigger_types': {}, 'skills': [], 'error': str(e)[:200]}
     docs = {d['name']: d['content'] for d in list_skill_docs()}
@@ -364,9 +362,8 @@ def list_skill_docs():
                     break
             out.append({'name': fn, 'title': title, 'chars': len(txt), 'content': txt})
     except Exception as e:                          # noqa: BLE001
-        # ⚠️ 这里原来是 `pass`：目录不存在时**静默返回空列表**，页面表现成
-        #    「技能台什么都没有」，排查时完全没有线索（2026-10-16 就被这个坑到，
-        #    实际是 SKILL_DIR 路径算错）。改成打日志，别再吞。
+        # 原来是 `pass`：目录不存在时静默返回空列表，页面表现成「技能台什么都没有」，
+        # 排查时完全没有线索（2026-10-16 就是这么被坑的）。改成打日志，别再吞。
         print('[report] 读取技能文档目录失败（%s）：%s: %s'
               % (SKILL_DIR, type(e).__name__, e), flush=True)
     return out

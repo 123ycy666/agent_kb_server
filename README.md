@@ -155,3 +155,26 @@ copy .env.example .env
 内容库 PostgreSQL 16 + pgvector；员工库 MySQL（只读）；
 前端 React 18 + TypeScript + Vite + Ant Design；
 模型层 HTTP 调用，三档可切换（内网 vLLM/Xinference/Ollama、公网 compatible-mode、mock 演示）。
+
+---
+
+## 九、2026-10-19 合流说明（本地秘书线并入本仓库）
+
+本仓库是**平台线**（知识库 + 管理面）与**秘书线**（问数/预警）合流后的仓库。
+合流时按「新仓库没有的功能以本地为准」处理，具体如下：
+
+| 项 | 结论 |
+|---|---|
+| 秘书本体位置 | server/app/secretary/（原本地仓库的 secretary/，导入路径统一为 from app.secretary import x） |
+| 服务端口 | **8200 单进程**（/api/v1/* 知识库 + /api/* 问数 + /agent/* 三张问答页 + / 前端 SPA） |
+| 内容库 | PostgreSQL 16 + pgvector，库名 ad_new（宿主 5433 → 容器 5432） |
+| 对话记录 / 纠错词典 | 与内容库同库（ad_new），走 pgdb 兼容层；词典导入用 db/lexicon.sql（6 张 t_nc_*，41563 行） |
+| 每日预警 | POST /api/alerts/daily（server/app/api/v1/agent.py），鉴权 = 请求头 X-Internal-Token（.env 的 INTERNAL_SERVICE_TOKEN）；**前端不做页面**，由外部定时任务调用 |
+| 页面生成（分析大屏） | **已关闭并注释**（config.PAGE_ON=0；agent.render_page* 直接返回空串） |
+| 技能文档 | server/app/secretary/skills/（跟代码同目录，打包不会漏） |
+| 预警口径配置 | server/app/secretary/alert_rules.py（改预警只改这里） |
+
+验证入口（都不连模型）：
+
+    py -X utf8 server/tests/agent/test_merge_contract.py    # 合流契约：工具/守卫/配置/目录/预警
+    py -X utf8 server/tests/test_skills_paths.py            # 技能目录必须存在且可读

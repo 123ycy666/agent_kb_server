@@ -37,11 +37,9 @@ def _conn():
     """记录库的连接。**每次用完就关** —— 写入频率低（一次问答一次），
     长连接反而要处理探活/失效，不划算。
 
-    这里显式写参数、不用 `**config.DB`：config.DB 里的键名是 `db`，
-    而 pymysql 1.1+ 已把它标为废弃（要求用 `database`），传进去会刷 DeprecationWarning。
+    2026-10-15 数据层合并：对话记录已迁到 PG ad_new（与知识库同库），
+    通过 pgdb 兼容层保持原有 pymysql 风格代码不变。
     """
-    # 2026-10-15 数据层合并：对话记录迁到 PG ad_new（与知识库同库），
-    # 通过 pgdb 兼容层保持原有 pymysql 风格代码不变。
     return pgdb.connect(autocommit=True)
 
 
@@ -212,9 +210,8 @@ def _save_sync(result, sid, user_id, user_code, client_ip, channel):
             return {'session_id': sid, 'qa_id': qa_id,
                     'steps': result.get('trace') or [], 'ok': True}
         except Exception as e:                      # noqa: BLE001
-            # 2026-10-15 迁 PG：只对「唯一约束冲突」（seq_no 撞键，PG 的
-            # UniqueViolation）重试一次；其余异常照原样抛出
-            # （外层本来就要求"落库失败不影响回答"）。
+            # 迁 PG 后只对「唯一约束冲突」（seq_no 撞键，PG 的 UniqueViolation）重试一次；
+            # 其余异常照原样抛出（外层本来就要求"落库失败不影响回答"）。
             if not any(k in type(e).__name__ for k in ("UniqueViolation", "IntegrityError")):
                 raise
             last_err = e
@@ -561,9 +558,8 @@ def sessions_needing_summary(every=5, limit=20):
     c = _conn()
     try:
         cur = c.cursor()
-        # 2026-10-15 迁 PG：HAVING 不能引用 select 别名（MySQL 可以），
-        # 包一层子查询，语义完全一致。
         cur.execute(
+            # 迁 PG：HAVING 不能引用 select 别名（MySQL 可以），包一层子查询，语义完全一致。
             'SELECT t.session_id FROM ('
             '  SELECT s.session_id, s.last_msg_at, '
             '         (SELECT COUNT(*) FROM t_chat_message m '

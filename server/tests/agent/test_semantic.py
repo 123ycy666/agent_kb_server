@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """语义层自检：白名单只认他们在线上维护的 ai_data.*，不含我们自己造的表。不依赖大模型。"""
-import os as _os, sys as _sys
-_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import io, sys
+sys.path.insert(0, __file__.rsplit(chr(92), 1)[0])
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 from app.secretary import semantic
 from app.secretary import tools_db
+
+
 def check(cond, msg):
     if not cond:
         raise AssertionError(msg)

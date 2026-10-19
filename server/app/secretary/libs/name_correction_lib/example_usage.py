@@ -6,8 +6,8 @@
 ★ 前置条件：需要同目录下有 data/（7 个 CSV），否则构造 Corrector 会抛
   FileNotFoundError。本项目（项目管理秘书）的词典已搬进数据库，
   部署包里**没有 data/** —— 要在本项目里试，请改用服务层：
-      from name_correction_lib import use_source
-      from lex_source import MysqlSource
+      from app.secretary.libs.name_correction_lib import use_source
+      from app.secretary.lex_source import MysqlSource
       use_source(MysqlSource())
   或者直接跑服务层的自测：  python ../../name_fix.py
 """
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from name_correction_lib import Corrector   # noqa: E402
+from app.secretary.libs.name_correction_lib import Corrector   # noqa: E402
 
 # 全局只建一次。构造会加载两万条索引（200~300ms），之后单次调用 1~15ms。
 CORRECTOR = Corrector()

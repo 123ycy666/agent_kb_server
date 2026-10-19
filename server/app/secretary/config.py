@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """配置：读合并项目根目录的 .env（与知识库后端同一份），模型通道跟随 MODEL_CHANNEL。
 
-2026-10-14 合并改造：
-- .env 位置：优先合并项目根目录（../.env，即 agent/ 的上一级），
-  其次 agent/.env（独立部署时用）。SECRETARY_ENV 仍可强制指定。
-- MySQL 连接：新键名 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD，
-  兼容旧键 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD。
-- 模型端点：不再单独读 LLM_BASE_URL/LLM_API_KEY，改由 MODEL_CHANNEL
-  （mock/local/online）派生；旧键仍可作为覆盖。
+2026-10-19 合流（本地秘书线 + 平台线）说明：
+- .env 位置：优先合并项目根目录（server/ 的上一级），其次 app/secretary/.env；
+  SECRETARY_ENV 仍可强制指定。
+- MySQL 连接：新键 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD，
+  兼容旧键 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD（两边 .env 都认）。
+- 模型端点：不再单独读 LLM_BASE_URL/LLM_API_KEY，改由 MODEL_CHANNEL（local/online）
+  派生；旧键仍可作为覆盖。
 """
 import os
 import re
@@ -15,10 +15,11 @@ import re
 HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT_ENV = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), '.env')
 _LOCAL_ENV = os.path.join(HERE, '.env')
-# 合并项目：根 .env 是唯一配置源；独立部署时才落到 agent/.env
 ENV_PATH = os.environ.get('SECRETARY_ENV',
-                         _ROOT_ENV if os.path.exists(_ROOT_ENV) else _LOCAL_ENV)
+                          _ROOT_ENV if os.path.exists(_ROOT_ENV) else _LOCAL_ENV)
 
+# 只用于「.env 文件整个不存在」时的提示文案；真正的必填校验在 DB 建好之后做
+# （两套键名都认，不在这里二选一）。
 REQUIRED = ('MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD')
 
 _TEMPLATE_HINT = (
@@ -45,11 +46,6 @@ def load_env(path=ENV_PATH):
         # 剥离行尾注释：仅当 '#' 前有空白时才算注释，避免截断含 '#' 的密码
         v = re.split(r'\s+#', v, maxsplit=1)[0]
         d[k.strip()] = v.strip()
-    missing = [k for k in REQUIRED if not d.get(k)]
-    if missing:
-        raise SystemExit('[配置] %s 里这些项还是空的：%s\n'
-                         '       填好再启动（说明见 .env.example）。'
-                         % (path, ' / '.join(missing)))
     return d
 
 
@@ -57,15 +53,22 @@ ENV = load_env()
 
 # MySQL 连接：新键 MYSQL_* 优先，兼容旧键 DB_*
 DB = {
-    'host': ENV.get('MYSQL_HOST') or ENV['DB_HOST'],
-    'port': int(ENV.get('MYSQL_PORT') or ENV['DB_PORT']),
-    'user': ENV.get('MYSQL_USER') or ENV['DB_USER'],
-    'password': ENV.get('MYSQL_PASSWORD') or ENV['DB_PASSWORD'],
+    'host': ENV.get('MYSQL_HOST') or ENV.get('DB_HOST') or '',
+    'port': int(ENV.get('MYSQL_PORT') or ENV.get('DB_PORT') or 3306),
+    'user': ENV.get('MYSQL_USER') or ENV.get('DB_USER') or '',
+    'password': ENV.get('MYSQL_PASSWORD') or ENV.get('DB_PASSWORD') or '',
     'db': 'dlj_data',
 }
 SCHEMA = 'dlj_data'
 
-# 三个库名（与知识库后端 .env 保持一致）
+_missing_db = [k for k in ('host', 'user', 'password') if not DB[k]]
+if _missing_db:
+    raise SystemExit('[配置] %s 里 MySQL 连接项为空：%s\n'
+                     '       填 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD'
+                     '（或旧键 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD）。'
+                     % (ENV_PATH, ' / '.join(_missing_db)))
+
+# 对话记录/词典库名（与知识库后端 .env 保持一致）
 AGENT_DB = (os.environ.get('SECRETARY_AGENT_DB')
             or ENV.get('MYSQL_DB_AGENT') or ENV.get('SECRETARY_AGENT_DB') or 'agent_data')
 
@@ -119,7 +122,7 @@ RULES_ON = (os.environ.get('SECRETARY_RULES') or '1').strip().lower() \
     not in ('0', 'false', 'no', 'off')
 
 # ══════════════════════════════════════════════════════════
-#  模型通道（与知识库后端同一套 .env：MODEL_CHANNEL = mock | local | online）
+#  模型通道（与知识库后端同一套 .env：MODEL_CHANNEL = local | online）
 # ══════════════════════════════════════════════════════════
 # 问答必须用真实模型，没有 mock 档：
 #   local  = 内网自建（vLLM / Xinference / Ollama，OpenAI 兼容）
@@ -132,13 +135,19 @@ if MODEL_CHANNEL not in ('local', 'online'):
         '       知识库后端可以用 mock 演示，但问数 agent 不行 —— 没有模型就没有答案。' % MODEL_CHANNEL)
 
 if MODEL_CHANNEL == 'online':
-    LLM_BASE = (os.environ.get('LLM_BASE_URL') or ENV.get('ONLINE_LLM_BASE_URL') or '').rstrip('/')
-    LLM_KEY = os.environ.get('LLM_API_KEY') or ENV.get('ONLINE_LLM_API_KEY') or ''
-    MODEL = os.environ.get('SECRETARY_MODEL') or ENV.get('ONLINE_LLM_MODEL') or 'qwen3.8-max'
+    LLM_BASE = (os.environ.get('LLM_BASE_URL') or ENV.get('LLM_BASE_URL')
+                or ENV.get('ONLINE_LLM_BASE_URL') or '').rstrip('/')
+    LLM_KEY = (os.environ.get('LLM_API_KEY') or ENV.get('LLM_API_KEY')
+               or ENV.get('ONLINE_LLM_API_KEY') or '')
+    MODEL = (os.environ.get('SECRETARY_MODEL') or ENV.get('ONLINE_LLM_MODEL')
+             or ENV.get('LLM_MODEL_ANSWER') or ENV.get('LLM_MODEL_ROUTER') or 'qwen3.8-max').strip()
 else:  # local
-    LLM_BASE = (os.environ.get('LLM_BASE_URL') or ENV.get('LOCAL_LLM_BASE_URL') or '').rstrip('/')
-    LLM_KEY = os.environ.get('LLM_API_KEY') or ENV.get('LOCAL_LLM_API_KEY') or ''
-    MODEL = os.environ.get('SECRETARY_MODEL') or ENV.get('LOCAL_LLM_MODEL') or 'deepseek-chat'
+    LLM_BASE = (os.environ.get('LLM_BASE_URL') or ENV.get('LLM_BASE_URL')
+                or ENV.get('LOCAL_LLM_BASE_URL') or '').rstrip('/')
+    LLM_KEY = (os.environ.get('LLM_API_KEY') or ENV.get('LLM_API_KEY')
+               or ENV.get('LOCAL_LLM_API_KEY') or '')
+    MODEL = (os.environ.get('SECRETARY_MODEL') or ENV.get('LOCAL_LLM_MODEL')
+             or ENV.get('LLM_MODEL_ANSWER') or ENV.get('LLM_MODEL_ROUTER') or 'deepseek-chat').strip()
 
 if not LLM_BASE:
     raise SystemExit(
@@ -207,7 +216,6 @@ _MODELS_UNAVAILABLE = {
 #            由 LOCAL_MODELS 指定（逗号分隔）；不配则只有 LOCAL_LLM_MODEL(=MODEL)。
 #   为什么必须区分：内网模型服务上**根本没有** qwen/kimi/glm/MiniMax 这些公网模型，
 #   如果清单不区分，内网部署时下拉框里会列出一堆选了就报错的模型。
-#   注意 MODEL 本身（默认模型）本来就是按通道取的，这里只是让"清单"与它保持一致。
 if MODEL_CHANNEL == 'local':
     _local_ids = [x.strip() for x in
                   (os.environ.get('LOCAL_MODELS') or ENV.get('LOCAL_MODELS') or MODEL).split(',')
@@ -218,24 +226,19 @@ else:
     MODELS = [m for m in _MODELS_ONLINE if m['id'] not in _MODELS_UNAVAILABLE]
 
 MODEL_IDS = [m['id'] for m in MODELS]
-MODEL_IDS = [m['id'] for m in MODELS]
 
 # ---------------------------------------------------------------------------
 # 知识库（企业级本地知识库系统 · 自建 RAG）
 #
-# 2026-10-13 起**不再使用阿里云百炼知识库**：检索改为调用自建知识库的
-# `POST /api/v1/search`（只取切片，答案仍由本服务自己的模型生成），客户端见 kb_client.py。
-# 知识库的建库/上传/预览/冲突处理都在**它自己的 Web 界面**上做，本服务不再接管。
-#
-# 三条必须记住的线上约定：
-#  1. **必须用公网 IP**：nginx 的 server_name 是 47.121.183.81，
-#     用域名或 127.0.0.1 会落到默认站 → **502**。
-#  2. 认证 = `POST /auth/login` 拿 JWT（**12 小时过期**），kb_client 内建 401 自动重登。
-#  3. 下面几个键**环境变量优先、其次读 .env**（`.env` 里配了才生效，注意占位）。
+# 2026-10-13 起**不再使用阿里云百炼知识库**；2026-10-15 单进程合并后，
+# 检索改为**进程内直调**（app/secretary/kb_adapter.py），不再有 HTTP 往返。
+# kb_client.py 已随合并退役；下面 KB_BASE/USER/PASSWORD 只为「连外部知识库」的
+# 独立部署场景保留，进程内模式下不参与连接。
 # ---------------------------------------------------------------------------
 KB_BASE = (os.environ.get('SECRETARY_KB_BASE')
-           or ENV.get('SECRETARY_KB_BASE') or 'http://127.0.0.1:8000/api/v1').strip()
-# 内部服务令牌（与知识库后端 .env 的 INTERNAL_SERVICE_TOKEN 一致）
+           or ENV.get('SECRETARY_KB_BASE') or 'http://127.0.0.1:8200/api/v1').strip()
+# 内部服务令牌（与知识库后端 .env 的 INTERNAL_SERVICE_TOKEN 一致）；
+# 预警等「无登录身份的外部定时任务」也用它放行，见 app/api/v1/agent.py。
 KB_INTERNAL_TOKEN = (os.environ.get('INTERNAL_SERVICE_TOKEN')
                      or ENV.get('INTERNAL_SERVICE_TOKEN') or '').strip()
 # 兼容保留：连外部知识库（非本地）时才需要账号密码登录
@@ -252,6 +255,14 @@ KB_IDS = [int(x) for x in
 # AI 只能查这些表（留空 = 用业务字典里登记的全部）。
 # 六项指标已统一到这两张预计算表：快照（本期值）+ 对比（同比/环比）。
 TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').split(',') if x]
+
+# 单题时间预算（秒）：超过就停止继续查数，用已查到的内容作答，并在回答里说明还缺什么。
+# 实测「不指定对象」的问题（「这单钱都花哪了」）会一直翻表到客户端超时（600 s 无响应）。
+QUESTION_BUDGET_S = float(ENV.get('SECRETARY_QUESTION_BUDGET') or '240')
+
+# 数字闸：回答里的金额必须能在本轮 SQL 结果（含 summary、成对和差比）里找到出处，
+# 找不到就重问一次。关掉设 SECRETARY_NUMBER_GUARD=0。
+NUMBER_GUARD_ON = (ENV.get('SECRETARY_NUMBER_GUARD') or '1') not in ('0', 'false', 'False')
 
 # 系统提示从 ai_data.ai_prompt 注入（取 IS_new=1 的最新版），不在代码里写死。
 # 列表里不存在的 key 会自动跳过，所以可以先接好槽位、等内容补上就自动生效。
@@ -278,7 +289,10 @@ COMPLETION_URL = (LLM_BASE.split('/compatible-mode')[0] +
 RULES_PRIORITY = (os.environ.get('SECRETARY_RULES_PRIORITY') or '1').strip().lower() \
     not in ('0', 'false', 'no', 'off')
 
-# 工具调用步数上限：0 = 不设上限（由模型自己决定什么时候收手）
+# 工具调用步数上限：0 = 不设上限（由模型自己决定什么时候收手）。
+# ★ 2026-10-08 撤回默认值 14：Fred 明确「不要随意加上限，优化的是过程，想办法让他快点，
+#   不是限制他」。要提速就改链路（页面移出关键路径、减少每轮上下文、换更快的思考档），
+#   不许靠砍模型能查多少次来提速。保留这个开关只为压测用，默认必须是不限。
 MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))
 
 # HTTP 接口的**防呆上限**：历史对话类接口（/api/sessions、/api/history）在「要求全部返回」时，
@@ -322,8 +336,15 @@ SQL_MAX_ROWS = 200
 SQL_TIMEOUT_MS = 25000
 HTTP_TIMEOUT = 120
 
-# 分析题的「分析页面」：判出题型为分析时，额外调一次模型把结论渲染成单页 HTML 数据大屏。
-# 设 SECRETARY_PAGE=0 可关掉（关掉后 /api/ask 不再返回 page_html，回答不受影响）。
-PAGE_ON = (os.environ.get('SECRETARY_PAGE') or ENV.get('SECRETARY_PAGE') or '1').strip().lower() not in ('0', 'false', 'no')
+# 知识库检索的超时（秒）：检索只是取切片，正常 <1 秒，不该占满 HTTP_TIMEOUT。
+# 实测两个"卡到超时、一次库都没查"的问句（「今年立的项目都干到哪一步了？」600s、
+# 「我新报的单子能过吗？」420s），就是被这类下游调用拖住的。给它短超时：失败按"没检索到"处理，
+# 不影响作答；也免得把整轮问答拖死。
+KB_TIMEOUT = int(os.environ.get('SECRETARY_KB_TIMEOUT', '15'))
+
+# 分析题的「分析页面」：额外调一次模型把结论渲染成单页 HTML 数据大屏。
+# **2026-10-15 起默认关闭**（Fred：正常流程不需要这个生成页面，把它关掉）。
+# 需要时设 SECRETARY_PAGE=1 打开；关掉后 /api/ask 不再返回 page_html，回答完全不受影响。
+PAGE_ON = (os.environ.get('SECRETARY_PAGE') or ENV.get('SECRETARY_PAGE') or '0').strip().lower() in ('1', 'true', 'yes', 'on')
 # 生成分析页面用的模型：页面是纯前端代码活，用快档就够，实测比旗舰快一倍（48.7s→23.4s）
 PAGE_MODEL = (os.environ.get('SECRETARY_PAGE_MODEL') or ENV.get('SECRETARY_PAGE_MODEL') or 'qwen3.8-flash').strip()
