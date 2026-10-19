@@ -140,7 +140,7 @@ if MODEL_CHANNEL == 'online':
     LLM_KEY = (os.environ.get('LLM_API_KEY') or ENV.get('LLM_API_KEY')
                or ENV.get('ONLINE_LLM_API_KEY') or '')
     MODEL = (os.environ.get('SECRETARY_MODEL') or ENV.get('ONLINE_LLM_MODEL')
-             or ENV.get('LLM_MODEL_ANSWER') or ENV.get('LLM_MODEL_ROUTER') or 'qwen3.8-flash').strip()
+             or ENV.get('LLM_MODEL_ANSWER') or ENV.get('LLM_MODEL_ROUTER') or 'deepseek-v4.1-flash-1017').strip()
 else:  # local
     LLM_BASE = (os.environ.get('LLM_BASE_URL') or ENV.get('LLM_BASE_URL')
                 or ENV.get('LOCAL_LLM_BASE_URL') or '').rstrip('/')
@@ -167,7 +167,7 @@ _MODELS_ONLINE = [
     # 通义千问 · 3.8（最新一代）
     {'id': 'qwen3.8-max', 'label': 'Qwen3.8-Max', 'group': '通义千问', 'note': '旗舰；工具调用与长回答最稳（贵）'},
     {'id': 'qwen3.8-max-0902', 'label': 'Qwen3.8-Max-0902', 'group': '通义千问', 'note': '旗舰快照版（版本固定，便于复现）'},
-    {'id': 'qwen3.8-flash', 'label': 'Qwen3.8-Flash', 'group': '通义千问', 'note': '默认；同代轻量最快（实测 11s/7步，会多查两次库）'},
+    {'id': 'qwen3.8-flash', 'label': 'Qwen3.8-Flash', 'group': '通义千问', 'note': '同代轻量；默认已切 DeepSeek-V4.1-Flash'},
     {'id': 'qwen3.8-27b', 'label': 'Qwen3.8-27B', 'group': '通义千问', 'note': '开源尺寸，可内网自部署对照'},
     # 通义千问 · 3.7 / 3.6 / 3.5
     {'id': 'qwen3.7-max', 'label': 'Qwen3.7-Max', 'group': '通义千问（上一代）', 'note': '上一代旗舰'},
@@ -184,6 +184,7 @@ _MODELS_ONLINE = [
     {'id': 'qwen3-vl-plus', 'label': 'Qwen3-VL-Plus', 'group': '通义千问（多模态）', 'note': '能看图，适合带图表的问法'},
     {'id': 'qwen3.5-omni-plus', 'label': 'Qwen3.5-Omni-Plus', 'group': '通义千问（多模态）', 'note': '全模态'},
     # 其它厂商
+    {'id': 'deepseek-v4.1-flash-1017', 'label': 'DeepSeek-V4.1-Flash-1017', 'group': 'DeepSeek', 'note': '默认；简单题 6.7s、复杂题 25.7s，回答比 qwen-flash 更全'},
     {'id': 'deepseek-v4-pro', 'label': 'DeepSeek-V4-Pro', 'group': 'DeepSeek', 'note': '强推理，适合复杂口径推导'},
     {'id': 'deepseek-v4-flash', 'label': 'DeepSeek-V4-Flash', 'group': 'DeepSeek', 'note': 'DeepSeek 轻量档'},
     {'id': 'deepseek-v3.2', 'label': 'DeepSeek-V3.2', 'group': 'DeepSeek', 'note': ''},

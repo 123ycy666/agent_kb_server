@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # embedding/rerank/LLM 三套端点与 Key 独立配置，便于分别切换。
     online_llm_base_url: str = ""
     online_llm_api_key: str = ""
-    online_llm_model: str = "qwen3.8-flash"
+    online_llm_model: str = "deepseek-v4.1-flash-1017"
     # 冲突判定**专用**模型（2026-10-15 新增）。留空 = 跟随 online_llm_model。
     # ⚠️ 为什么必须能拆：online_llm_model 同时服务「知识库问答」与「问数 agent」，
     #    那两处需要强模型（工具调用、长回答最稳）；而冲突判定只是四分类关系判断，
