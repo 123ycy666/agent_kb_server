@@ -36,6 +36,14 @@ tar czf "$OUT" \
   --exclude=./.env \
   --exclude=./.env.local \
   --exclude=./server/tests/output \
+  --exclude=./output \
+  --exclude=./.dsh \
+  --exclude=./.venv \
+  --exclude=./venv \
+  --exclude=./A924-POC \
+  --exclude='*.tar.gz' \
+  --exclude='*.dump' \
+  --exclude='.env.bak*' \
   .
 
 echo "[4/4] 完成"
