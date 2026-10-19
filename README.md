@@ -168,7 +168,7 @@ copy .env.example .env
 | 秘书本体位置 | server/app/secretary/（原本地仓库的 secretary/，导入路径统一为 from app.secretary import x） |
 | 服务端口 | **8200 单进程**（/api/v1/* 知识库 + /api/* 问数 + /agent/* 三张问答页 + / 前端 SPA） |
 | 内容库 | PostgreSQL 16 + pgvector，库名 ad_new（宿主 5433 → 容器 5432） |
-| 对话记录 / 纠错词典 | 与内容库同库（ad_new），走 pgdb 兼容层；词典导入用 db/lexicon.sql（6 张 t_nc_*，41563 行） |
+| 对话记录 / 纠错词典 | 与内容库同库（ad_new），走 pgdb 兼容层；词典导入用 db/lexicon.sql（6 张 t_nc_*，41563 行）；对话记录建表用 db/chat_tables.sql（**全新库必跑**，平台自动建表流程里没有这 5 张表） |
 | 每日预警 | POST /api/alerts/daily（server/app/api/v1/agent.py），鉴权 = 请求头 X-Internal-Token（.env 的 INTERNAL_SERVICE_TOKEN）；**前端不做页面**，由外部定时任务调用 |
 | 页面生成（分析大屏） | **已关闭并注释**（config.PAGE_ON=0；agent.render_page* 直接返回空串） |
 | 技能文档 | server/app/secretary/skills/（跟代码同目录，打包不会漏） |
