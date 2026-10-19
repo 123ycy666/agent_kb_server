@@ -70,7 +70,7 @@ MYSQL_POOL_RECYCLE_SECONDS = 300
 def _mysql_url(db_name: str) -> str:
     # ⚠️ 用户名/密码必须 URL 编码：密码含 @ : / 等字符时
     #    （如 8FcXqrhYM@）会破坏 URL 结构，报
-    #    "Can't connect to MySQL server on '@47.121.183.81'" 这类莫名错误。
+    #    "Can't connect to MySQL server on '@<host>'" 这类莫名错误。
     from urllib.parse import quote_plus
 
     user = quote_plus(settings.mysql_user)

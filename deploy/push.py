@@ -3,7 +3,8 @@
 """把本机打好的包推到服务器并执行部署脚本（paramiko，密码或密钥登录）。
 
 用法：
-    python deploy/push.py --tar dist/merged.tar.gz --host 47.121.183.81 --user root
+    python deploy/push.py --tar dist/merged.tar.gz --host $DEPLOY_HOST --user root
+    # 目标服务器不写死在脚本里：换机器只改 --host / 环境变量 DEPLOY_HOST
     # 密码：--password / --password-file / 环境变量 DEPLOY_PASSWORD / 交互输入
 
 可选：

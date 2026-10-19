@@ -43,4 +43,5 @@ echo "  包：$OUT"
 echo "  大小：$(du -h "$OUT" | cut -f1)"
 echo
 echo "下一步："
-echo "  python deploy/push.py --tar \"$OUT\" --host 47.121.183.81 --user root"
+echo "  export DEPLOY_HOST=<服务器IP或域名>"
+echo "  python deploy/push.py --tar \"$OUT\" --host \$DEPLOY_HOST --user root"

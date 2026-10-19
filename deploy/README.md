@@ -3,16 +3,19 @@
 三步，全程幂等，可重复执行：
 
 ```bash
+# 0) 只在命令行里指定一次目标服务器（不写进任何脚本）
+export DEPLOY_HOST=<服务器IP或域名>
+
 # 1) 本机打包（语法自检 + 排除无关文件）
 bash deploy/pack.sh
 
 # 2) 推到服务器并执行部署（密码或密钥登录二选一）
-python deploy/push.py --tar dist/merged.tar.gz --host 47.121.183.81 --user root
+python deploy/push.py --tar dist/merged.tar.gz --host $DEPLOY_HOST --user root
 #   密码来源优先级：--password > --password-file > 环境变量 DEPLOY_PASSWORD > 交互输入
 #   用密钥：加 --key-file ~/.ssh/id_rsa
 
 # 3) 验收
-curl -s http://47.121.183.81/health
+curl -s http://$DEPLOY_HOST/health
 ```
 
 只上传不部署：加 `--no-deploy`。
