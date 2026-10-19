@@ -1,0 +1,15 @@
+# 构建上下文瘦身（镜像里只需要 server/ 和 web/dist）
+.git
+.workbuddy
+dist
+data
+docs
+db
+docker
+deploy
+web/node_modules
+web/src
+**/__pycache__
+**/*.pyc
+*.md
+.env*

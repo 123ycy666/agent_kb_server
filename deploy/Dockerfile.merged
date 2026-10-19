@@ -1,0 +1,21 @@
+# 合并版生产镜像（复用现有基础镜像的 Python 3.11 与依赖）
+# 磁盘紧张：**禁止**把 FROM 改成 python:3.11-slim 之类，会触发拉取 1GB+ 镜像
+FROM kb-backend:latest
+
+WORKDIR /app
+
+# 清掉旧项目代码，避免旧模块残留被误 import
+RUN rm -rf /app/app /app/scripts /app/tests /app/requirements*.txt
+
+# 新项目后端
+COPY server/ /app/
+
+# 前端构建产物：main.py 在 /app/app/main.py → parents[2] = / → 必须放到 /web/dist
+COPY web/dist/ /web/dist/
+
+# 旧镜像缺这两个：pymysql（统一用户表 MySQL 只读）、argon2（HR 密码校验）
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ pymysql argon2-cffi
+
+EXPOSE 8200
+
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8200"]

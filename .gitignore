@@ -52,3 +52,4 @@ Thumbs.db
 A924-POC/
 # 本地一次性生成物
 secretary/agent.py.bak_*
+.deploy_version
