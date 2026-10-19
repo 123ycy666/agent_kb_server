@@ -16,3 +16,6 @@
 # Windows 批处理保持 CRLF（cmd 对 LF 的兼容性差）
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Dockerfile / dockerignore 必须 LF（CRLF 会让 RUN 续行带上 CR，构建报错）
+deploy/*.merged text eol=lf
