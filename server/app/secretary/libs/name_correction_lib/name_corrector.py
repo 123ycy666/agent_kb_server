@@ -628,6 +628,22 @@ def _read(name: str) -> list:
         return list(csv.DictReader(f))
 
 
+def _is_glued_homophone(text: str, s: int, e: int, frag: str, hit) -> bool:
+    """纯同音（汉字一个都不重合）、又紧贴功能字的片段 → 判为噪声，不归一。
+
+    实测：「全市立了多少个工单？」里的「市立」(shili) 命中「十里供电所」，
+    整句被改成「全十里供电所了多少个工单？」，这一问直接废掉。
+    而真错字（「凉水」→「两水供电所」）至少有一个汉字重合，不受此限。
+    """
+    if getattr(hit, 'how', '') == '已是标准名':
+        return False
+    if any(a == b for a, b in zip(_area_core(frag), _area_core(hit.std or ''))):
+        return False
+    before = text[s - 1] if s > 0 else ''
+    after = text[e] if e < len(text) else ''
+    return before in FILLER_CHARS or after in FILLER_CHARS
+
+
 class Corrector:
     def __init__(self) -> None:
         # ---- 错字表（长词优先，避免「供电服务站」被「供电所」部分替换）
@@ -810,6 +826,23 @@ class Corrector:
             if w != r and w in text:
                 if any(t in text and w in t for t in self.strict_terms):
                     continue
+                # 不许跨词边界替换：实测错法表里「年分 → 年份」把「环潭今年分了多少还剩多少？」
+                # 改成了「环潭今年份了多少还剩多少？」。「年分」在这里跨在「今年 | 分了」中间。
+                # 判据：片段紧跟在年/月的量词修饰字之后，或后面紧跟「了/着/过」这类动词标记。
+                _bad = False
+                _start = 0
+                while True:
+                    _i = text.find(w, _start)
+                    if _i < 0:
+                        break
+                    _before = text[_i - 1] if _i > 0 else ''
+                    _after = text[_i + len(w)] if _i + len(w) < len(text) else ''
+                    if (w[:1] in ('年', '月') and _before in '今去明上下本当同每这那') or _after in '了着过':
+                        _bad = True
+                        break
+                    _start = _i + 1
+                if _bad:
+                    continue
                 text = text.replace(w, r)
                 out.word_fixes.append({"错误": w, "正确": r,
                                        "频率": row["频率等级"], "错因": row["错因类型"]})
@@ -970,6 +1003,15 @@ class Corrector:
                 off = self._code(best).find(code)
                 if off >= 0:
                     fixed = self._slice_by_code(best, off, len(code))
+                    # 纯同音（汉字一个都不重合）、又紧贴功能字 → 判为噪声，不动原文。
+                    # 实测「全市立了多少个工单？」被这一层改成「全十里了多少个工单？」：
+                    # 「市立」(shili) 与「十里供电所」同音、前后是「全」「了」两个功能字。
+                    # 真错字（「量水」→「两水」）至少有一个汉字重合，不受此限。
+                    if fixed and fixed != frag and not any(a == b for a, b in zip(frag, fixed)):
+                        _before = text[s - 1] if s > 0 else ''
+                        _after = text[e] if e < len(text) else ''
+                        if _before in FILLER_CHARS or _after in FILLER_CHARS:
+                            fixed = ''
                     if fixed and fixed != frag:
                         cur = fixed
                         text = text[:s] + fixed + text[e:]
@@ -1108,6 +1150,21 @@ class Corrector:
             if len(uniq) != 1:
                 continue
             best = uniq[0]
+            # 不许跨词边界替换：片段首字与**前一个字**能组成一个已知词（「今年|分了」里的「年分」），
+            # 或尾字与后一个字能组成已知词 —— 说明切分切在词中间，这种「纠正」是假的。
+            # 实测：「环潭今年分了多少还剩多少？」被业务词表改成「环潭今年份了多少还剩多少？」。
+            _pre = text[s - 1] + frag[0] if s > 0 else ''
+            _post = frag[-1] + text[e] if e < len(text) else ''
+            if (_pre and _pre in self.split_words) or (_post and _post in self.split_words):
+                continue
+            # 纯同音（汉字一个都不重合）又紧贴功能字 → 判为噪声，不改。
+            # 实测「全市立了多少个工单？」被改成「全十里了多少个工单？」：
+            # 「市立」(shili) 与业务词表里的「十里」同音，前后又都是功能字（全 / 了）。
+            if not any(a == b for a, b in zip(frag, best)):
+                before = text[s - 1] if s > 0 else ''
+                after = text[e] if e < len(text) else ''
+                if before in FILLER_CHARS or after in FILLER_CHARS:
+                    continue
             text = text[:s] + best + text[e:]
             out.word_fixes.append({
                 "错误": frag, "正确": best,
@@ -1478,6 +1535,8 @@ class Corrector:
         hits: list[NameResolution] = []
         for s, e, frag in reversed(self._resolve_spans(t)):
             hit = self._best_name(frag)
+            if hit is not None and _is_glued_homophone(t, s, e, frag, hit):
+                hit = None                     # 纯同音又贴着功能字：判为噪声，不动原文
             if hit is None:
                 out.unresolved.append({"文本": frag, "最接近": self._nearest(frag)})
                 continue
@@ -1771,6 +1830,13 @@ class Corrector:
         unit_cands = [c for c in cands if c[1] in UNIT_KINDS]
         norm_pool = prefix_all if len(prefix_all) >= 2 else [
             c[0] for c in cands if c[1] == "台区"]
+        if len(norm_pool) >= 2 and not unit_cands:
+            # 两个字的地名**不许纯靠同音归一**：实测「全市立了多少个工单？」里的「市立」(shili)
+            # 命中 32 个「十里…」台区，整句被改成「全10里台区了多少个工单？」，问题直接废掉。
+            # 两字要求至少一个字面重合（「公家」→「龚家棚」这类仍保留），三字起才放开同音。
+            if len(core) <= 2:
+                norm_pool = [nm for nm in norm_pool
+                             if sum(1 for a, b in zip(core, self.area_core_str.get(nm, '')) if a == b) >= 1]
         if len(norm_pool) >= 2 and not unit_cands:
             got = self._place_level_name(norm_pool, core, qc, qd, frag)
             if got:

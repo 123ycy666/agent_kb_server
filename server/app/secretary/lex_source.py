@@ -96,6 +96,7 @@ class MysqlSource:
     # -------------------------------------------------- 连接
     def _c(self):
         if self._conn is None:
+            # 2026-10-15 数据层合并：词典已迁到 PG ad_new，走 pgdb 兼容层
             self._conn = pgdb.connect(autocommit=True)
         return self._conn
 
@@ -140,12 +141,14 @@ class MysqlSource:
                 cur.execute('SELECT %s FROM `%s` WHERE `deleted_flag` = 0'
                             % (cols, table))
                 raw = cur.fetchall()
-            except Exception as e:
+            except Exception as e:                      # noqa: BLE001
                 # 表不存在 -> 归成 FileNotFoundError，和「CSV 文件缺失」同语义，
                 # 这样调用方的降级分支照常生效（否则整个纠错步直接挂掉）。
-                if e.args and e.args[0] == _ERR_NO_TABLE:
+                # PG 的「表不存在」是 sqlstate 42P01，MySQL 是 errno 1146，两边都认。
+                code = getattr(e, 'sqlstate', None) or (e.args[0] if e.args else None)
+                if code in (_ERR_NO_TABLE, '42P01'):
                     raise FileNotFoundError(
-                        '词典表不存在：%s（请先执行 tools/lexicon_schema.sql 建表）'
+                        '词典表不存在：%s（请先导入 db/lexicon.sql）'
                         % table) from e
                 raise
             finally:
@@ -162,7 +165,7 @@ class MysqlSource:
     @staticmethod
     def current_version(db=None) -> str:
         """查一次词典版本指纹。查不动就抛异常，由调用方决定是否沿用旧词典。"""
-        # 2026-10-15：词典已迁到 PG ad_new，走 pgdb 兼容层
+        # 2026-10-15：词典已迁到 PG ad_new，走 pgdb 兼容层（DSN 见 pgdb）
         conn = pgdb.connect(autocommit=True)
         try:
             cur = conn.cursor()

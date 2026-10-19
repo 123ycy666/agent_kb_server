@@ -480,6 +480,41 @@ def report_meta(actor: CurrentActor = Depends(get_current_actor)):
 
 
 # ══════════════════════════════════════════════════════════════
+#  每日预警（外部定时任务调用）：按账号返回「这个人今天该办的事」
+#
+#  ⚠️ 鉴权与其它 /api/* 不同：调用方是定时任务（上游业务系统 / 推送服务），
+#     拿不到用户 JWT。所以用**内部服务令牌**（.env 的 INTERNAL_SERVICE_TOKEN）
+#     放行；没配令牌时（本地开发）不校验，线上必须配上。
+#  ⚠️ 前端不做这个页面（2026-10-19 Fred：前端不是我们做，有接口就行）。
+# ══════════════════════════════════════════════════════════════
+
+@router.post("/alerts/daily", summary="每日预警（内部令牌鉴权；按账号返回今日该办的事）")
+async def alerts_daily(request: Request):
+    want = sec_config.KB_INTERNAL_TOKEN
+    got = request.headers.get("X-Internal-Token") or ""
+    if want and got != want:
+        return _jr({"status": "unauthorized", "error": "内部令牌不正确"}, 401)
+
+    from app.secretary import alerts as alerts_mod   # 用到才导入，健康检查不背这个依赖
+
+    data = await _read_json(request)
+    acct = (data.get("account") or data.get("uid") or "").strip()
+    try:
+        # 预警要扫多张业务表（实测 100~160ms），丢线程池，别阻塞全站
+        r = await run_in_threadpool(
+            alerts_mod.daily, acct,
+            (data.get("today") or data.get("business_date") or "").strip() or None,
+            (data.get("when") or data.get("triggered_at") or "").strip() or None,
+            int(data.get("limit") or 10),
+        )
+    except Exception as e:                          # noqa: BLE001
+        r = {"status": "unknown", "account": acct, "alerts": [],
+             "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
+             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    return _jr(r)
+
+
+# ══════════════════════════════════════════════════════════════
 #  语音识别（需登录）：原始二进制上传，5 阶段全链路返回
 # ══════════════════════════════════════════════════════════════
 
