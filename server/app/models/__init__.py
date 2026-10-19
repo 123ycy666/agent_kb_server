@@ -9,6 +9,24 @@ from app.models.conflict import (
     RESOLUTIONS,
     ConflictRecord,
 )
+from app.models.dispatch import (
+    ALERT_STATUSES,
+    CATEGORIES,
+    EVENT_ACTIONS,
+    NOTICE_TYPES,
+    PARTS,
+    STATUSES,
+    AlertChatLink,
+    AlertItem,
+    AlertScanRun,
+    DispatchAttachment,
+    DispatchCheck,
+    DispatchNotice,
+    DispatchTask,
+    DispatchTaskAssignee,
+    DispatchTaskEvent,
+    DispatchTaskPlan,
+)
 from app.models.document import Document, DocumentChunk
 from app.models.knowledge_base import KnowledgeBase
 from app.models.mixins import TimestampMixin
@@ -35,6 +53,23 @@ __all__ = [
     "AsyncTask",
     "AuditLog",
     "TASK_STATUSES",
+    # 预警与任务流转
+    "AlertScanRun",
+    "AlertItem",
+    "DispatchTask",
+    "DispatchTaskAssignee",
+    "DispatchTaskEvent",
+    "DispatchTaskPlan",
+    "DispatchCheck",
+    "DispatchNotice",
+    "DispatchAttachment",
+    "AlertChatLink",
+    "CATEGORIES",
+    "STATUSES",
+    "ALERT_STATUSES",
+    "EVENT_ACTIONS",
+    "NOTICE_TYPES",
+    "PARTS",
     # 公共
     "TimestampMixin",
 ]

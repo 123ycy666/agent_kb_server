@@ -208,6 +208,15 @@ from app.api.v1 import doc_jobs as doc_jobs_api    # noqa: E402
 app.include_router(doc_files_api.router, prefix="/api")
 app.include_router(doc_jobs_api.router, prefix="/api")
 
+# 预警四类 + 任务流转（2026-10-19）：/api/alerts/*、/api/tasks/*、/api/dispatch/*
+# 与 agent 的 /api/alerts/daily 并存；新接口一律 JWT 或内部令牌，不传角色/范围
+from app.api.v1 import alerts as alerts_api      # noqa: E402
+from app.api.v1 import dispatch as dispatch_api  # noqa: E402
+
+app.include_router(alerts_api.router, prefix="/api")
+app.include_router(dispatch_api.router_tasks, prefix="/api")
+app.include_router(dispatch_api.router_dispatch, prefix="/api")
+
 
 @app.get("/api", tags=["系统"], summary="服务信息")
 def root():
@@ -229,12 +238,18 @@ def unified_health():
     pg_ok, pg_detail = check_connection()
     my_ok, my_detail = check_mysql_connection()
     agent_h = agent_api.health()
+    try:
+        from app.api.v1 import dispatch as dispatch_api
+        dispatch_h = dispatch_api.health_summary()
+    except Exception as exc:  # noqa: BLE001
+        dispatch_h = {"ok": False, "error": str(exc)[:200]}
     return {
         "status": "ok",
         "app": settings.app_name,
         "database": {"ok": pg_ok, "detail": pg_detail},
         "employee_source": {"ok": my_ok, "detail": my_detail},
         "agent": agent_h,
+        "dispatch": dispatch_h,
     }
 
 
