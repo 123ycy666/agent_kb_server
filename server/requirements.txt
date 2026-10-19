@@ -13,7 +13,6 @@ python-multipart>=0.0.12
 # ── 数据库 ────────────────────────────────────────────────────
 sqlalchemy>=2.0.36
 psycopg[binary]>=3.2.3
-alembic>=1.14.0
 pgvector>=0.3.6
 # MySQL：统一用户表 t_employee（dlj_data）只读认证
 pymysql>=1.1.0

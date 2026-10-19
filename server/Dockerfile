@@ -27,8 +27,11 @@ WORKDIR /app
 # ⚠️ 国内服务器直连 pypi.org 常 DNS 失败/超时 → 默认走阿里云镜像；
 #    可用 `--build-arg PIP_MIRROR=...` 覆盖（如清华 https://pypi.tuna.tsinghua.edu.cn/simple）。
 ARG PIP_MIRROR=https://mirrors.aliyun.com/pypi/simple/
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -i ${PIP_MIRROR} -r requirements.txt
+# requirements.txt = 直接依赖（范围）；requirements.lock.txt = 精确版本（pip freeze）。
+# 用 -c 做约束而不是 -r：lock 是合并前环境冻结的，里面还有 celery/redis/alembic，
+# 这些包代码已无任何引用，只应参与"钉版本"，不应被真正安装。
+COPY requirements.txt requirements.lock.txt ./
+RUN pip install --no-cache-dir -i ${PIP_MIRROR} -r requirements.txt -c requirements.lock.txt
 
 # ② 再拷业务代码（.env 已被 .dockerignore 排除，密钥不进镜像）
 COPY . .
