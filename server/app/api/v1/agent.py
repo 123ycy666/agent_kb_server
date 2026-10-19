@@ -182,7 +182,7 @@ def health():
     responses={403: {"description": "所选知识库全部不可用（不存在 / 已停用 / 无权限）"}},
 )
 async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)):
-    # ★ 同一个 URL 收两种请求（2026-10-19 加，见 docs/办公文档能力-接口设计.md）：
+    # ★ 同一个 URL 收两种请求（2026-10-19 加，见 docs/03-设计/办公文档能力-接口设计.md）：
     #   ① application/json           —— 现状，纯问答 / 带 file_ids 引用已上传的文件
     #   ② multipart/form-data        —— "文件 + 问题一起发"（豆包式一步到位）
     #   判断依据只能是 Content-Type：前端拖文件时不需要先调上传接口。

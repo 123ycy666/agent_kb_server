@@ -1,6 +1,6 @@
 """预警与任务流转（dispatch）ORM 模型。
 
-设计依据：`docs/superpowers/specs/2026-10-19-预警四类归并与任务流转-design.md`
+设计依据：`docs/03-设计/specs/2026-10-19-预警四类归并与任务流转-design.md`
 
 十条纪律（写代码前先看）：
   1. 业务库（MySQL `dlj_data`）**只读**；这 10 张表全部在 PG `ad_new`。

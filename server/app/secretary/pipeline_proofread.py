@@ -144,12 +144,35 @@ def _rules_structure(blocks: list[dict]) -> list[dict]:
 
 _PROMPT = (
     "你是公文审校。下面是一份公文的一个片段。**只找规则查不出的问题**：病句、表述不清、"
-    "前后矛盾、指代不明、语气不当。不要报错别字和标点（那些已经用规则查过了）。\n"
-    "输出严格 JSON：{\"issues\":[{\"type\":\"病句|表述不清|前后矛盾|指代不明|语气\","
+    "前后矛盾、指代不明。不要报错别字和标点（那些已经用规则查过了）。\n"
+    "输出严格 JSON：{\"issues\":[{\"type\":\"病句|表述不清|前后矛盾|指代不明\","
     "\"quote\":\"原文短句（≤40字，必须原样照抄）\",\"suggestion\":\"改成什么\","
     "\"reason\":\"为什么\"}]}\n"
-    "要求：① 没把握就不要报；② 一个问题一条，不要合并；③ quote 必须能在片段里找到。"
+    "五条硬要求（线上实测踩过，务必遵守）：\n"
+    "① **已经用规则查过的不要重复报**：错别字（其它/做为/帐/截止目前）、中英文标点、"
+    "多余空格、数字与百分号写法、层次序号 —— 这些交给规则，你只报规则查不出的问题。\n"
+    "② **suggestion 必须和原文实质不同**：如果只能改空格、标点、全半角，就不要报（那属于①）。\n"
+    "③ **这是审校不是润色**：风格、语气、措辞强弱的建议不要报（例如把「纳入考核」改成"
+    "「纳入绩效考核」）。只报会影响理解的错误、矛盾、歧义。\n"
+    "④ 没把握就不要报；一句话找不到实质错误就不要硬凑一条。\n"
+    "⑤ **不得引入原文没有的事实**：suggestion 只能是「改写 / 删多余 / 明确表述」，"
+    "**不许新增原文没有的时间、责任方、办理方式**（例如原文没写「另行报送」，就不能加）。\n"
+    "⑥ 报「前后矛盾」必须指出**两处互相冲突的原文**（quote 里并列给出两段），"
+    "只有一句话、指不出冲突双方的，不要报成前后矛盾。\n"
+    "⑦ quote 必须能在片段里原样找到；一个问题一条，不要合并。"
 )
+
+
+_WS = re.compile(r"[\s\u3000]+")
+
+
+def _squash(s: str) -> str:
+    """去掉空白、把全角标点归一、去掉句末标点 —— 用来判断"建议是否等于原文"。"""
+    out = _WS.sub("", str(s or ""))
+    for a, b in (("，", ","), ("。", "."), ("；", ";"), ("：", ":"), ("（", "("), ("）", ")"),
+                 ("“", '"'), ("”", '"')):
+        out = out.replace(a, b)
+    return out.rstrip("。.,;:")
 
 
 def _model_chunk(chunk: dict) -> list[dict]:
@@ -162,8 +185,14 @@ def _model_chunk(chunk: dict) -> list[dict]:
     for it in issues:
         if not isinstance(it, dict) or not it.get("quote"):
             continue
+        sug = (it.get("suggestion") or "").strip()
+        # 过滤两类线上实测的噪声：
+        # ① 没给建议（只有抱怨没有改法）；② 建议与原文只差空格/标点 —— 那属于规则层的活，
+        #    模型再报一遍会让同一处问题出现两次（实测出现过）。
+        if not sug or _squash(sug) == _squash(it["quote"]):
+            continue
         res.append({"type": it.get("type") or "表述", "quote": it.get("quote"),
-                    "suggestion": it.get("suggestion") or "", "reason": it.get("reason") or "",
+                    "suggestion": sug, "reason": it.get("reason") or "",
                     "source": "模型", "_section": chunk["section"]})
     return res
 

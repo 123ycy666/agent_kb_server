@@ -50,5 +50,5 @@ curl -s http://$DEPLOY_HOST/health
 ## 首次部署（新机器）
 
 本脚本假设这些**已存在**：Docker、`kb-backend:latest` 基础镜像、`kb-postgres` 容器（库 `ad_new`）、
-`/root/agentkownlg/merged/.env.production`。全新机器需先按 `docs/Linux部署说明.md` 准备，
+`/root/agentkownlg/merged/.env.production`。全新机器需先按 `docs/02-部署/Linux部署说明.md` 准备，
 再用本脚本做日常发布。

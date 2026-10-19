@@ -63,7 +63,15 @@ _EXTRACT_PROMPT = (
     "输出严格 JSON：{\"items\":[{\"matter\":\"要做的事\",\"unit\":\"责任单位\",\"deadline\":\"时限\","
     "\"materials\":[\"需上报的材料\"],\"quote\":\"支撑这句话的原文短句（不超过60字，必须原文照抄）\"}],"
     "\"risks\":[\"罚则/一票否决/口径变化等风险点\"]}\n"
-    "要求：① 一项事一条，不要合并；② 没写时限/单位就不要填；③ quote 必须能在片段里原样找到。"
+    "三条硬要求（线上实测踩过，务必遵守）：\n"
+    "① **一句话里有多个并列动作时，合成一条，不要拆开**。"
+    "例如「制定实施方案、明确责任分工、细化工作措施」是一个事项，写成一条"
+    "「制定实施方案、明确责任分工、细化工作措施」，不要拆成三条。\n"
+    "② **只抽对执行有意义的**：谁要做、做什么、什么时间前、要报什么材料、达到什么标准。"
+    "纯口号、泛泛而谈的「要高度重视」「要抓好落实」不要抽。\n"
+    "③ 同一段里同一个意思只输出一次；没写时限/单位就不要填；quote 必须能在片段里原样找到。\n"
+    "④ matter 要写成完整的事（谁+做什么），**不要只写「具体实施」「统筹协调」这类没有对象的词**；"
+    "单位已经填进 unit 的，matter 里不必重复单位。"
 )
 
 
@@ -89,30 +97,53 @@ def _norm(s: str) -> str:
 
 
 def _merge(extracts: list[dict]) -> tuple[list[dict], list[str]]:
-    """同一件事在多块里重复出现 → 合并（保留先出现的出处，补全缺的字段）。"""
-    merged: dict[str, dict] = {}
+    """同一件事在多块/多句里重复出现 → 合并。
+
+    ⚠️ 线上实测的教训（2026-10-19 上线冒烟）：只按"规范化后完全相等"去重不够。
+    模型会把同一句话拆成 `结合实际制定实施方案` / `明确责任分工` / `细化工作措施`
+    这样 5 条碎片，再重复 2 条整句 —— 13 条待办里真正有用的只有 1 条。
+    所以这里加**子串包含**判定：一条是另一条的子串（且都 ≥4 字）就算同一件事，
+    并保留更完整的那种说法。
+    """
+    merged: list[dict] = []
+    keys: list[str] = []          # 与 merged 平行：规范化后的 matter
     risks: list[str] = []
+
+    def absorb(cur: dict, it: dict) -> None:
+        for field in ("unit", "deadline", "quote"):
+            if not cur.get(field) and it.get(field):
+                cur[field] = it[field]
+        mats = list(cur.get("materials") or [])
+        for m in (it.get("materials") or []):
+            if m and m not in mats:
+                mats.append(m)
+        cur["materials"] = mats
+        if len(_norm(it.get("matter"))) > len(_norm(cur.get("matter"))):
+            cur["matter"] = it.get("matter")
+
     for ext in extracts:
         for it in ext["items"]:
             key = _norm(it.get("matter"))
             if not key:
                 continue
-            cur = merged.get(key)
-            if cur is None:
-                merged[key] = dict(it)
-                continue
-            for field in ("unit", "deadline", "quote"):
-                if not cur.get(field) and it.get(field):
-                    cur[field] = it[field]
-            mats = list(cur.get("materials") or [])
-            for m in (it.get("materials") or []):
-                if m and m not in mats:
-                    mats.append(m)
-            cur["materials"] = mats
+            hit = None
+            for i, k in enumerate(keys):
+                if k == key:
+                    hit = i
+                    break
+                if len(k) >= 4 and len(key) >= 4 and (k in key or key in k):
+                    hit = i
+                    break
+            if hit is None:
+                merged.append(dict(it))
+                keys.append(key)
+            else:
+                absorb(merged[hit], it)
+                keys[hit] = _norm(merged[hit].get("matter"))
         for r in ext["risks"]:
             if r not in risks:
                 risks.append(r)
-    return list(merged.values()), risks
+    return merged, risks
 
 
 def _verify(items: list[dict], blocks: list[dict]) -> list[dict]:
@@ -195,6 +226,9 @@ def run(file_id: str, user_id: int, options: dict | None = None,
     inner = [it for it in items if it.get("matter")]
     if not inner:
         warnings.append("没抽出任何事项，可能这份文件是纯说明性内容")
+    # 展示顺序：有明确时限的排前面，其次有责任单位的。稳定排序，同组内保持原文顺序 ——
+    # 领导先看到"什么时候要、谁来做"，碎片化的泛要求自然沉到后面。
+    inner.sort(key=lambda it: (0 if it.get("deadline") else 1, 0 if it.get("unit") else 1))
 
     md = ""
     try:

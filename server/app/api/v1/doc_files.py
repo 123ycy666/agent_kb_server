@@ -1,6 +1,6 @@
 """问答 / 文档任务用的临时文件接口（`/api/files/*`）。
 
-设计见 `docs/办公文档能力-接口设计.md`。要点：
+设计见 `docs/03-设计/办公文档能力-接口设计.md`。要点：
 1. **两段式为主**：先 `POST /api/files` 拿 `file_id`，再由 `/api/ask` 的 `file_ids`
    或 `/api/docs/jobs` 的 `file_ids` 引用 —— 主流开源实现（Dify / Open WebUI / RAGFlow）
    都是这个形态，因为只有它支持「同一份文件多轮复用、解析失败不浪费一次提问」。
