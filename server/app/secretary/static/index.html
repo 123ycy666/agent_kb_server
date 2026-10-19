@@ -102,9 +102,27 @@ button:active:not(:disabled){background:#0958d9}
       <span id="kbhint" style="font-size:12px;color:rgba(0,0,0,.45)"></span>
     </div>
     <div class="bar">
+      <button id="pick" onclick="document.getElementById('file').click()" title="上传一个文件（Word / Excel / PDF / PPT / TXT）"
+        style="background:#f4f5f7;color:#3b4653;border:1px solid #f0f0f0">📎 文件</button>
+      <input id="file" type="file" style="display:none" onchange="uploadDoc(this)" />
       <input id="q" placeholder="直接说人话就行（错字、简称、漏写时间地点都能听懂），例如：环潭供电所上个月的线损率" />
+      <select id="task" title="选「速读 / 审校 / 查表」时，按任务处理已上传的文件，不需要提问"
+        style="padding:8px 10px;border:1px solid #f0f0f0;border-radius:8px;background:#fff;font-size:13px">
+        <option value="">问答</option>
+        <option value="digest">速读（要点+待办）</option>
+        <option value="proofread">审校（错字/格式）</option>
+        <option value="table_audit">查表（Excel）</option>
+      </select>
       <button id="go" onclick="ask()">提问</button>
       <button id="newchat" onclick="newSession()" style="background:#f4f5f7;color:#3b4653;border:1px solid #f0f0f0">新会话</button>
+    </div>
+    <div id="filetip" style="margin-top:7px;font-size:12px;color:#8a95a1"></div>
+    <div id="jobbox" style="display:none;margin-top:10px;padding:10px 12px;border:1px solid #e8eef5;border-radius:8px;background:#f8fbff">
+      <div id="jobstage" style="font-size:13px;color:#3b4653"></div>
+      <div style="height:6px;background:#e3ebf5;border-radius:4px;margin-top:8px;overflow:hidden">
+        <div id="jobbar" style="height:100%;width:0;background:#2d7ff9;transition:width .3s"></div>
+      </div>
+      <div id="jobout" style="margin-top:10px;font-size:13px"></div>
     </div>
     <div id="sessbar" style="margin-top:7px;font-size:12px;color:#8a95a1"></div>
     <div style="margin-top:10px">
@@ -212,8 +230,105 @@ function newSession(){
   document.getElementById('q').focus();
 }
 
+/* ---------------- 上传文件 / 文档任务（2026-10-19 加） ----------------
+   问答：把 file_id 放进 /api/ask 的 file_ids，后端按问题取全文或节选章节；
+   任务：速读 / 审校 / 查表走 /api/docs/jobs，轮询进度，完成后给下载。
+   下载不能用 <a href>：鉴权是 Authorization 头（JWT 在 localStorage），
+   裸链接不会带 header ⇒ 401。所以统一走 fetch → blob → 触发保存。 */
+var DOCFILES=[];
+function renderFiles(){
+  var el=document.getElementById('filetip');
+  if(!DOCFILES.length){el.textContent='';return;}
+  el.innerHTML='已上传：'+DOCFILES.map(function(f){
+    var p=f.parsed||{};
+    return esc(f.name)+'（'+(p.ok?('已解析 '+p.chars+' 字'):('未解析：'+(p.error||'未知')))+'）';
+  }).join('；');
+}
+function uploadDoc(inp){
+  var f=inp.files&&inp.files[0]; inp.value='';
+  if(!f)return;
+  var tip=document.getElementById('filetip');
+  tip.textContent='正在上传并解析：'+f.name+' …';
+  var fd=new FormData(); fd.append('file',f);
+  fetch('/api/files',{method:'POST',body:fd})
+   .then(function(r){return r.json();})
+   .then(function(d){
+     if(d && d.file_id){ DOCFILES.push(d); renderFiles(); }
+     else { tip.textContent='上传失败：'+((d&&d.detail&&d.detail.message)||JSON.stringify(d)); }
+   })
+   .catch(function(e){tip.textContent='上传失败：'+e;});
+}
+function saveBlob(url,name){
+  fetch(url).then(function(r){
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.blob();
+  }).then(function(b){
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(b); a.download=name||'download';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},1000);
+  }).catch(function(e){alert('下载失败：'+e);});
+}
+function runJob(task){
+  var box=document.getElementById('jobbox');
+  box.style.display='block';
+  document.getElementById('jobstage').textContent='提交任务…';
+  document.getElementById('jobbar').style.width='0';
+  document.getElementById('jobout').innerHTML='';
+  document.getElementById('answer').textContent='';
+  document.getElementById('go').disabled=true;
+  fetch('/api/docs/jobs',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({task:task,file_ids:DOCFILES.map(function(f){return f.file_id;})})})
+   .then(function(r){return r.json();})
+   .then(function(job){
+     if(!job.job_id){
+       document.getElementById('jobstage').textContent='提交失败：'+((job&&job.detail&&job.detail.message)||JSON.stringify(job));
+       document.getElementById('go').disabled=false; return;
+     }
+     pollJob(job.job_id);
+   })
+   .catch(function(e){
+     document.getElementById('jobstage').textContent='提交失败：'+e;
+     document.getElementById('go').disabled=false;
+   });
+}
+function pollJob(id){
+  fetch('/api/docs/jobs/'+id).then(function(r){return r.json();}).then(function(d){
+    document.getElementById('jobstage').textContent=(d.stage||'')+'  '+(d.progress||0)+'%';
+    document.getElementById('jobbar').style.width=(d.progress||0)+'%';
+    if(d.status==='done'){
+      document.getElementById('go').disabled=false;
+      document.getElementById('answer').textContent=(d.result&&d.result.answer_markdown)||'（无内容）';
+      var outs=(d.outputs||[]).map(function(o){
+        return '<a href="javascript:void 0" data-url="'+esc(o.url)+'" data-name="'+esc(o.name)+'"'
+             + ' onclick="saveBlob(this.getAttribute(\'data-url\'),this.getAttribute(\'data-name\'))"'
+             + ' style="display:inline-block;margin-right:14px">⬇ '+esc(o.name)+'</a>';
+      }).join('');
+      document.getElementById('jobout').innerHTML=outs||'';
+      var warn=(d.result&&d.result.warnings)||[];
+      if(warn.length){
+        document.getElementById('jobout').innerHTML+='<div class="warn" style="margin-top:6px">'
+          +warn.map(esc).join('；')+'</div>';
+      }
+      return;
+    }
+    if(d.status==='failed'||d.status==='cancelled'){
+      document.getElementById('go').disabled=false;
+      document.getElementById('jobstage').textContent='失败：'+(d.error||d.status);
+      return;
+    }
+    setTimeout(function(){pollJob(id);},1500);
+  }).catch(function(e){document.getElementById('jobstage').textContent='轮询失败：'+e;});
+}
+
 function ask(){
   var q=document.getElementById('q').value.trim();
+  var task=document.getElementById('task').value;
+  if(task){
+    if(!DOCFILES.length){alert('请先点「📎 文件」上传一个文件');return;}
+    runJob(task);
+    return;
+  }
   if(!q)return;
   var b=document.getElementById('go');b.disabled=true;b.textContent='处理中…';
   document.getElementById('answer').textContent='';
@@ -227,10 +342,7 @@ function ask(){
   fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({question:q,model:model,profile:profile,
                              kb_ids:pickedKbIds(),
-                             /* 不传 uid：身份一律以服务端登录态为准。
-                                原先硬编码 uid:'PROV-FIN-001' 会把所有用户的会话
-                                都按同一个业务 uid 归属（历史上曾把会话错记到
-                                app_user.id=1），已删除。 */
+                             file_ids:DOCFILES.map(function(f){return f.file_id;}),
                              session_id:getSession()||undefined})})
    .then(function(r){return r.json();})
    .then(function(d){

@@ -200,6 +200,14 @@ from app.api.v1 import agent as agent_api  # noqa: E402
 
 app.include_router(agent_api.router, prefix="/api")
 
+# 办公文档（2026-10-19 加）：问答/任务用的临时文件 /api/files/*
+# 与知识库 /api/v1/documents 完全不同：这里是「这次用的文件」，不切片不入库
+from app.api.v1 import doc_files as doc_files_api  # noqa: E402
+from app.api.v1 import doc_jobs as doc_jobs_api    # noqa: E402
+
+app.include_router(doc_files_api.router, prefix="/api")
+app.include_router(doc_jobs_api.router, prefix="/api")
+
 
 @app.get("/api", tags=["系统"], summary="服务信息")
 def root():

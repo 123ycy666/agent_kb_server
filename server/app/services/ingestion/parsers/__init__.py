@@ -17,6 +17,8 @@ from app.services.ingestion.parsers.base import (
 SUPPORTED_EXTENSIONS = {
     ".pdf",
     ".docx",
+    ".pptx",
+    ".pptm",
     ".xlsx",
     ".xlsm",
     ".xls",
@@ -29,6 +31,8 @@ SUPPORTED_EXTENSIONS = {
 _EXT_LABELS = {
     ".pdf": "PDF",
     ".docx": "Word",
+    ".pptx": "PPT(2007+)",
+    ".pptm": "PPT(宏,2007+)",
     ".xlsx": "Excel(2007+)",
     ".xlsm": "Excel(宏,2007+)",
     ".xls": "Excel(2003 旧版)",
@@ -69,6 +73,12 @@ def parse_file(path: Path) -> ParsedDocument:
         from app.services.ingestion.parsers.docx_parser import parse_docx
 
         return parse_docx(path)
+
+    if ext in (".pptx", ".pptm"):
+        # .pptm 与 .pptx 同为 OOXML（zip），仅多一个宏包，读取方式一致
+        from app.services.ingestion.parsers.pptx_parser import parse_pptx
+
+        return parse_pptx(path)
 
     if ext in (".xlsx", ".xlsm"):
         # .xlsm 与 .xlsx 同为 OOXML（zip）格式，仅多一个宏包，读取方式一致

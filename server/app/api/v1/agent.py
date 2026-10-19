@@ -24,9 +24,12 @@ import json as _json
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 
+from app.core.config import settings
 from app.core.deps import CurrentActor, get_current_actor
 from app.secretary import agent as agent_mod
 from app.secretary import config as sec_config
+from app.secretary import doc_context
+from app.secretary import doc_files as sec_doc_files
 from app.secretary import kb_adapter, qa_log, report as report_mod, tools_asr
 from app.secretary.gaps import list_gaps
 from app.schemas.agent import AskResponse
@@ -179,7 +182,18 @@ def health():
     responses={403: {"description": "所选知识库全部不可用（不存在 / 已停用 / 无权限）"}},
 )
 async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)):
-    data = await _read_json(request)
+    # ★ 同一个 URL 收两种请求（2026-10-19 加，见 docs/办公文档能力-接口设计.md）：
+    #   ① application/json           —— 现状，纯问答 / 带 file_ids 引用已上传的文件
+    #   ② multipart/form-data        —— "文件 + 问题一起发"（豆包式一步到位）
+    #   判断依据只能是 Content-Type：前端拖文件时不需要先调上传接口。
+    _ctype = (request.headers.get("content-type") or "").lower()
+    uploaded = []
+    if _ctype.startswith("multipart/form-data"):
+        form = await request.form()
+        data = {k: v for k, v in form.items() if not getattr(v, "filename", None)}
+        uploaded = [v for v in form.values() if getattr(v, "filename", None)]
+    else:
+        data = await _read_json(request)
     q = (data.get("question") or "").strip()
     if not q:
         return _jr({"answer": "问题为空", "trace": []})
@@ -198,6 +212,35 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
     scope = (data.get("scope") or data.get("business_scope") or "").strip() or None
     today = (data.get("today") or data.get("business_date") or "").strip() or None
     client_ip = request.client.host if request.client else None
+
+    # ── 带文件提问（2026-10-19）────────────────────────────────────────
+    # 两种进法都收：① JSON 里的 file_ids（前端先调 /api/files 上传）
+    #              ② multipart 直接带文件（一步式，外部系统最爱用）
+    # 短文件整篇给、长文件按问题召回章节 —— 逻辑在 doc_context，这里只做编排。
+    file_ids = _parse_file_ids(data.get("file_ids"))
+    file_warnings: list[str] = []
+    for up in uploaded:
+        try:
+            max_bytes = settings.max_upload_mb * 1024 * 1024
+            content = up.file.read(max_bytes + 1)
+            if len(content) > max_bytes:
+                raise sec_doc_files.DocFileError(
+                    "FILE_TOO_LARGE", f"文件超过大小上限（{settings.max_upload_mb} MB）")
+            meta = sec_doc_files.save(
+                actor.user_id, up.filename or "unnamed", content,
+                user_code=actor.username, purpose="chat")
+            file_ids.append(meta["file_id"])
+            if not (meta.get("parsed") or {}).get("ok"):
+                file_warnings.append(
+                    f"《{meta['name']}》没能解析出文字：{(meta.get('parsed') or {}).get('error', '')}")
+        except sec_doc_files.DocFileError as exc:
+            # 单个文件失败不打断整次提问：让它照常回答，把原因带回去
+            file_warnings.append(f"文件上传失败：{exc.message}")
+
+    ctx = {"context": "", "files": [], "warnings": []}
+    if file_ids:
+        ctx = doc_context.build(q, file_ids, actor.user_id)
+        file_warnings.extend(ctx.get("warnings") or [])
 
     # 检索范围：前端可传 kb_ids（问答页勾选的库）；不传则用库里 qa_enabled 的库。
     # 服务端校验后才生效（见 _resolve_kb_scope）—— 防止构造请求越权检索。
@@ -235,6 +278,8 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
             channel=channel,
             history_turns=history_turns,
             kb_ids=kb_scope or None,   # None ⇒ kb_adapter 退回配置默认
+            doc_context=ctx.get("context") or None,
+            doc_files=ctx.get("files") or None,
         )
     except Exception as e:                         # noqa: BLE001
         # 模型不可用（网关没这个模型 / 连不上）时说人话，不要把 HTTPError 抛给用户看
@@ -262,7 +307,29 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
             print('[qa_log] 失败轮次落库也失败：%s: %s'
                   % (type(log_exc).__name__, log_exc), flush=True)
     r["user_name"] = user_name
+    if file_warnings:
+        r["doc_warnings"] = file_warnings
     return _jr(r)
+
+
+def _parse_file_ids(raw) -> list[str]:
+    """容错解析 file_ids：接受数组、单个字符串、逗号分隔字符串。
+
+    前端传什么形状都有（`["f_x"]` / `"f_x"` / `"f_x,f_y"`），这里统一成列表，
+    免得因为一个格式问题让整次提问失败。
+    """
+    if not raw:
+        return []
+    if isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = str(raw).replace("，", ",").split(",")
+    out: list[str] = []
+    for it in items:
+        s = str(it).strip()
+        if s and s not in out:
+            out.append(s)
+    return out
 
 
 async def _read_json(request: Request) -> dict:
