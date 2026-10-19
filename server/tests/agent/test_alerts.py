@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = Path(HERE).resolve().parents[3]                    # <仓库根>
+ROOT = Path(HERE).resolve().parents[2]                    # <仓库根>（agent → tests → server → 根）
 sys.path.insert(0, str(ROOT / 'server'))                  # 让 app.* 可导入
 OUT = str(ROOT / 'output' / 'test_results' / '2026-10-15-预警接口')
 TODAY = '2026-10-15'
@@ -128,9 +128,10 @@ worst = max(times.values())
 check(7, '单次调用 < 3000ms', worst < 3000, '各账号耗时(ms) %s；最慢 %d' % (times, worst))
 
 # ── 判据 8：不写死业务数 ───────────────────────────────────────────────
-src = open(os.path.join(HERE, 'alerts.py'), encoding='utf-8').read()
-src += open(os.path.join(HERE, 'alert_scope.py'), encoding='utf-8').read()
-src += open(os.path.join(HERE, 'alert_rules.py'), encoding='utf-8').read()
+MOD_DIR = os.path.join(str(ROOT), 'server', 'app', 'secretary')
+src = open(os.path.join(MOD_DIR, 'alerts.py'), encoding='utf-8').read()
+src += open(os.path.join(MOD_DIR, 'alert_scope.py'), encoding='utf-8').read()
+src += open(os.path.join(MOD_DIR, 'alert_rules.py'), encoding='utf-8').read()
 hits = [p for p in (r'\b1910\b', r'\b1880\b', r'\b112\.11\b', r'\b1797\b', r'\b1661\b')
         if re.search(p, src)]
 check(8, '代码里不写死业务数', not hits, '命中模式 %s（应为空）' % hits)
@@ -246,8 +247,8 @@ check(15, '花得完的不发（预测口径生效）',
       % ({k: '%.1f%%' % v for k, v in rate.items()}, stay_out, stay_in))
 
 # ── 判据 16：不改业务库、不写库 ────────────────────────────────────────
-code = open(os.path.join(HERE, 'alerts.py'), encoding='utf-8').read()
-code += open(os.path.join(HERE, 'alert_scope.py'), encoding='utf-8').read()
+code = open(os.path.join(MOD_DIR, 'alerts.py'), encoding='utf-8').read()
+code += open(os.path.join(MOD_DIR, 'alert_scope.py'), encoding='utf-8').read()
 write_kw = [w for w in ('INSERT ', 'UPDATE ', 'DELETE ', 'DROP ', 'ALTER ')
             if w in code.upper()]
 check(16, '只读：代码里没有写库语句', not write_kw, '命中 %s（应为空）' % write_kw)
