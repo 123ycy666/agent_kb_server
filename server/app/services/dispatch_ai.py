@@ -57,20 +57,28 @@ def classify_task_intent(question: str, history: list[dict] | None = None,
         return {'available': False, 'reason': '空问题'}
     try:
         from app.providers import get_providers
+        from app.providers.base import Message
         bundle = get_providers()
         if getattr(bundle, 'mode', '') == 'mock':
             return {'available': False, 'reason': 'mock 档位'}
-        msgs = [{'role': 'system', 'content': INTENT_SYSTEM}]
+        msgs = [Message(role='system', content=INTENT_SYSTEM)]
         for h in (history or [])[-6:]:
             role = h.get('role') if h.get('role') in ('user', 'assistant') else 'user'
-            msgs.append({'role': role, 'content': str(h.get('content') or '')[:600]})
-        msgs.append({'role': 'user', 'content': q})
+            msgs.append(Message(role=role, content=str(h.get('content') or '')[:600]))
+        msgs.append(Message(role='user', content=q))
         import concurrent.futures as cf
-        with cf.ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(bundle.llm.chat, msgs, temperature=0.0, max_tokens=300,
-                            json_mode=True)
-            raw = str(fut.result(timeout=timeout) or '').strip()
-        data = _load_json(raw)
+        data = None
+        for attempt in range(2):
+            payload = list(msgs)
+            if attempt:
+                payload.append(Message(role='system', content='只输出一行 JSON，reason 不超过 20 字。'))
+            with cf.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(bundle.llm.chat, payload, temperature=0.0,
+                                max_tokens=600, json_mode=True)
+                raw = str(fut.result(timeout=timeout) or '').strip()
+            data = _load_json(raw)
+            if isinstance(data, dict) and 'is_task' in data:
+                break
         if not isinstance(data, dict) or 'is_task' not in data:
             return {'available': False, 'reason': '模型输出不是合法 JSON'}
         try:
@@ -136,10 +144,11 @@ def _safe_polish(text: str, must_keep: str) -> tuple[str, bool]:
         if getattr(bundle, 'mode', '') == 'mock':
             return text, False
         import concurrent.futures as cf
+        from app.providers.base import Message
         msgs = [
-            {'role': 'system', 'content': '你是供电公司督办助手。只改写措辞，'
-             '**不得新增、删除或修改任何数字、日期、单位名**。保持中文公文语气，不超过 300 字。'},
-            {'role': 'user', 'content': text},
+            Message(role='system', content='你是供电公司督办助手。只改写措辞，'
+                    '**不得新增、删除或修改任何数字、日期、单位名**。保持中文公文语气，不超过 300 字。'),
+            Message(role='user', content=text),
         ]
         with cf.ThreadPoolExecutor(max_workers=1) as ex:
             fut = ex.submit(bundle.llm.chat, msgs, temperature=0.2, max_tokens=600)
