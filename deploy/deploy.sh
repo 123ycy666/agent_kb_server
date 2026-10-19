@@ -34,6 +34,7 @@ run_container() {   # $1 = 镜像
     -e SECRETARY_ENV=/app/.env \
     -v "$NEW_DIR/.env.production:/app/.env:ro" \
     -v kb_merged_uploads:/data/uploads \
+    -e DISPATCH_FILES_DIR=/data/uploads/dispatch \
     --restart unless-stopped \
     "$1" python -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" \
          --proxy-headers --forwarded-allow-ips='*' >/dev/null
