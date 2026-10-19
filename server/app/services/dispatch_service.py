@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -917,6 +918,20 @@ def tick(db: Session, now: datetime | None = None) -> dict:
             if _escalate_once(db, t, '到目标时限未达标（%s）' % _iso(t.due_at)):
                 acts['escalated'] += 1
         db.commit()
+    # 草稿超 7 天没人确认 → 自动取消（不占着"待确认"状态）
+    acts['drafts_cancelled'] = 0
+    try:
+        olds = db.execute(select(DispatchTask).where(
+            DispatchTask.status == 'draft', DispatchTask.deleted_flag == 0,
+            DispatchTask.create_time < now - timedelta(days=7))).scalars().all()
+        for t in olds:
+            t.status = 'cancelled'
+            _event(db, t, 'cancel', None, 'draft', 'cancelled', '草稿超 7 天未确认，自动取消')
+            acts['drafts_cancelled'] += 1
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception('清理过期任务草稿失败')
     return dict(acts, at=now.isoformat())
 
 
@@ -1007,6 +1022,11 @@ def list_tasks(db: Session, account: str, role: str = 'mine', status: str | None
     act = _actor(account)
     emp_id = int(act['employee_id'])
     q = select(DispatchTask).where(DispatchTask.deleted_flag == 0)
+    # 草稿（待确认）默认不出现在"我的任务"里；要看草稿必须显式 status=draft
+    if not status:
+        q = q.where(DispatchTask.status != 'draft')
+    elif status == 'draft':
+        q = q.where(DispatchTask.creator_id == emp_id)
     if role == 'created':
         q = q.where(DispatchTask.creator_id == emp_id)
     elif role == 'all':
@@ -1108,7 +1128,8 @@ def preview(db: Session, account: str, alert_id: int) -> dict:
 def stats(db: Session) -> dict:
     rows = db.execute(select(DispatchTask.alert_id, DispatchTask.status,
                              DispatchTask.overdue_flag, DispatchTask.escalate_level,
-                             DispatchTask.create_time, DispatchTask.closed_at)).all()
+                             DispatchTask.create_time, DispatchTask.closed_at)
+                      .where(DispatchTask.status != 'draft')).all()
     alerts = {a.id: a.alert_type for a in db.execute(select(AlertItem)).scalars().all()}
     out = {'total': len(rows), 'by_status': {}, 'by_category': {},
            'overdue': 0, 'escalated': 0, 'closed': 0}
@@ -1305,6 +1326,334 @@ def ask(db: Session, account: str, task_id: int, question: str, today: str | Non
             'trace_steps': len(r.get('trace') or [])}
 
 
+# ─────────────────────────────────────────────────────────── 对话建任务
+# 流程：用户在对话里说"让 X 3 天内给方案" → 智能体拟稿（draft，不落正式任务）
+#      → 往会话里发一条**确认消息** → 人回「确认」/点按钮 → 才变成 open 任务。
+# 纪律：AI 不直接建任务；没有人的明确确认，一律停在 draft。
+
+CONFIRM_WORDS = ('确认', '确定', '可以', '同意', '下发', '就这', '没问题', 'ok', 'OK', '行')
+CANCEL_WORDS = ('取消', '算了', '不办', '先不发', '不用了')
+INTENT_EXPLICIT = ('建任务', '创建任务', '发起任务', '下发', '派给', '安排', '督办')
+INTENT_ACTION = ('让', '要求', '整改', '回执', '交方案', '给方案', '花完', '提升', '降', '催',
+                 '落实', '盯', '处理', '解决', '完成')
+
+
+def _detect_intent(text: str, strict: bool = False) -> tuple[bool, str]:
+    t = (text or '').strip()
+    if len(t) < 4:
+        return False, '太短'
+    explicit = any(k in t for k in INTENT_EXPLICIT)
+    action = any(k in t for k in INTENT_ACTION)
+    if not (explicit or action):
+        return False, '没有"要办一件事"的动作词'
+    if not explicit and t.rstrip('。.!！ ').endswith(('吗', '呢', '？', '?')):
+        return False, '是提问，不是要办一件事'
+    if strict and not explicit:
+        has_due = bool(re.search(r'\d+\s*(天|日|周|个?月)|月底|年底|本周', t))
+        if not has_due:
+            return False, '自动模式：没有明确时限，先不打扰'
+    return True, ''
+
+
+def _parse_due(text: str, today: str):
+    """从话里抠时限：3天内 / 一周内 / 月底 / 年底 / 本周。返回 (reply_due, due, 说明)。"""
+    now = datetime.strptime(today, '%Y-%m-%d').replace(hour=18, tzinfo=timezone.utc)
+    m = re.search(r'(\d+)\s*(天|日|周|个?月)\s*(内|以内|之内)?', text or '')
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2)
+        days = n if unit in ('天', '日') else (n * 7 if unit == '周' else n * 30)
+        return now + timedelta(days=days), now + timedelta(days=max(days, 30)), '%d 天内' % days
+    if '月底' in text or '本月' in text:
+        d = now.replace(day=1) + timedelta(days=32)
+        end = (d.replace(day=1) - timedelta(days=1)).replace(hour=18)
+        return end, end, '本月底前'
+    if '年底' in text or '年内' in text:
+        end = now.replace(month=12, day=31, hour=18)
+        return end, end, '年底前'
+    if '本周' in text:
+        days = 7 - now.weekday()
+        end = now + timedelta(days=days)
+        return end, now + timedelta(days=30), '本周内'
+    return now + timedelta(days=3), now + timedelta(days=30), '默认 3 天回执 / 30 天完成'
+
+
+def _match_scope(text: str, act: dict) -> dict:
+    """从话里找责任范围（所/县/市）；找不到就用发起人自己的范围。"""
+    t = text or ''
+    stations = _q('SELECT id, name, department_id FROM t_power_company '
+                  'WHERE deleted_flag=0 ORDER BY id', limit=200)
+    for s in stations:
+        name = str(s.get('name') or '')
+        short = (name.replace('供电服务站', '').replace('供电所', '')
+                 .replace('供电中心', '').replace('供电公司', ''))
+        if (name and name in t) or (short and len(short) >= 2 and short in t):
+            return {'scope_type': 'station', 'scope_key': str(s['id']),
+                    'scope_name': name, 'station_ids': [int(s['id'])],
+                    'dept_id': int(s['department_id']), 'role': 'sz'}
+    for key, dept_id, role in (('曾都', 10, 'xgscwb'), ('随县', 11, 'xgscwb'),
+                               ('高新', 12, 'xgscwb'), ('广水', 13, 'xgscwb')):
+        if key in t:
+            return {'scope_type': 'county', 'scope_key': str(dept_id),
+                    'scope_name': (key + '区供电公司') if key == '曾都' else (key + '供电公司'),
+                    'station_ids': [], 'dept_id': dept_id, 'role': role}
+    if '全市' in t:
+        return {'scope_type': 'city', 'scope_key': 'city', 'scope_name': '全市',
+                'station_ids': [], 'dept_id': 1, 'role': 'sgscwb'}
+    sc = act['scope']
+    return {'scope_type': sc.get('scope_type'),
+            'scope_key': (str(sc['station_ids'][0]) if sc.get('scope_type') == 'station'
+                          else (str(sc.get('dept_id')) if sc.get('scope_type') == 'county' else 'city')),
+            'scope_name': sc.get('scope') or '',
+            'station_ids': sc.get('station_ids') or [],
+            'dept_id': sc.get('dept_id') or 1,
+            'role': {'station': 'sz', 'county': 'xgscwb', 'city': 'sgscwb'}.get(
+                sc.get('scope_type'), 'sz')}
+
+
+def _draft_candidates(scope: dict) -> list[dict]:
+    dept = scope.get('dept_id') or 1
+    cands = _emp_by_role(scope.get('role') or 'sz', dept)
+    if cands:
+        return cands[:5]
+    for alt in ('sz', 'xgscwb', 'sgscwb'):
+        cands = _emp_by_role(alt, dept) or _emp_by_role(alt, 1)
+        if cands:
+            return cands[:5]
+    return []
+
+
+def _draft_title(question: str, scope: dict) -> str:
+    q = (question or '').strip().replace('\n', ' ')
+    name = scope.get('scope_name') or ''
+    if name and name in q:          # 话里已经带了范围，别再加前缀（否则"两水所：让两水所…"）
+        return q[:200]
+    if len(q) <= 36:
+        return ('%s：%s' % (name, q))[:200]
+    return ('%s：%s…' % (name, q[:32]))[:200]
+
+
+def _draft_confirm_text(task: DispatchTask, assignee_names: list[str]) -> str:
+    return (
+        '我理解你要办这件事，已拟好任务草稿：\n'
+        '- **事项**：%s\n'
+        '- **责任**：%s\n'
+        '- **承办人**：%s\n'
+        '- **回执时限**：%s；**完成时限**：%s\n'
+        '- **核销方式**：%s\n\n'
+        '回复「**确认**」我就下发；要改直接说（换人 / 改时间 / 改要求），或者说「取消」。'
+        % (task.title, task.scope_name or '',
+           '、'.join(assignee_names) or '（还没找到人，请指定）',
+           _iso(task.reply_due_at) or '—', _iso(task.due_at) or '—',
+           '自动（数据达标即闭环）' if task.verifier_type == 'auto' else '人工回执')
+    )
+
+
+def propose_from_chat(db: Session, account: str, session_id: str, question: str,
+                      alert_id: int | None = None, today: str | None = None,
+                      strict: bool = False) -> dict:
+    """对话触发：识别意图 → 拟任务草稿（status=draft）→ 往会话里发确认消息。"""
+    from app.services import alert_service
+
+    act = _actor(account)
+    q = (question or '').strip()
+    today = (today or time.strftime('%Y-%m-%d'))[:10]
+    alert = db.get(AlertItem, int(alert_id)) if alert_id else None
+
+    ok, why = _detect_intent(q, strict=strict)
+    if not ok and not alert_id:
+        return {'intent': False, 'reason': why, 'task_id': None,
+                'message': '这段话我没听出"要办一件事"。要建任务请说：让谁、办什么、几号前。'}
+    if alert_id and not ok:
+        ok = True   # 从预警对话里发起，默认就是要办
+
+    existing = db.execute(select(DispatchTask).where(
+        DispatchTask.creator_id == act['employee_id'],
+        DispatchTask.creator_session_id == session_id,
+        DispatchTask.status == 'draft', DispatchTask.deleted_flag == 0)
+        .order_by(DispatchTask.id.desc()).limit(1)).scalar_one_or_none()
+    if existing is not None:
+        names = [a.name or a.login_name for a in _assignees(db, existing.id) if a.part == 'owner']
+        return {'intent': True, 'task_id': existing.id, 'status': 'draft',
+                'draft': serialize_task(existing),
+                'message': _draft_confirm_text(existing, names),
+                'session_id': session_id, 'reused': True}
+
+    if alert is not None:
+        st = _station(alert.scope_key) if alert.scope_type == 'station' else {}
+        scope = {'scope_type': alert.scope_type, 'scope_key': alert.scope_key,
+                 'scope_name': alert.scope_name,
+                 'station_ids': [st.get('id')] if st else [],
+                 'dept_id': st.get('dept_id') if st else (
+                     _i(alert.scope_key) if alert.scope_type == 'county' else 1),
+                 'role': alert.assignee_role or 'sz'}
+        title = (q or alert.title)[:200]
+        requirement = q or ('处置预警：%s' % alert.title)
+        verify_rule = alert.verify_hint or {}
+        verifier_type = 'auto' if (verify_rule or {}).get('kind') else 'human'
+        level = alert.level
+        biz_type = alert.object_type
+        biz_keys = [alert.object_key] if alert.object_key not in (None, '*') else []
+    else:
+        scope = _match_scope(q, act)
+        title = _draft_title(q, scope)
+        requirement = q
+        verify_rule = {}
+        verifier_type = 'human'
+        level = 'mid'
+        biz_type, biz_keys = 'org', []
+
+    reply_due, due, due_note = _parse_due(q, today)
+    cands = _draft_candidates(scope)
+    require_plan = 1 if any(k in q for k in ('方案', '回执', '报告')) else 0
+
+    task = DispatchTask(
+        task_no=_next_task_no(db), task_type='alert' if alert else 'talk',
+        title=title, requirement=requirement, status='draft', level=level,
+        alert_id=alert.id if alert else None,
+        scope_type=scope.get('scope_type'), scope_key=scope.get('scope_key'),
+        scope_name=scope.get('scope_name'), biz_type=biz_type, biz_keys=biz_keys,
+        creator_id=int(act['employee_id']), creator_name=act['name'],
+        creator_login=act['login_name'], creator_dept_id=act.get('dept_id'),
+        creator_session_id=session_id,
+        reply_due_at=reply_due, due_at=due, require_plan=require_plan,
+        verifier_type=verifier_type, verify_rule=verify_rule,
+    )
+    db.add(task)
+    db.flush()
+    task.root_task_id = task.id
+    for c in cands:
+        db.add(DispatchTaskAssignee(
+            task_id=task.id, part='owner', employee_id=c['employee_id'],
+            login_name=c['login_name'], name=c['name'], dept_id=c['dept_id'],
+            dept_name=(_dept(c['dept_id']) or {}).get('name'),
+            role_code=_role_of(c['employee_id']), state='pending'))
+    _event(db, task, 'create', act, None, 'draft', q,
+           {'source': 'chat', 'question': q, 'due_note': due_note,
+            'alert_id': task.alert_id})
+    db.commit()
+
+    names = [c['name'] or c['login_name'] for c in cands]
+    text = _draft_confirm_text(task, names)
+    card = {'task_id': task.id, 'task_no': task.task_no, 'title': task.title,
+            'scope_name': task.scope_name, 'role': scope.get('role'),
+            'assignees': [{'employee_id': c['employee_id'], 'login_name': c['login_name'],
+                           'name': c['name'], 'dept_name': (c.get('dept_name') or '')}
+                          for c in cands],
+            'reply_due_at': _iso(task.reply_due_at), 'due_at': _iso(task.due_at),
+            'verifier_type': task.verifier_type, 'verify_rule': task.verify_rule or {},
+            'require_plan': task.require_plan, 'due_note': due_note}
+    alert_service.append_chat_message(
+        db, session_id, account, 2, text, msg_type=2,
+        meta={'kind': 'task_draft', 'task_id': task.id, 'draft': card},
+        title='【任务草稿】%s' % task.title)
+    return {'intent': True, 'task_id': task.id, 'status': 'draft', 'draft': card,
+            'message': text, 'session_id': session_id, 'reused': False}
+
+
+def confirm_draft(db: Session, account: str, task_id: int | None = None,
+                  session_id: str | None = None, message: str | None = None,
+                  overrides: dict | None = None) -> dict:
+    """人工确认草稿 → 正式任务（draft → open，发通知）。也支持用一句话确认。"""
+    from app.services import alert_service
+
+    act = _actor(account)
+    t = None
+    if task_id:
+        t = _get_task(db, int(task_id))
+    elif session_id:
+        t = db.execute(select(DispatchTask).where(
+            DispatchTask.creator_id == act['employee_id'],
+            DispatchTask.creator_session_id == session_id,
+            DispatchTask.status == 'draft', DispatchTask.deleted_flag == 0)
+            .order_by(DispatchTask.id.desc()).limit(1)).scalar_one_or_none()
+    if t is None:
+        raise DispatchError('DRAFT_NOT_FOUND', '没有待确认的任务草稿', 404)
+    if t.creator_id != act['employee_id'] and act.get('role_code') != 'admin':
+        raise DispatchError('NOT_PARTICIPANT', '只有发起人能确认这个草稿', 403)
+    if t.status != 'draft':
+        raise DispatchError('INVALID_TRANSITION', '任务已不是草稿（%s）' % t.status, 409)
+
+    msg = (message or '').strip()
+    if msg:
+        if any(w in msg for w in CANCEL_WORDS):
+            fs = _move(t, 'cancelled')
+            _event(db, t, 'cancel', act, fs, 'cancelled', msg)
+            db.commit()
+            return dict(task_detail(db, account, t.id), cancelled=True)
+        if not any(w in msg for w in CONFIRM_WORDS):
+            raise DispatchError('NEED_CONFIRM', '没有识别到确认；请回复「确认」或「取消」', 409,
+                                {'draft': serialize_task(t)})
+
+    ov = overrides or {}
+    if ov.get('assignees'):
+        for a in _assignees(db, t.id):
+            db.delete(a)
+        db.flush()
+        for a in ov['assignees']:
+            emp = _emp(a.get('employee_id'))
+            if not emp or emp['disabled']:
+                raise DispatchError('BAD_ASSIGNEE', '承办人不存在或已停用', 422)
+            db.add(DispatchTaskAssignee(
+                task_id=t.id, part=a.get('part') or 'owner', employee_id=emp['employee_id'],
+                login_name=emp['login_name'], name=emp['name'], dept_id=emp['dept_id'],
+                dept_name=(_dept(emp['dept_id']) or {}).get('name'),
+                role_code=_role_of(emp['employee_id']), state='pending'))
+        db.flush()
+    if not [a for a in _assignees(db, t.id) if a.part == 'owner']:
+        raise DispatchError('NO_OWNER', '草稿还没有承办人，请先指定（assignees）', 422)
+    if ov.get('title'):
+        t.title = str(ov['title'])[:200]
+    if ov.get('requirement'):
+        t.requirement = str(ov['requirement'])
+    t.reply_due_at = _parse_dt(ov.get('reply_due_at')) or t.reply_due_at
+    t.due_at = _parse_dt(ov.get('due_at')) or t.due_at
+    if ov.get('require_plan') is not None:
+        t.require_plan = int(ov['require_plan'])
+    if ov.get('verifier_type'):
+        t.verifier_type = ov['verifier_type']
+    if ov.get('verify_rule'):
+        t.verify_rule = ov['verify_rule']
+
+    fs = _move(t, 'open')
+    _event(db, t, 'confirm', act, fs, 'open', msg or '确认下发',
+           {'source': 'chat', 'confirmed_by_message': bool(msg)})
+    for a in _assignees(db, t.id):
+        if a.part == 'cc':
+            continue
+        emp = _emp(a.employee_id) or {'login_name': a.login_name, 'name': a.name}
+        _notice(db, t, 'assign', emp, '【新任务】%s' % t.title,
+                '要求：%s\n回执时限：%s' % (t.requirement, _iso(t.reply_due_at)),
+                dedupe='task:%d:assign:%s' % (t.id, a.login_name))
+    if t.alert_id:
+        a = db.get(AlertItem, int(t.alert_id))
+        if a is not None:
+            a.status = 'dispatched'
+            a.task_id = t.id
+    db.commit()
+    if t.creator_session_id:
+        alert_service.append_chat_message(
+            db, t.creator_session_id, account, 2,
+            '任务已下发：**%s**（%s）。承办人会收到通知，后续进展我会在这里同步。'
+            % (t.title, t.task_no),
+            meta={'kind': 'task_confirmed', 'task_id': t.id})
+    return task_detail(db, account, t.id)
+
+
+def pending_draft(db: Session, account: str, session_id: str) -> dict:
+    act = _actor(account)
+    t = db.execute(select(DispatchTask).where(
+        DispatchTask.creator_id == act['employee_id'],
+        DispatchTask.creator_session_id == session_id,
+        DispatchTask.status == 'draft', DispatchTask.deleted_flag == 0)
+        .order_by(DispatchTask.id.desc()).limit(1)).scalar_one_or_none()
+    if t is None:
+        return {'has_draft': False, 'task_id': None}
+    names = [a.name or a.login_name for a in _assignees(db, t.id) if a.part == 'owner']
+    return {'has_draft': True, 'task_id': t.id, 'draft': serialize_task(t),
+            'message': _draft_confirm_text(t, names)}
+
+
 # ─────────────────────────────────────────────────────────── 通知
 
 def list_notices(db: Session, account: str, unread: bool = False, limit: int = 50) -> dict:
@@ -1342,4 +1691,5 @@ __all__ = ['DispatchError', 'recommend', 'preview', 'create', 'accept', 'decline
            'subtask', 'urge', 'supervise', 'escalate', 'cancel', 'archive',
            'tick', 'check_task', 'list_tasks', 'task_detail', 'stats',
            'list_notices', 'read_notice',
-           'add_attachment', 'list_attachments', 'attachment_file', 'report_docx', 'ask']
+           'add_attachment', 'list_attachments', 'attachment_file', 'report_docx', 'ask',
+           'propose_from_chat', 'confirm_draft', 'pending_draft']

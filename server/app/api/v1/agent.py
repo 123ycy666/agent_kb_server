@@ -313,6 +313,26 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
     r["user_name"] = user_name
     if file_warnings:
         r["doc_warnings"] = file_warnings
+    # 对话建任务：回答后再看一眼"这句话是不是要办一件事" → 拟草稿（**不建任务**）
+    # 严格模式：必须明说"建任务/下发/派给"或带明确时限，避免每句闲聊都弹草稿。
+    # 拟办失败绝不影响问答：只打日志，不抛。
+    try:
+        from app.core.database import SessionLocal as _SessionLocal
+        from app.services import dispatch_service as _ds
+
+        sid_for_task = r.get("session_id") or session_id
+        if sid_for_task and r.get("answer"):
+            _db = _SessionLocal()
+            try:
+                prop = _ds.propose_from_chat(
+                    _db, actor.username, sid_for_task, q,
+                    alert_id=data.get("alert_id"), today=today, strict=True)
+                if prop.get("intent"):
+                    r["task_draft"] = prop
+            finally:
+                _db.close()
+    except Exception as _exc:  # noqa: BLE001 - 拟办失败不影响问答
+        print('[task_draft] 自动拟办跳过：%s: %s' % (type(_exc).__name__, _exc), flush=True)
     return _jr(r)
 
 

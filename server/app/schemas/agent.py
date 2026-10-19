@@ -49,6 +49,10 @@ class AskResponse(BaseModel):
 
     answer: str = Field(description="★ 回答正文（核心字段）")
     session_id: str = Field(description="★ 会话 id，多轮对话下次原样回传")
+    task_draft: dict | None = Field(
+        default=None,
+        description="对话建任务草稿（有办一件事的意图时返回；**必须人工确认才建任务**）",
+    )
     input_question: str = Field(default="", description="用户原始提问")
     question: str = Field(default="", description="补全后的问题（已补时间/地点/口径）")
     completed_question: str | None = Field(default=None, description="补全参考文本（展示用）")

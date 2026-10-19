@@ -18,6 +18,8 @@ from app.schemas.dispatch import (
     AskIn,
     CloseIn,
     DeclineIn,
+    DraftConfirmIn,
+    DraftIn,
     NoteIn,
     PlanIn,
     PolishIn,
@@ -237,6 +239,41 @@ def archive(task_id: int, actor: CurrentActor = Depends(get_current_actor),
     _guard()
     try:
         return dispatch_service.archive(db, actor.username, task_id)
+    except DispatchError as exc:
+        _fail(exc)
+
+
+# ── 对话建任务（智能体拟稿 → 人工确认）────────────────────────
+
+@router_tasks.post('/draft', summary='对话建任务：识别意图并拟草稿（不直接建任务）')
+def task_draft(body: DraftIn, actor: CurrentActor = Depends(get_current_actor),
+               db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return dispatch_service.propose_from_chat(
+            db, actor.username, body.session_id, body.question, body.alert_id, body.today)
+    except DispatchError as exc:
+        _fail(exc)
+
+
+@router_tasks.post('/draft/confirm', summary='确认草稿 → 正式任务（message 可传「确认」/「取消」）')
+def task_draft_confirm(body: DraftConfirmIn, actor: CurrentActor = Depends(get_current_actor),
+                       db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return dispatch_service.confirm_draft(
+            db, actor.username, body.task_id, body.session_id, body.message, body.overrides)
+    except DispatchError as exc:
+        _fail(exc)
+
+
+@router_tasks.get('/draft/pending', summary='查当前会话的待确认草稿')
+def task_draft_pending(session_id: str = Query(..., min_length=1, max_length=64),
+                       actor: CurrentActor = Depends(get_current_actor),
+                       db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return dispatch_service.pending_draft(db, actor.username, session_id)
     except DispatchError as exc:
         _fail(exc)
 

@@ -366,6 +366,61 @@ def _msg_rows(db: Session, chat_sid: str):
         return None
 
 
+# ─────────────────────────────────────────────────────────── 通用会话写入
+# 预警卡片和「对话建任务」都要往会话里追加消息，统一走这两个公共函数。
+
+def ensure_chat_session(db: Session, session_id: str, account: str,
+                        title: str = '') -> int | None:
+    """确保会话存在（不存在就建），返回内部主键；会话表不可用时返回 None。"""
+    row = db.execute(text('SELECT id FROM t_chat_session WHERE session_id=:s'),
+                     {'s': session_id}).mappings().first()
+    if row:
+        return int(row['id'])
+    try:
+        row = db.execute(text(
+            'INSERT INTO t_chat_session (session_id, user_code, title, channel, '
+            ' msg_count, status, last_msg_at) '
+            "VALUES (:sid, :uc, :title, 'web', 0, 1, now()) RETURNING id"
+        ), {'sid': session_id, 'uc': account, 'title': (title or '')[:255]}).mappings().first()
+        db.commit()
+        return int(row['id'])
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning('t_chat_session 不可写（新库未建会话表？）')
+        return None
+
+
+def append_chat_message(db: Session, session_id: str, account: str, sender_type: int,
+                        content: str, msg_type: int = 1, meta: dict | None = None,
+                        title: str = '') -> dict | None:
+    """往任意会话追加一条消息（sender_type：2=AI / 3=系统），返回消息 dict。"""
+    skey = ensure_chat_session(db, session_id, account, title)
+    if skey is None:
+        return None
+    try:
+        seq = db.execute(text('SELECT COALESCE(MAX(seq_no),0) FROM t_chat_message '
+                              'WHERE session_id=:s'), {'s': skey}).scalar_one()
+        row = db.execute(text(
+            'INSERT INTO t_chat_message (session_id, chat_session_id, seq_no, direction, '
+            ' sender_type, msg_type, content, meta_json, gen_status, send_status) '
+            'VALUES (:sk, :sid, :seq, :dir, :st, :mt, :content, CAST(:meta AS jsonb), 1, 3) '
+            'RETURNING id, seq_no'
+        ), {'sk': skey, 'sid': session_id, 'seq': int(seq) + 1,
+            'dir': 2 if sender_type != 1 else 1, 'st': sender_type, 'mt': msg_type,
+            'content': content,
+            'meta': None if meta is None else json.dumps(meta, ensure_ascii=False)}).mappings().first()
+        db.execute(text('UPDATE t_chat_session SET msg_count = msg_count + 1, '
+                        'last_msg_at = now() WHERE id=:s'), {'s': skey})
+        db.commit()
+        return {'id': int(row['id']), 'seq_no': int(row['seq_no']),
+                'sender_type': sender_type, 'msg_type': msg_type,
+                'content': content, 'meta': meta}
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning('t_chat_message 写入失败（会话表缺失？）')
+        return None
+
+
 def _ensure_session(db: Session, sc, alert: AlertItem) -> tuple[str | None, int | None]:
     """建会话（幂等：先查 link）。返回 (session_id, 内部主键)。"""
     emp_id = int(sc.get('employee_id') or 0)

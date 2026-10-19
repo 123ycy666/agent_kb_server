@@ -91,3 +91,20 @@ class PolishIn(BaseModel):
 
 class AskIn(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
+
+
+class DraftIn(BaseModel):
+    """对话建任务：一轮用户原话 → 智能体拟草稿（不直接建任务）。"""
+    session_id: str = Field(..., min_length=1, max_length=64, description='会话 ID（与 /api/ask 同一个）')
+    question: str = Field(..., min_length=1, max_length=4000, description='用户原话')
+    alert_id: int | None = Field(None, description='从某条预警的对话发起时带上')
+    today: str | None = None
+
+
+class DraftConfirmIn(BaseModel):
+    """人工确认草稿：task_id 与 session_id 二选一；message 可传「确认」/「取消」。"""
+    task_id: int | None = None
+    session_id: str | None = None
+    message: str | None = Field(None, max_length=200)
+    overrides: dict[str, Any] | None = Field(
+        None, description='确认前改：assignees/title/requirement/时间/核销')
