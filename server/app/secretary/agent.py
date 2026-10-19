@@ -908,7 +908,7 @@ def _summary_worth_it(session_id):
 def ask(question, model=None, max_steps=None, profile=None, want_page=False, today=None, scope=None,
         page_async=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
-        history_turns=None):
+        history_turns=None, kb_ids=None):
     """question = 用户的原话（不需要上游预处理）。
 
     本服务依次做：**载入多轮上下文** → 字面纠错与名称归一 → 时间与地点补全 →
