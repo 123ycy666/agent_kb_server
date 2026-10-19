@@ -174,7 +174,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Request-Id"],
@@ -333,11 +333,11 @@ else:
 # ── 前端 SPA（生产模式：后端直接托管构建产物，访问 8200 即是完整系统）──────
 # 不用 mount("/")（会拦截一切），改用 catch-all 返回 index.html，
 # 让 React Router 接管 /login、/kb、/overview 等前端路由。
-# 路径：server/app/main.py → parents[2] = 项目根 → webapp/dist
+# 路径：server/app/main.py → parents[2] = 项目根 → web/dist
 _SPA_DIST = _Path(__file__).resolve().parents[2] / "web" / "dist"
 _SPA_INDEX = _SPA_DIST / "index.html"
 if not _SPA_INDEX.is_file():
-    logger.warning("前端 dist 未构建（%s），SPA 兜底不可用；开发模式请用 webapp 的 vite dev", _SPA_DIST)
+    logger.warning("前端 dist 未构建（%s），SPA 兜底不可用；开发模式请用 web 的 vite dev", _SPA_DIST)
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

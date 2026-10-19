@@ -15,13 +15,50 @@
 """
 from __future__ import annotations
 
+import os
 import re
+from urllib.parse import unquote, urlparse
 
 import psycopg
 from psycopg.rows import dict_row
 
-# ad_new 库 DSN（与 .env 的 DATABASE_URL 指向同一个库）
-DSN = "host=127.0.0.1 port=5433 dbname=ad_new user=kb password=kb_dev_pwd"
+
+def _build_dsn() -> str:
+    """从 DATABASE_URL 派生连接串（唯一配置来源）。
+
+    ★ 2026-10-19 修的真实部署故障：这里原来硬编码
+      `host=127.0.0.1 port=5433 dbname=ad_new user=kb password=kb_dev_pwd`
+      —— 那是开发机 docker 的端口。容器里连不上，表现为
+      `/health` 的 name_fix=false、session_summary=false，
+      并且**问答历史静默不落库**（qa_log 走同一连接）。
+    优先级：PG_DSN > DATABASE_URL > 本机开发默认。
+    """
+    dsn = (os.environ.get("PG_DSN") or "").strip()
+    if dsn:
+        return dsn
+    url = (os.environ.get("DATABASE_URL") or "").strip()
+    if not url:
+        try:                      # 兜底：本地跑时 DATABASE_URL 只写在 .env 里
+            from app.core.config import settings
+            url = settings.database_url or ""
+        except Exception:
+            url = ""
+    if url:
+        u = urlparse(re.sub(r"^postgresql\+[a-z0-9_]+://", "postgresql://", url))
+        if u.hostname:
+            try:
+                from psycopg.conninfo import make_conninfo
+                return make_conninfo(
+                    host=u.hostname, port=u.port or 5432,
+                    dbname=(u.path or "/ad_new").lstrip("/"),
+                    user=unquote(u.username or "kb"),
+                    password=unquote(u.password or ""))
+            except Exception:
+                pass
+    return "host=127.0.0.1 port=5433 dbname=ad_new user=kb password=kb_dev_pwd"
+
+
+DSN = _build_dsn()
 
 
 def _translate(sql: str) -> str:

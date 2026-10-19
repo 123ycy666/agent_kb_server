@@ -14,6 +14,15 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class SsoLoginRequest(BaseModel):
+    """第三方系统免密换 token（2026-10-19 为 sga 前端直连新增）。
+
+    只传 login_name（HR 工号登录名），服务端确认员工在职后签发本平台 JWT。
+    """
+
+    username: str = Field(min_length=1, max_length=64)
+
+
 class UserBrief(ORMModel):
     id: int
     username: str

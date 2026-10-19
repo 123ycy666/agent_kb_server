@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # embedding/rerank/LLM 三套端点与 Key 独立配置，便于分别切换。
     online_llm_base_url: str = ""
     online_llm_api_key: str = ""
-    online_llm_model: str = "qwen3.8-max"
+    online_llm_model: str = "deepseek-v4.1-flash-1017"
     # 冲突判定**专用**模型（2026-10-15 新增）。留空 = 跟随 online_llm_model。
     # ⚠️ 为什么必须能拆：online_llm_model 同时服务「知识库问答」与「问数 agent」，
     #    那两处需要强模型（工具调用、长回答最稳）；而冲突判定只是四分类关系判断，
@@ -138,6 +138,14 @@ class Settings(BaseSettings):
 
     # ─── CORS ────────────────────────────────────────────────
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # 我们用 Authorization 头传 JWT、不用 cookie ⇒ 关掉 credentials 才能用 allow_origins=*
+    cors_allow_credentials: bool = False
+
+    # ── 第三方系统免密换 token（sga 前端直连用，2026-10-19）────
+    # 开启后 POST /api/v1/auth/sso/login 可凭 login_name 直接换本平台 JWT。
+    # ⚠️ 等于「知道用户名就能拿 token」，仅限内网/受信系统；对外暴露前关闭或配置 SSO_LOGIN_KEY。
+    sso_login_enabled: bool = True
+    sso_login_key: str = ""
 
     # ══════════════════════════════════════════════════════════
     #  派生属性

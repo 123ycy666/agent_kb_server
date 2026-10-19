@@ -254,6 +254,10 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
 
     # 检索身份 = 当前登录用户（线程/协程内生效，问答结束自动失效）
     kb_adapter.set_actor(actor)
+    # 检索范围同样走上下文登记（None/[] ⇒ 用配置默认 qa_enabled 的库）。
+    # ⚠️ 不要给 ask() 传 kb_ids：它是同步函数，kb_search 由模型自主调用，
+    #    参数传不进去，只能靠 ContextVar；run_in_threadpool 会复制上下文。
+    kb_adapter.set_scope(kb_scope)
 
     try:
         # ⚠️ 必须丢线程池执行（2026-10-16 修的真实故障）：

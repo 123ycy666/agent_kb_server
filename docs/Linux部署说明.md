@@ -86,11 +86,25 @@ docker compose up -d postgres          # 用容器（镜像 pgvector/pgvector:pg
 chmod +x start_backend.sh start_all.sh
 ./start_all.sh
 
-# ⑦ 导入纠错词典（★ 必须在建表之后、正式使用之前）
+# ⑦ 初始化两张"自动建表覆盖不到"的脚本（★ 都要执行）
+#   7a 纠错词典：6 张 t_nc_* 表，约 4.1 万行
 psql -U kb -h 127.0.0.1 -p 5433 -d ad_new -f db/lexicon.sql
+#   7b 对话记录：5 张 t_chat_* / t_user 表（历史对话、会话统计、摘要全靠它）
+psql -U kb -h 127.0.0.1 -p 5433 -d ad_new -f db/chat_tables.sql
 ```
 
 ### ★ 第 ⑦ 步为什么不能跳过
+
+这里有两个**自动建表覆盖不到**的脚本，都不是可选项：
+
+| 脚本 | 建什么 | 漏了会怎样 |
+|---|---|---|
+| `db/lexicon.sql` | 纠错词典 6 张 `t_nc_*`（约 4.1 万行） | 纠错**静默失效**（「环谭」不改「环潭」） |
+| `db/chat_tables.sql` | 对话记录 5 张（`t_chat_session` / `t_chat_message` / `t_chat_query_trace` / `t_chat_trace_step` / `t_user`） | 问答能返回，但**历史对话 / 会话统计 / 会话摘要全部不工作**，`/health` 里 `session_summary=false`、`qa_id=null` |
+
+两个脚本都是**幂等**的（`IF NOT EXISTS` / `DROP TABLE IF EXISTS`），重复执行不会报错、不会删数据。
+
+#### 纠错词典为什么不会"自己长出来"
 
 系统的名称/错别字纠错（「环谭」→「环潭」、「现损」→「线损」）靠 PG 里的
 **6 张 `t_nc_*` 表**（约 4.1 万行）。这 6 张表：

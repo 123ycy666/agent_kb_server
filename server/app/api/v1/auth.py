@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
     MeResponse,
+    SsoLoginRequest,
     UserBrief,
 )
 from app.schemas.common import OkResponse
@@ -68,6 +69,73 @@ def login(
         action=audit.AuditAction.LOGIN,
         resource_type="user",
         resource_id=user.id,
+        request=request,
+        commit=True,
+    )
+
+    return LoginResponse(
+        access_token=token,
+        expires_in=settings.access_token_expire_minutes * 60,
+        user=UserBrief.model_validate(user),
+        roles=[user.role],
+        permissions=sorted(permissions_for(user.role)),
+    )
+
+
+@router.post(
+    "/sso/login",
+    response_model=LoginResponse,
+    summary="第三方免密换 token（sga 前端直连用）",
+)
+def sso_login(
+    payload: SsoLoginRequest,
+    request: Request,
+    x_sso_key: str | None = Header(default=None, alias="X-SSO-Key"),
+    db: Session = Depends(get_db),
+    mysql_db: Session = Depends(get_mysql_db),
+):
+    """凭 HR 登录名直接换本平台 JWT（**不校验密码**）。
+
+    2026-10-19 按业务要求新增：sga 前端直连本平台使用。
+    员工必须在 `t_employee` 存在且在职；角色/权限仍以 `app_user` 为准。
+
+    ⚠️ 安全说明：这等价于「知道用户名就能拿到该用户身份」。
+       - 默认只在服务端内网可用（8200 仅监听 127.0.0.1，公网只能经 nginx）
+       - 对外暴露前请在 `.env` 设 `SSO_LOGIN_ENABLED=false`，或配置 `SSO_LOGIN_KEY`
+         要求调用方带 `X-SSO-Key` 头。
+    """
+    if not settings.sso_login_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "SSO_DISABLED", "message": "该登录方式未启用"},
+        )
+    if settings.sso_login_key and (x_sso_key or "") != settings.sso_login_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "BAD_SSO_KEY", "message": "X-SSO-Key 不正确"},
+        )
+
+    login_name = (payload.username or "").strip()
+    emp = employee.fetch_employee(mysql_db, login_name)
+    if emp is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "USER_NOT_FOUND", "message": "员工不存在或已停用"},
+        )
+
+    user = employee.sync_projection(db, emp)
+
+    from app.core.rbac_config import permissions_for
+
+    token = create_access_token(user.id, extra={"username": user.username})
+
+    audit.log_action(
+        db,
+        actor=CurrentActor(type="user", user_id=user.id, username=user.username),
+        action=audit.AuditAction.LOGIN,
+        resource_type="user",
+        resource_id=user.id,
+        detail={"via": "sso"},
         request=request,
         commit=True,
     )

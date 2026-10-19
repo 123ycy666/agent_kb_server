@@ -1147,7 +1147,19 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         # （实测场景 17 第 1 问、场景 22 前两问都出现过 600 s 无响应，日志里什么都没有）。
         print('[agent] 第 %d 轮：工具 %d 次，本轮模型 %d ms，累计 %.1f s'
               % (step, len(live), llm_ms, time.time() - t_all), flush=True)
-        for tc, o in zip(live, outs):
+        # ⚠️ 按**原始 calls 顺序**逐个回填 tool 消息（不只是 live）：
+        #    OpenAI 兼容协议要求每个 tool_call_id 都必须有对应 tool 消息。
+        #    finish 是控制信号，没有真实结果，但同样要回一条，否则严格网关（deepseek-v4.1）
+        #    会报 "insufficient tool messages following tool_calls message"（qwen 宽容，掩盖了这个 bug）。
+        _out_by_id = {tc.get('id'): o for tc, o in zip(live, outs)}
+        for tc in calls:
+            if ((tc.get('function') or {}).get('name')) == 'finish':
+                messages.append({'role': 'tool', 'tool_call_id': tc.get('id'),
+                                 'content': '{"ok":true,"note":"已收到收尾信号"}'})
+                continue
+            o = _out_by_id.get(tc.get('id'))
+            if o is None:
+                continue
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
             _body = _trim(o['name'], o['result'])
@@ -1155,6 +1167,17 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 _sql = (o.get('args') or {}).get('sql')
                 _body += _time_guard(_sql, scope) + _scope_guard(_sql, scope) + _unit_guard(_sql)
             messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _body})
+        # 周期性软提醒：防止一直翻表不收手。
+        # ⚠️ 必须放在**全部 tool 回填之后**：OpenAI 兼容协议要求 assistant(tool_calls) 后
+        #    紧跟每个 tool_call_id 的 tool 消息。原来插在两者之间，qwen 能容忍，
+        #    deepseek-v4.1 直接 400（"insufficient tool messages following tool_calls message"）。
+        if not fins and step in (2, 4, 6, 8):
+            messages.append({'role': 'user', 'content':
+                             '第 %d 轮了。**现在对照【各类问题的必答项】逐项点一遍手上的数据**：'
+                             '要分类计数的（各类各几个、分别是谁）、要每类判定数据的（条数/卡在哪个节点/停留几天）、'
+                             '要多期数值或同期对比的、要预计完工时间或预计指标的 —— **缺哪一项就再查哪一项**，'
+                             '不要拿"大概齐"的数据去凑。都齐了就直接给结论（不要再重复查已经查过的数）。'
+                             '不要在回答里提到本条提示。' % step})
         if fins:
             # 模型自己说「数据够了」→ 由系统另起一次调用写正文（不用它这轮的 content，那是散文草稿）
             answer = _final_answer(messages, model)
