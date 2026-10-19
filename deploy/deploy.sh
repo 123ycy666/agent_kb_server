@@ -95,6 +95,14 @@ if [ -z "$(docker exec "$PG" psql -U kb -d "$DB" -tAc "select to_regclass('publi
   docker exec "$PG" psql -U kb -d "$DB" -q -f /tmp/lexicon.sql >> "$LOG" 2>&1
 fi
 
+# ── 4.5 预警与任务流转 10 张表（幂等；每次部署都跑，保证索引/约束到位）──
+if [ -f "$NEW_DIR/db/dispatch_tables.sql" ]; then
+  echo "  导入 db/dispatch_tables.sql（幂等）"
+  docker cp "$NEW_DIR/db/dispatch_tables.sql" "$PG:/tmp/dispatch.sql"
+  docker exec "$PG" psql -U kb -d "$DB" -q -v ON_ERROR_STOP=1 -f /tmp/dispatch.sql >> "$LOG" 2>&1 \
+    || warn "dispatch 表导入失败（新接口会 503，检查 $LOG）"
+fi
+
 # ── 5. 起容器 + 健康检查 + 回滚 ────────────────────────────
 step "启动新容器"
 run_container "$IMAGE"
