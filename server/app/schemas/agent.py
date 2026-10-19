@@ -30,7 +30,7 @@ class AskRequest(BaseModel):
         description="本次检索的知识库 id 列表（问答页勾选）。不传则用「参与智能问答」标记的库。"
         "服务端会校验：不在可用集合内的会被过滤；全部无效则返回 403",
     )
-    model: str | None = Field(default=None, description="指定模型 id；不传用默认（qwen3.8-max）")
+    model: str | None = Field(default=None, description="指定模型 id；不传用默认（qwen3.8-flash）")
     profile: str | None = Field(default=None, description="用户画像（可选），与问题一起交给模型")
     today: str | None = Field(default=None, description="业务日期（YYYY-MM-DD）；不传按系统当天")
     scope: str | None = Field(default=None, description="业务范围（可选）")

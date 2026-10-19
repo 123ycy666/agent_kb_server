@@ -145,7 +145,7 @@ function loadModels(){
       });
       sel.appendChild(og);
     });
-    sel.value=d.default||'qwen3.8-max';
+    sel.value=d.default||'qwen3.8-flash';
     document.getElementById('modelnote').textContent=MODELNOTE[sel.value]||'';
   }).catch(function(){});
 }

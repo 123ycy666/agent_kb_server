@@ -32,7 +32,7 @@ router = APIRouter(prefix="/models", tags=["模型配置"])
 MODE_LABELS = {
     "mock": "Mock 档位（零依赖，用于功能开发与演示）",
     "local": "本地模型档位（内网部署的 bge-m3 / bge-rerank-m3 / DeepSeek / 千问3.6）",
-    "online": "线上 API 档位（阿里云百炼：text-embedding-v4 / gte-rerank-v2 / qwen3.8-max）",
+    "online": "线上 API 档位（阿里云百炼：text-embedding-v4 / gte-rerank-v2 / qwen3.8-flash）",
 }
 
 
