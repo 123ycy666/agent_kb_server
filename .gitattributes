@@ -1,10 +1,18 @@
-# 换行符规则：保证跨平台不坏文件
-#
-# 关键在 .sh —— 本机 core.autocrlf=true，如果不锁，Windows 上检出会变成 CRLF，
-# 再传到 Linux 就成了 `\r: command not found` 这类莫名其妙的报错。
-*.sh   text eol=lf
-*.bat  text eol=crlf
-*.cmd  text eol=crlf
+# ── 换行符规则（重要）────────────────────────────────────────────
+# shell 脚本必须保持 LF。
+# 本仓所在机器的 core.autocrlf 为 true，若不加这条，git 在 checkout 时
+# 会把 *.sh 改写成 CRLF —— 拿到 Linux 上跑就会报：
+#     bash: ./start_backend.sh: /usr/bin/env bash^M: bad interpreter
+# 这个错误极难从日志看出原因，所以用 .gitattributes 钉死。
+*.sh text eol=lf
 
-# 其余按内容自动判定
-* text=auto
+# SQL 必须保持 LF。
+# db/lexicon.sql 是要拷到 Linux 上用 psql -f 导入的；CRLF 虽然 PG 的 COPY 能容忍，
+# 但用 stdin 管道传入时会因二次换行转换导致 COPY 列错位
+# （实测报错：invalid input syntax for type bigint: "" / COPY t_nc_ambiguous line 2 column id）。
+# 生成该文件时也一律用 bytes 写入，不要用 write_text（Windows 上会转成 CRLF）。
+*.sql text eol=lf
+
+# Windows 批处理保持 CRLF（cmd 对 LF 的兼容性差）
+*.bat text eol=crlf
+*.cmd text eol=crlf

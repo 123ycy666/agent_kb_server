@@ -1,0 +1,507 @@
+# -*- coding: utf-8 -*-
+"""年度缺陷治理计划报告：把「技能文档 + 通知数据」交给模型，让它用现有工具自己查、自己分析。
+
+这里不写死任何 SQL、不写死步骤：流程与判断方法在 secretary/skills/*.md 里，
+换一年、换一个所、换一个分析主题都只改文档，不改代码。
+"""
+import os
+import re
+import time
+
+from app.secretary import agent
+from app.secretary import semantic
+from app.secretary import tools_db
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+# 技能文档与两个规则 JSON 就在 secretary/skills/ 下（跟代码同目录，打包不会漏）。
+# ⚠️ 2026-10-16 平台线修正过这个路径：原来写 dirname(HERE)/skills（= app/skills，不存在），
+#    list_skill_docs 的异常被静默吞掉 ⇒ 技能台整片空白且没有任何报错。
+SKILL_DIR = os.path.join(HERE, 'skills')
+SKILL_DOC = os.path.join(SKILL_DIR, '预算分配.md')
+TABLE_DOC = os.path.join(SKILL_DIR, '数据表说明书.md')
+RULE_DOC = os.path.join(SKILL_DIR, '判据规则.md')
+
+BASE_SYSTEM = (
+    '你是随州供电公司的项目管理秘书。\n'
+    '【下面是约束你查数的，不是写进回答的】\n'
+    '1. 回答里每个数字都要有出处：上游传过来的数据，或你用 run_sql 查到的结果；追不到出处的数字不许写。\n'
+    '2. 项目清单与金额、缺陷类型、指标现状，都必须先查过才能写；一次工具都不调就想作答会被直接拦下。'
+    '凭印象编项目名和数字，是这份工作里最严重的错误。\n'
+    '3. 只能查业务字典里登记的表，只允许 SELECT；查询要把已作废的记录排除。\n'
+    '4. 表名与字段名以上面给的表目录为准，不确定某个字段在哪张表时用 find_column 查，不要凭猜测写 SQL。\n'
+    '5. 库里没有的就写「未查得」或「无法判定」，不许估算、不许补 0、不许拿别的年份顶。\n'
+    '【下面是文字的硬要求】\n'
+    '6. 不许出现数据库表名、字段名、英文标识、SQL、查询条件、返回行数、期次编码。\n'
+    '7. 不许出现「数据来源」「数据溯源」「口径声明」「字段」「表」这类技术性说明段落，'
+    '也不许写「本回答所有数字均可追溯」这类自我声明。\n'
+    '8. 时间用业务说法（「截至2026年9月」）；不要提 AI、不要提工具、不要提查询过程、不要输出思考过程。\n'
+    '9. 缺陷类型、工单状态这类编号必须翻成中文再写。\n'
+    '10. 金额一律万元、两位小数；比率与时长两位小数。\n'
+    '11. 先结论后依据，不要客套话。\n'
+    '12. **技能文档要求逐条列出的明细，必须一条一行列全；不许用「等 N 条」「其余」代替清单。**\n'
+)
+
+
+def _read(path):
+    with open(path, encoding='utf-8') as f:
+        return f.read()
+
+
+def _system(doc_text=None, today=None):
+    try:
+        skill = doc_text if doc_text is not None else _read(SKILL_DOC)
+    except Exception as e:
+        skill = '（技能文档读取失败：%s）' % e
+    try:
+        rules = _read(RULE_DOC)
+    except Exception:
+        rules = ''
+    if rules:
+        skill = skill + '\n\n【判据规则（判断标准的唯一出处，必须按它判断）】\n' + rules
+    try:
+        menu = semantic.table_menu()
+    except Exception:
+        menu = ''
+    bar = '=' * 40
+    today = today or time.strftime('%Y-%m-%d')
+    base = BASE_SYSTEM + ('今天的日期是 %s。「今天」「当前」「截至现在」一律按这一天算，'
+                          '不要拿上游数据里的时间当今天。\n' % today)
+    return '\n\n'.join([
+        base,
+        bar + '\n【技能文档：必须按它来分析】\n' + bar + '\n' + skill,
+        bar + '\n【可查的表（表名与字段以上面目录为准，字段不确定用 find_column 查）】\n' + bar + '\n' + menu,
+    ])
+
+
+def run_skill(skill_id, model=None, work_name='', frm='', to='', questions=None, role='', scope='', use_doc=True, inputs=None):
+    """触发一个技能：把它的整组问题 + 技能文档一起交给模型，一次跑完出一份结果。"""
+    t0 = time.time()
+    cfg = list_triggers()
+    sk = None
+    for s in cfg.get('skills') or []:
+        if s.get('id') == skill_id:
+            sk = s
+            break
+    if not sk:
+        return {'skill': str(skill_id), 'answer': '没有这个技能。', 'trace': [], 'tool_calls': 0}
+    doc = (sk.get('doc_text') or '') if use_doc else ''
+    qs = [str(x) for x in questions if str(x).strip()] if questions else [q.get('q') for q in (sk.get('questions') or [])]
+    if not qs:
+        return {'skill': sk.get('name'), 'answer': '这个技能没有勾选任何问题。', 'trace': [], 'tool_calls': 0}
+    head = ''
+    if role or scope:
+        head += ('你的身份：%s。数据权限范围：%s。\n'
+                 '**所有数据只能取这个范围内的**，并且要说清是在这个范围下的结论；范围外的不要给。\n'
+                 % (role or (sk.get('role') or ''), scope or '全部'))
+    head += '你的角色：%s。\n' % (role or sk.get('role') or '')
+    if inputs:
+        head += ('上游系统传过来的数据（业务系统推过来的原文，直接采用，不要改动；如果与库里的数据不一致，以这份为准并说明）：\n')
+        for it in inputs:
+            head += '  - %s：%s\n' % (it.get('label') or '', it.get('value') or '')
+    if work_name:
+        head += ('上游系统推过来一张单据：工单「%s」从「%s」变为「%s」（变更时间见上面的上游数据，'
+                 '**那不是今天，别拿它当统计截止日**）。请结合这次变更来答。\n' % (work_name, frm, to))
+    head += ('下面是这个技能要你回答的 %d 个问题，**请合并成一份回答**（不要一问一答地重复），'
+             '按技能文档要求的段落与口径来组织：\n' % len(qs))
+    user = head + '\n'.join('%d. %s' % (i + 1, q) for i, q in enumerate(qs))
+    if not doc:
+        user += '\n\n（本技能暂无技能文档，请按常识与已有提示词作答，并说明你依据了什么。）'
+    answer, trace, blocked = _loop(_system(doc), user, model or agent.config.MODEL)
+    calls = [t for t in trace if t.get('kind') == 'tool']
+    return {'skill': sk.get('name'), 'skill_id': skill_id, 'answer': answer, 'trace': trace, 'use_doc': bool(use_doc),
+            'questions': len(qs), 'doc': sk.get('doc'), 'doc_chars': len(doc), 'blocked': blocked,
+            'tool_calls': len(calls), 'elapsed_ms': int((time.time() - t0) * 1000)}
+
+
+def _parse_title(answer):
+    """从模型那行 JSON 里取 {count, title}。取不到返回 (None, '', False)。"""
+    import json as _json
+    t = (answer or '').strip()
+    if t.startswith('```'):
+        t = t.strip('`').strip()
+    i, j = t.find('{'), t.rfind('}')
+    if i >= 0 and j > i:
+        try:
+            d = _json.loads(t[i:j + 1])
+            cnt = d.get('count')
+            cnt = int(cnt) if cnt is not None and str(cnt).strip() not in ('', 'null') else 0
+            return cnt, str(d.get('title') or '').strip(), True
+        except Exception:
+            pass
+    return None, '', False
+
+
+_METRIC_STOP = set('and or in not null limit order by desc asc where is count sum avg max min'.split())
+
+
+def _cols_of(conds):
+    """从条件里解析出列名：先去掉字符串字面量、{占位符}、函数名，再取标识符。"""
+    s = re.sub(r"'[^']*'", ' ', conds)
+    s = re.sub(r'\{[^}]*\}', ' ', s)
+    s = re.sub(r'\b[a-z_]+\s*\(', ' ', s)
+    return sorted(set(re.findall(r'([a-z_]{3,})', s)) - _METRIC_STOP)
+
+
+def _tables_with(cols):
+    """同时登记了这些列的表（字典决定归属）—— 公式里因此**不用写表名**。"""
+    ph = ','.join("'%s'" % x for x in cols)
+    rows = semantic._rows('SELECT table_name AS t, COUNT(*) AS n FROM ai_data.ai_column_metadata '
+                          'WHERE column_name IN (%s) GROUP BY table_name HAVING n = %d' % (ph, len(cols)))
+    return [r['t'] for r in rows]
+
+
+def _metric_formula(code):
+    for r in semantic._rows("SELECT metric_code, metric_name, metric_formula, unit FROM ai_data.ai_metric_metadata "
+                            "WHERE metric_code = '%s'" % str(code).strip().replace("'", "")):
+        return r
+    return None
+
+
+def metric_sql(code, params):
+    """指标口径（字典里的 metric_formula）-> 可执行 SQL。
+
+    **公式里不写表名**：表由列字典按公式用到的列定位（换库/换表名只改字典，公式与代码都不动）。
+    返回 (sql, table)；定位不唯一或格式不认识时返回 (None, 原因)。
+    """
+    m = _metric_formula(code)
+    if not m:
+        return None, '字典里没有这个指标：%s' % code
+    f = (m.get('metric_formula') or '').strip()
+    if ' where ' not in f:
+        return None, '指标公式格式不认识（需要 "聚合 where 条件"）：%s' % f
+    agg, conds = f.split(' where ', 1)
+    today = params.get('today') or time.strftime('%Y-%m-%d')
+    conds = re.sub(r'days_since\(\s*([a-z_]+)\s*\)',
+                   lambda mo: "DATEDIFF('%s', %s)" % (today, mo.group(1)), conds)
+    cols = _cols_of(conds)
+    if not cols:
+        return None, '公式里没解析出列：%s' % f
+    tables = _tables_with(cols)
+    if len(tables) != 1:
+        return None, ('公式用到的列（%s）对应 %d 张表，无法唯一定位：%s'
+                      % (','.join(cols), len(tables), ','.join(tables)))
+    for k in ('today', 'scope', 'account', 'node'):
+        if k in params:
+            conds = conds.replace('{%s}' % k, str(params[k]))
+    if '{' in conds:
+        return None, '公式里还有没替换的占位符：%s' % conds
+    return ('SELECT (%s) AS n FROM %s WHERE %s' % (agg.strip(), tables[0], conds)), tables[0]
+
+
+def run_skill_title(skill_id, model=None, account='', when='', scope='', inputs=None, today=None):
+    """定时触发专用：**只回一个标题**。
+
+    定时任务是上游的，它只要「今天有没有要报的异常」这一句话。所以这里：
+      - 只做计数判断，不查明细、不写分析（明细问题交给 /api/ask，按《判据规则》答）；
+      - **永远有返回**：无异常也回 status=ok 的标题，绝不空返回；
+      - 判据查不出来时回 status=unknown 并说明，让上游有东西可展示。
+    """
+    t0 = time.time()
+    cfg = list_triggers()
+    sk = None
+    for s in cfg.get('skills') or []:
+        if s.get('id') == skill_id:
+            sk = s
+            break
+    if not sk:
+        return {'skill_id': skill_id, 'status': 'unknown', 'count': None, 'error': 'unknown_skill',
+                'title': '没有这个技能：' + str(skill_id), 'checked_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+    if (sk.get('trigger') or '') != 'scan':
+        return {'skill_id': skill_id, 'name': sk.get('name'), 'status': 'unknown', 'count': None,
+                'error': 'not_scan_trigger', 'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'title': '%s 不是定时触发技能，请用 /api/skill/run' % (sk.get('name') or skill_id)}
+    doc = sk.get('doc_text') or ''
+    tu = sk.get('trigger_user') or {}
+    who_role = sk.get('role') or tu.get('role') or ''
+    who_scope = scope or sk.get('scope') or tu.get('dept') or '全部'
+    now = when or time.strftime('%Y-%m-%d %H:%M:%S')
+    # 业务日期：上游传；没传才用服务器日期。**必须在下面任何用到 today 的地方之前**
+    # （合并 4.5 时默认值被排到了后面，导致不传 today 时 replace() 收到 None 而报错）。
+    today = today or time.strftime('%Y-%m-%d')
+
+    # ---- 声明式计数（**默认路径**）：计数查询写在技能配置的 title_rule 里，这里直接执行 ----
+    # 为什么不让模型数：模型每次现写 SQL，同一请求会数出 13/5/0 三种结果（实测）。
+    # 口径属于标准层 —— 放在技能配置里，业务能改、改了不用发版；模型只负责措辞（其实是模板）。
+    rule = sk.get('title_rule') or {}
+    metric_codes = rule.get('count_metrics') or ([rule.get('count_metric')] if rule.get('count_metric') else [])
+    if metric_codes:
+        params = {'today': today, 'scope': who_scope, 'account': account or '',
+                  'node': rule.get('node') or who_role or ''}
+        vals, sqls, err = {}, [], None
+        for code in metric_codes:
+            sql, tb = metric_sql(code, params)
+            if not sql:
+                err = tb
+                break
+            sqls.append(sql)
+            try:
+                row = (tools_db.run_sql(sql).get('rows') or [{}])[0]
+                vals[code] = int(list(row.values())[0] or 0)
+            except Exception as e:                      # noqa: BLE001
+                err = '%s: %s' % (type(e).__name__, str(e)[:200])
+                break
+        if err:
+            return {'skill_id': skill_id, 'name': sk.get('name'), 'status': 'unknown', 'count': None,
+                    'title': (sk.get('name') or skill_id) + '：计数口径没取到，请人工核对',
+                    'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'), 'today': today,
+                    'triggered_at': now, 'account': account or '', 'role': who_role, 'scope': who_scope,
+                    'sql': sqls, 'error': err, 'mode': 'metric',
+                    'elapsed_ms': int((time.time() - t0) * 1000)}
+        vals.update({'scope': who_scope, 'account': account or '', 'today': today,
+                     'n': vals.get(metric_codes[0], 0)})
+        n = vals['n']
+        tmpl = rule.get('zero') or '今天无异常'
+        if n:
+            try:
+                tmpl = (rule.get('template') or '今天有 {n} 项需处理').format(**vals)
+            except Exception:
+                tmpl = '今天有 %d 项需处理' % n
+        return {'skill_id': skill_id, 'name': sk.get('name'),
+                'status': 'abnormal' if n else 'ok', 'count': n, 'title': tmpl,
+                'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'), 'today': today,
+                'triggered_at': now, 'account': account or '', 'role': who_role, 'scope': who_scope,
+                'sql': sqls, 'mode': 'metric',
+                'by_metric': {k: v for k, v in vals.items() if k in metric_codes},
+                'elapsed_ms': int((time.time() - t0) * 1000)}
+    user = ('你的身份：%s。数据范围：%s。**所有数据只能取这个范围内。**\n' % (who_role or '（未定）', who_scope))
+    if account:
+        user += '上游传过来的账号：%s\n' % account
+    if inputs:
+        user += '上游传过来的数据：\n'
+        for it in inputs:
+            user += '  - %s：%s\n' % (it.get('label') or '', it.get('value') or '')
+    user += (
+        '业务日期（今天）：%s\n定时任务触发时间：%s\n\n'
+        '【任务】只做一件事：按技能文档的判据，判断**今天有没有需要报的异常**，给一个数字和一个标题。\n'
+        '1. 只用 run_sql 查**计数**（需要几条计数就一次发几条）；**不要查明细、不要写分析、不要写建议**。\n'
+        '2. count = 命中判据的条数；0 表示无异常。\n'
+        '3. 输出**只有一行 JSON**，不要任何其它文字、不要代码块：\n'
+        '   {"count": 整数, "title": "一句话标题"}\n'
+        '   - title 要写清对象与数量，例如「今天有 3 个项目逾期未处理」；count=0 时写「今天无项目逾期」。\n'
+    ) % (today, now)
+    answer, trace, blocked = _loop(_system(doc, today), user, model or agent.config.MODEL, max_steps=8)
+    count, title, ok = _parse_title(answer)
+    if ok:
+        status = 'abnormal' if (count or 0) > 0 else 'ok'
+        if not title:
+            title = ('今天有 %d 项需要处理' % count) if count else '今天无异常'
+    else:
+        # 没解析出 JSON —— 不空返回：把模型原文压成一行当标题，并标 unknown 让人能看出来。
+        status = 'unknown'
+        title = ((sk.get('name') or '') + '：本次未取到判据结果，请人工核对').strip()
+    calls = [t for t in trace if t.get('kind') == 'tool']
+    return {'skill_id': skill_id, 'name': sk.get('name'), 'status': status,
+            'count': count if ok else None, 'title': title,
+            'checked_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'today': today, 'triggered_at': now, 'account': account or '',
+            'role': who_role or '', 'scope': who_scope or '',
+            'tool_calls': len(calls), 'sql': [t.get('args', {}).get('sql') for t in calls if t.get('args', {}).get('sql')],
+            'blocked': blocked, 'elapsed_ms': int((time.time() - t0) * 1000),
+            'raw': (answer or '')[:400]}
+
+
+def state_change_sim():
+    """状态变更触发台的素材：规则表 + 一批真实工单当假数据（含当前状态中文）。"""
+    import json as _json
+    p = os.path.join(SKILL_DIR, '状态变更规则.json')
+    try:
+        with open(p, encoding='utf-8') as f:
+            cfg = _json.load(f)
+    except Exception as e:
+        return {'rules': [], 'orders': [], 'error': str(e)[:200]}
+    sql = ("SELECT w.work_name, w.budget_total, w.work_status, d.data_label AS status_cn "
+           "FROM t_power_work_order w JOIN t_dict t ON t.dict_code='WORK_STATUS' "
+           "JOIN t_dict_data d ON d.dict_id=t.dict_id AND d.data_value=w.work_status "
+           "WHERE w.deleted_flag=0 AND w.work_status IN ('1','2','3','6','7') ORDER BY w.id DESC LIMIT 8")
+    try:
+        rows = tools_db.run_sql(sql).get('rows') or []
+    except Exception as e:
+        rows, _ = [], None
+    orders = [{'work_name': r.get('work_name'), 'budget': float(r.get('budget_total') or 0),
+               'status_cn': r.get('status_cn')} for r in rows]
+    cfg['orders'] = orders
+    cfg['sql'] = sql
+    return cfg
+
+
+def list_triggers():
+    """读 skills/技能触发配置.json，并把对应技能文档正文带上，供前端触发台渲染。"""
+    import json as _json
+    p = os.path.join(SKILL_DIR, '技能触发配置.json')
+    try:
+        with open(p, encoding='utf-8') as f:
+            cfg = _json.load(f)
+    except FileNotFoundError:
+        # 触发配置已经不参与问答链路（问答只认《判据规则》），文件被撤掉是正常状态：
+        # 这里返回空触发台即可，不要把「文件不存在」当成错误回给前端。
+        return {'trigger_types': {}, 'skills': [], 'note': '触发配置未启用（问答只按《判据规则》）'}
+    except Exception as e:
+        return {'trigger_types': {}, 'skills': [], 'error': str(e)[:200]}
+    docs = {d['name']: d['content'] for d in list_skill_docs()}
+    for s in cfg.get('skills') or []:
+        s['doc_text'] = docs.get(s.get('doc') or '', '')
+        s['has_doc'] = bool(s['doc_text'])
+    return cfg
+
+
+def list_skill_docs():
+    """列出 skills/ 下的技能文档（名字 + 标题 + 正文），供页面选用。"""
+    out = []
+    try:
+        for fn in sorted(os.listdir(SKILL_DIR)):
+            if not fn.lower().endswith('.md'):
+                continue
+            try:
+                txt = _read(os.path.join(SKILL_DIR, fn))
+            except Exception:
+                continue
+            title = ''
+            for ln in txt.splitlines():
+                if ln.startswith('# '):
+                    title = ln[2:].strip()
+                    break
+            out.append({'name': fn, 'title': title, 'chars': len(txt), 'content': txt})
+    except Exception as e:                          # noqa: BLE001
+        # 原来是 `pass`：目录不存在时静默返回空列表，页面表现成「技能台什么都没有」，
+        # 排查时完全没有线索（2026-10-16 就是这么被坑的）。改成打日志，别再吞。
+        print('[report] 读取技能文档目录失败（%s）：%s: %s'
+              % (SKILL_DIR, type(e).__name__, e), flush=True)
+    return out
+
+
+def _notice_text(notice):
+    lines = ['【本次收到的预算分配通知】',
+             '供电所：%s' % notice.get('station'),
+             '所属公司：%s' % notice.get('company'),
+             '数据基准年度（上期）：%s' % notice.get('base_year'),
+             '计划年度（本期）：%s' % notice.get('plan_year'),
+             '本期分配金额：%s 元' % notice.get('cur_amount'),
+             '上期分配金额：%s 元' % notice.get('prev_amount'),
+             '',
+             '本所 16 项指标得分（标准分 0~100；越高代表这一项越需要资源，不是越高越好）：',
+             '| 指标 | 方向 | 上期标准分 | 本期标准分 |',
+             '|---|---|---|---|']
+    for m in notice.get('metrics') or []:
+        lines.append('| %s | %s | %s | %s |' % (m.get('name'), m.get('direction'), m.get('prev_score'), m.get('cur_score')))
+    lines += ['', '请按技能文档的要求，写出完整的分析报告。']
+    return '\n'.join(lines)
+
+
+def _loop(system, user, model, max_steps=26):
+    messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
+    trace = []
+    answer = ''
+    nudged = blocked = False
+    for step in range(1, max_steps + 1):
+        t0 = time.time()
+        resp = agent._chat(messages, model, use_tools=True, max_tokens=3000)
+        llm_ms = int((time.time() - t0) * 1000)
+        msg = resp['choices'][0]['message']
+        calls = msg.get('tool_calls') or []
+        if not calls:
+            answer = (msg.get('content') or '').strip()
+            used_tool = any(t.get('kind') == 'tool' for t in trace)
+            if not used_tool and not nudged:
+                nudged = True
+                trace.append({'seq': len(trace) + 1, 'kind': 'nudge', 'ms': llm_ms,
+                              'content': '模型未调用任何工具就想出报告，已要求其先查数'})
+                messages.append({'role': 'assistant', 'content': answer})
+                messages.append({'role': 'user', 'content':
+                                 '你这一轮没有调用任何工具。报告里的项目清单、金额、缺陷类型、指标现状都还没有核实过，不许凭印象写。'
+                                 '请先用 run_sql 把这些查出来（本所项目清单与金额、缺陷类型中文、本所得分明细、六项指标现状），再写报告。'
+                                 '不要在回答里提到本条提示。'})
+                continue
+            if not used_tool:
+                blocked = True
+                trace.append({'seq': len(trace) + 1, 'kind': 'blocked', 'ms': llm_ms,
+                              'content': '第二次仍未调用工具，已拦下不予出报告'})
+                answer = ('【未核实，不予出报告】两次机会里都没有查询数据库，报告里的项目和数字无法追溯，已拦下。请重试或换更强的模型。')
+                break
+            trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'ms': llm_ms, 'content': answer[:600]})
+            break
+        messages.append({'role': 'assistant', 'content': msg.get('content') or '', 'tool_calls': calls})
+        outs = agent._exec_calls(calls)
+        for tc, o in zip(calls, outs):
+            trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
+                          'ms': o['ms'], 'round': step, 'result': o['result']})
+            messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': agent._trim(o['name'], o['result'])})
+        if step in (14, 20):
+            messages.append({'role': 'user', 'content': '已经查了不少。够写报告就立刻按技能文档的 5 节输出报告，不要再翻表。'})
+    if not answer:
+        answer = '（模型到步数上限仍未给出报告，请重试或减少要分析的内容。）'
+    return answer, trace, blocked
+
+
+def _q(v):
+    return chr(39) + str(v).replace(chr(39), chr(39) + chr(39)) + chr(39)
+
+
+def latest_year():
+    try:
+        r = tools_db.run_sql('SELECT MAX(year) AS y FROM t_power_station_score_detail WHERE deleted_flag=0')
+        rows = r.get('rows') or []
+        if rows and rows[0].get('y'):
+            return str(rows[0]['y'])
+    except Exception:
+        pass
+    return str(time.localtime().tm_year)
+
+
+def list_stations():
+    try:
+        sql = 'SELECT power_station_name AS n FROM t_power_company_budget_result WHERE deleted_flag=0 GROUP BY power_station_name ORDER BY power_station_name'
+        r = tools_db.run_sql(sql)
+        return [x['n'] for x in (r.get('rows') or []) if x.get('n')]
+    except Exception:
+        return []
+
+
+def _fake(seed, i, lo, hi):
+    x = (seed * 9301 + i * 49297 + 233280) % 233280
+    return lo + int(x / 233280.0 * (hi - lo + 1))
+
+
+def build_notice(station, base_year=None, plan_year=None, prev_amount=None, cur_amount=None,
+                 scores=None, seed=None):
+    base_year = str(base_year or latest_year())
+    plan_year = str(plan_year or (int(base_year) + 1))
+    sql1 = 'SELECT power_station_name, county_company_name, budget_amount FROM t_power_company_budget_result WHERE deleted_flag=0 AND year=%s AND power_station_name=%s LIMIT 1' % (_q(base_year), _q(station))
+    rows = (tools_db.run_sql(sql1).get('rows') or [])
+    company = rows[0].get('county_company_name') if rows else ''
+    if prev_amount is None:
+        prev_amount = float(rows[0]['budget_amount']) if rows else 0.0
+    sql2 = 'SELECT metric_key, metric_name, direction, normalized_score, weighted_score, raw_value, weight FROM t_power_station_score_detail WHERE deleted_flag=0 AND year=%s AND power_station_name=%s ORDER BY metric_key' % (_q(base_year), _q(station))
+    metrics, total_prev, total_cur = [], 0.0, 0.0
+    sd = seed if seed is not None else sum(ord(c) for c in str(station))
+    for i, r in enumerate(tools_db.run_sql(sql2).get('rows') or []):
+        p = float(r.get('normalized_score') or 0)
+        w = float(r.get('weight') or 0)
+        if scores and r['metric_key'] in scores:
+            cur = float(scores[r['metric_key']])
+        elif scores:
+            cur = p
+        else:
+            cur = max(0.0, min(100.0, p + _fake(sd, i, -9, 12)))
+        metrics.append({'key': r['metric_key'], 'name': r['metric_name'], 'direction': r.get('direction'),
+                        'raw_value': float(r['raw_value']) if r.get('raw_value') is not None else None,
+                        'prev_score': round(p, 2), 'cur_score': round(cur, 2)})
+        total_prev += p * w
+        total_cur += cur * w
+    if cur_amount is None:
+        ratio = (total_cur / total_prev) if total_prev else 1.0
+        cur_amount = round(prev_amount * ratio, 2)
+    return {'station': station, 'company': company, 'base_year': base_year, 'plan_year': plan_year,
+            'prev_amount': round(float(prev_amount), 2), 'cur_amount': round(float(cur_amount), 2), 'metrics': metrics}
+
+
+def run_report(notice=None, model=None, **kw):
+    t0 = time.time()
+    if notice is None:
+        notice = build_notice(kw.pop('station', '环潭供电所'), **kw)
+    model = model or agent.config.MODEL
+    answer, trace, blocked = _loop(_system(), _notice_text(notice), model)
+    calls = [t for t in trace if t.get('kind') == 'tool']
+    return {'title': '年度缺陷治理计划分析报告', 'notice': notice, 'report': answer, 'trace': trace,
+            'model': model, 'elapsed_ms': int((time.time() - t0) * 1000), 'blocked': blocked,
+            'tool_calls': len(calls),
+            'sql_calls': len([t for t in calls if t.get('tool') == 'run_sql'])}

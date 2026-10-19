@@ -1,45 +1,52 @@
-# ===== 公开仓库策略 =====
-# 入库：代码 + README + docs/ + skills/ + .env.example
-# 不入库：凭据、业务知识库、数据与产物
-
-# 凭据与本机环境
-.env
-*.env
-.env.*
-!.env.example
-.credentials.yaml
-
-# 文档默认不收，只收 docs/ 与 skills/ 与 deploy/
-*.md
-!README.md
-!docs/**
-!skills/**
-!deploy/**
-
-# 以下几类放在最后，优先级最高，即使在上面目录里也不收
-secretary/电力业务口径文档.md
-secretary/数据地图.md
-secretary/口径库.md
-secretary/metric_catalog.json
-docs/历史/构建说明.md
-
-# 数据与产物
-output/
-.dsh/
-
-# 运行日志（本机起服务时生成，不入库）
-*.log
-
-# 纠错引擎的词典：catalog.csv / area_core.csv 含两万个真实台区名录，属业务数据
-# 缺了它纠错功能会自动降级（不报错），需要时单独获取并放回 data/ 目录
-secretary/libs/name_correction_lib/data/
-
-# Python
+# ── Python ────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
 
-# 编辑器 / 系统
+# ── Node ──────────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# ── 环境与密钥 ────────────────────────────────────────────────
+# ⚠️ .env 内含数据库密码与模型 API Key，绝不入库
+.env
+.env.local
+.env.*.local
+
+# ── 运行时数据 ────────────────────────────────────────────────
+data/
+data/uploads/
+*.log
+logs/
+# 运行期产物：缺口清单（gaps.jsonl）与语音识别临时音频，都在 app 包内生成，不入库
+server/app/output/
+
+# ── 编辑器与系统 ──────────────────────────────────────────────
 .vscode/
 .idea/
+*.swp
+.DS_Store
 Thumbs.db
-Desktop.ini
+
+# ── 构建产物 ──────────────────────────────────────────────────
+# openapi.json 由 app.openapi() 动态生成，可按需提交
+# openapi.json
+
+# ── 本地协作文档与临时分析文件 ────────────────────────────────
+# WorkBuddy 本地记忆、分析脚本等，不入库
+.workbuddy/
+
+# ── 合并进来的本地工作区（2026-10-19）─────────────────────────
+# output/ 是本地开发/验收/探测产物（含安装包、测试证据、仓库镜像），体积大且不入库
+/output/
+# A924-POC 是另一个项目的 POC 产物（含 .docx 与 openlab 配置），不随本仓库走
+A924-POC/
+# 本地一次性生成物
+secretary/agent.py.bak_*

@@ -1,0 +1,84 @@
+# ══════════════════════════════════════════════════════════════
+#  生产编排 —— PostgreSQL(pgvector) + 统一后端 API
+#
+#  用法：
+#    docker compose -f docker-compose.prod.yml up -d --build
+#    docker compose -f docker-compose.prod.yml ps
+#    docker compose -f docker-compose.prod.yml logs -f backend
+#    docker compose -f docker-compose.prod.yml down        # 保留数据
+#
+#  2026-10-15 单进程合并：Redis / Celery worker 已移除，
+#  文档入库改 FastAPI BackgroundTasks（在后端进程内执行）。
+#
+#  ⚠️ 前端不在此编排内：本地 `npm run build` 出 dist 后由后端 SPA 托管
+#     （或由宿主机 nginx 托管）。
+#  ⚠️ 数据库不映射到宿主机，仅容器网络内可达（更安全）。
+#  ⚠️ 后端仅绑定 127.0.0.1:8200，由宿主机 nginx 反代对外。
+# ══════════════════════════════════════════════════════════════
+name: kb-prod
+
+services:
+  # ── 数据库：PostgreSQL + pgvector ───────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: kb-postgres
+    restart: unless-stopped
+    # 内存上限：防止单个服务吃满整机（服务器内存紧张时尤其重要）
+    mem_limit: 256m
+    environment:
+      POSTGRES_USER: kb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kb_dev_pwd}
+      POSTGRES_DB: ad_new
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - kb_prod_pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb -d ad_new"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    expose:
+      - "5432"
+    networks: [kbnet]
+
+  # ── 统一后端（uvicorn：知识库 API + 问数 agent + 前端 SPA 托管）──
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: kb-backend:latest
+    container_name: kb-backend
+    restart: unless-stopped
+    # 合并后单进程承载全部功能（原 backend + worker 两进程），内存上限相应合并。
+    mem_limit: 768m
+    env_file:
+      - .env.production
+    environment:
+      # ⚠️ 覆盖 .env 中的连接串：容器内用「服务名+内部端口」互访，
+      #    而非宿主机的 127.0.0.1:5433。
+      DATABASE_URL: postgresql+psycopg://kb:${POSTGRES_PASSWORD:-kb_dev_pwd}@postgres:5432/ad_new
+      UPLOAD_DIR: /data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - kb_prod_uploads:/data/uploads
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8200/api/v1/system/health', timeout=5).status==200 else 1)\""]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 40s
+    networks: [kbnet]
+
+volumes:
+  kb_prod_pgdata:
+  kb_prod_uploads:
+
+networks:
+  kbnet:
+    driver: bridge
