@@ -38,6 +38,13 @@ def table_name(x):
     return t.strip(_TICK).strip()
 
 
+# 业务码值从库读（dlj_data.t_dict / t_dict_data），**不写进提示词**。
+# 问数结果里的状态、缺陷类型、审批节点都是码值，翻中文靠这张字典；维护方改库即生效。
+_DICT_CODES = ('WORK_STATUS', 'DEFECT_TYPE', 'PROCESS', 'FLOW_STATUS', 'PROJECT_TYPE',
+               'WORK_SPECIALTY', 'INPUT_TYPE', 'COST_CATEGORY', 'AREA_TYPE', 'AREA_STATUS',
+               'TASK_STATUS', 'WORK_TYPE', 'WORK_LEVEL', 'WHETHER', 'DELETED_FLAG')
+
+
 def _build():
     tables = []
     index = {}
@@ -100,7 +107,25 @@ def _build():
                     seen[k] = str(v)[:60]
         samples[t] = seen
     return {'tables': tables, 'index': index, 'cols': cols, 'metrics': metrics, 'syn': syn,
-            'samples': samples, 'counts': counts}
+            'samples': samples, 'counts': counts, 'codes': _codes()}
+
+
+def _codes():
+    """码值字典：{dict_code: [(码, 中文), …]}，只取 _DICT_CODES 里那几种。"""
+    out = {}
+    try:
+        for r in _rows('SELECT d.dict_code AS dc, v.data_value AS v, v.data_label AS l '
+                       'FROM dlj_data.t_dict d JOIN dlj_data.t_dict_data v ON v.dict_id = d.dict_id '
+                       'WHERE d.disabled_flag = 0 AND v.disabled_flag = 0 '
+                       'ORDER BY d.dict_id, v.sort_order, v.data_value'):
+            if r['dc'] not in _DICT_CODES:
+                continue
+            out.setdefault(r['dc'], []).append((str(r['v']), str(r['l'])))
+    except Exception:                               # noqa: BLE001 - 字典读不到不影响主链路
+        pass
+    for _items in out.values():                     # 数字码按数值排（库里 sort_order 分批重复）
+        _items.sort(key=lambda x: (0, int(x[0])) if x[0].isdigit() else (1, x[0]))
+    return out
 
 
 def _ensure():
@@ -228,6 +253,17 @@ def table_menu():
         for m in ms:
             out.append('- %s(=%s) 单位%s ｜ %s ｜ %s' % (m['name'], m['code'], m['unit'], m['formula'], m['desc'][:70]))
     return '\n'.join(out)
+
+
+def codes_menu():
+    """码值 → 中文（从业务库字典表读，**不写死在提示词里**）。读不到就返回空串。"""
+    d = _ensure().get('codes') or {}
+    if not d:
+        return ''
+    lines = ['【字典值（查询结果里的码按这张表翻中文，不要直接报数字）】']
+    for code, items in d.items():
+        lines.append('%s：%s' % (code, '、'.join('%s=%s' % (v, l) for v, l in items)))
+    return '\n'.join(lines)
 
 
 def find_columns(keyword):

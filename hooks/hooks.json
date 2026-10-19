@@ -1,0 +1,33 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "D:\\秘书智能体\\hooks\\hook-log.cmd SessionStart" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "D:\\秘书智能体\\hooks\\hook-log.cmd UserPromptSubmit" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "D:\\秘书智能体\\hooks\\hook-log.cmd PreToolUse" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "D:\\秘书智能体\\hooks\\hook-log.cmd Stop" }
+        ]
+      }
+    ]
+  }
+}

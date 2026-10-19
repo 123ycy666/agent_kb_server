@@ -1,0 +1,6 @@
+- insert:
+    - id: hooks-observe
+      name: '@deepseek-ai/dsh-hooks-claude-code'
+      config:
+        configPath: 'D:\秘书智能体\hooks\NOPE-does-not-exist.json'
+        defaultTimeoutMs: 30000
