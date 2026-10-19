@@ -9,7 +9,7 @@ rem  只想快速验证逻辑 → 前两项；要上线前确认 → 加第三�
 rem ============================================================================
 setlocal
 cd /d "%~dp0"
-set PYVENV=C:\Users\易澄宇\.workbuddy\binaries\python\envs\default\Scripts\python.exe
+set PYVENV=%USERPROFILE%\.workbuddy\binaries\python\envs\default\Scripts\python.exe
 if exist "%PYVENV%" (set PY=%PYVENV%) else (set PY=py)
 
 echo ================ 1/3 知识库逻辑自检 ================

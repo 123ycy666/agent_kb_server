@@ -62,7 +62,7 @@ def section(name):
 # ══════════════════════════════════════════════════════════════
 # 1. 运行环境
 # ══════════════════════════════════════════════════════════════
-section('1/8  运行环境')
+section('1/8  运行环境与配置安全')
 
 v = sys.version_info
 ver = '%d.%d.%d' % (v.major, v.minor, v.micro)
@@ -101,20 +101,39 @@ except Exception as e:
     print('\n配置都加载不了，后面无法检查。先修 .env。')
     sys.exit(1)
 
+# 生产/开发要分开判：开发态这些只是"上线前要改"，不该把本地自检判死
+_is_prod = (settings.app_env or '').lower() in ('production', 'prod')
+add('OK', 'APP_ENV', settings.app_env or '未设置（默认 development）')
+if _is_prod and settings.debug:
+    add('FAIL', 'DEBUG', '生产环境仍开着 DEBUG → 必须 DEBUG=false')
+elif settings.debug:
+    add('WARN', 'DEBUG', 'true（开发态正常，上线前改 false）')
+else:
+    add('OK', 'DEBUG', 'false')
+
 _jwt = settings.jwt_secret or ''
 _jwt_weak = (_jwt.startswith('dev-only')
              or 'change_me' in _jwt.lower()
              or len(_jwt) < 32)
 if _jwt_weak:
-    add('FAIL', 'JWT_SECRET',
-        '仍是默认值/占位符/过短，生产必须改（openssl rand -hex 32）')
+    # 开发态只提醒；生产态是硬失败：默认密钥可伪造任意用户 token
+    add('FAIL' if _is_prod else 'WARN', 'JWT_SECRET',
+        '默认值/占位符/过短（%d 字符）→ 上线前 openssl rand -hex 32' % len(_jwt))
 else:
     add('OK', 'JWT_SECRET', '已自定义（%d 字符）' % len(_jwt))
+
+_cors = getattr(settings, 'cors_origins', '') or ''
+if '*' in _cors:
+    add('FAIL' if _is_prod else 'WARN', 'CORS_ORIGINS', '允许任意来源（*），生产必须写死域名')
+elif _is_prod and ('localhost' in _cors or '127.0.0.1' in _cors):
+    add('WARN', 'CORS_ORIGINS', '生产仍含 localhost → 改成实际域名')
+else:
+    add('OK', 'CORS_ORIGINS', _cors or '未设置（同源部署可忽略）')
 
 # ══════════════════════════════════════════════════════════════
 # 2 & 3. PostgreSQL：连接、扩展、表、纠错词典
 # ══════════════════════════════════════════════════════════════
-section('2/8  PostgreSQL + pgvector（本系统的库）')
+section('2-3/8  PostgreSQL + pgvector / 应用表 / 纠错词典')
 
 pg_ok = False
 try:
@@ -277,10 +296,14 @@ if ch == 'local':
                                    settings.local_embedding_model,
                                    settings.local_embedding_api_key)
 elif ch == 'online':
-    emb_url, emb_model, emb_key = (settings.online_llm_base_url.rstrip('/') + '/embeddings',
-                                   settings.online_embedding_model
-                                   if hasattr(settings, 'online_embedding_model') else 'text-embedding-v4',
-                                   settings.online_llm_api_key)
+    # 优先用专门的 embedding 地址；它配的通常是 base（.../v1），必须补 /embeddings
+    _ebase = (settings.online_embedding_base_url or settings.online_llm_base_url).rstrip('/')
+    if _ebase.endswith('/embeddings') or _ebase.endswith('/embed'):
+        emb_url = _ebase
+    else:
+        emb_url = _ebase + '/embeddings'
+    emb_model = settings.online_embedding_model
+    emb_key = settings.online_embedding_api_key or settings.online_llm_api_key
 else:
     emb_url = emb_model = emb_key = None
 
@@ -315,7 +338,7 @@ if emb_url:
 # ══════════════════════════════════════════════════════════════
 # 8. 静态资源
 # ══════════════════════════════════════════════════════════════
-section('8/8  静态资源')
+section('8/8  静态资源与运行前置（上传目录 / 磁盘 / 端口）')
 
 dist = DRIVER_SRC / 'web' / 'dist' / 'index.html'
 if dist.is_file():
@@ -334,6 +357,48 @@ else:
 lex_sql = DRIVER_SRC / 'db' / 'lexicon.sql'
 add('OK' if lex_sql.is_file() else 'FAIL', '纠错词典文件',
     'db/lexicon.sql %s' % ('存在' if lex_sql.is_file() else '缺失'))
+
+# 上传目录：文档原文与解析结果都落这里，不可写 = 上传必失败
+try:
+    up = settings.upload_path
+    probe = up / '.preflight_write_test'
+    probe.write_text('ok', encoding='utf-8')
+    probe.unlink()
+    add('OK', '上传目录可写', str(up))
+except Exception as e:
+    add('FAIL', '上传目录不可写', '%s（查 UPLOAD_DIR 与卷挂载权限）' % brief(e, 70))
+
+# 磁盘空间：原文 + 切片 + 向量，长期跑会持续增长
+try:
+    import shutil
+    free_gb = shutil.disk_usage(str(settings.upload_path)).free / 1024 ** 3
+    if free_gb >= 5:
+        add('OK', '磁盘剩余', '%.1f GB' % free_gb)
+    elif free_gb >= 1:
+        add('WARN', '磁盘剩余', '%.1f GB（建议 ≥5GB）' % free_gb)
+    else:
+        add('FAIL', '磁盘剩余', '%.1f GB，几乎写不进去' % free_gb)
+except Exception as e:
+    add('WARN', '磁盘剩余', '无法读取: %s' % brief(e, 50))
+
+# 8200 端口：占用要分清"本服务在跑"还是"别的进程抢了"
+import socket
+_sk = socket.socket()
+_sk.settimeout(1)
+_in_use = _sk.connect_ex(('127.0.0.1', 8200)) == 0
+_sk.close()
+if not _in_use:
+    add('OK', '端口 8200', '空闲（启动不会冲突）')
+else:
+    try:
+        import httpx
+        _alive = httpx.get('http://127.0.0.1:8200/health', timeout=3).status_code == 200
+    except Exception:
+        _alive = False
+    if _alive:
+        add('OK', '端口 8200', '本服务已在运行')
+    else:
+        add('FAIL', '端口 8200', '被其他进程占用 → netstat -ano | findstr :8200')
 
 # ══════════════════════════════════════════════════════════════
 # 总结
