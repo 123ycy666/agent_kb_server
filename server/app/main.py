@@ -313,10 +313,17 @@ from fastapi.staticfiles import StaticFiles as _StaticFiles  # noqa: E402
 _AGENT_STATIC = _Path(__file__).resolve().parent / "secretary" / "static"
 
 
-@app.get("/agent/asr", tags=["问数智能体"], include_in_schema=False)
-def agent_asr_page():
-    """语音页（原 /asr）。"""
-    return _FileResponse(_AGENT_STATIC / "asr.html")
+# ── 语音输入已下线（2026-10-20，用户要求）──────────────────────
+# 原来这里挂 /agent/asr → static/asr.html（浏览器录音 → /api/asr 转写 → 纠错）。
+# 下线的是**页面入口**，现在访问 /agent/asr 会 404；sga 侧的麦克风按钮点进来
+# 打不开——这正是预期效果。
+# `static/asr.html` 和 `/api/asr` 接口**都保留未删**：将来要恢复，
+# 把下面这段放回来即可，不需要再写代码。
+#
+# @app.get("/agent/asr", tags=["问数智能体"], include_in_schema=False)
+# def agent_asr_page():
+#     """语音页（原 /asr）。"""
+#     return _FileResponse(_AGENT_STATIC / "asr.html")
 
 
 @app.get("/agent/skills", tags=["问数智能体"], include_in_schema=False)
