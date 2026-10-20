@@ -211,7 +211,9 @@ class DispatchTask(Base):
         ),
         CheckConstraint("verifier_type IN ('auto','human')", name="ck_task_verifier"),
         Index("uk_task_no", "task_no", unique=True),
-        Index("idx_task_status", "status", "reply_due_at"),
+        # ⚠️ 索引名不能叫 idx_task_status：PG 索引名在 schema 内唯一，async_task 上已有同名索引，
+        #    `IF NOT EXISTS` 会让这条静默跳过（2026-10-20 实测）。统一叫 idx_dispatch_status_due。
+        Index("idx_dispatch_status_due", "status", "reply_due_at"),
         Index("idx_task_root", "root_task_id"),
         Index("idx_task_creator", "creator_id", "create_time"),
         Index("idx_task_alert", "alert_id"),

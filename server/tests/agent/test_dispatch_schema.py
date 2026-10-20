@@ -55,7 +55,7 @@ TABLES = {
 }
 
 INDEXES = ['uk_scan_run_key', 'uk_alert_dedupe', 'idx_alert_status', 'uk_task_no',
-           'idx_task_status', 'uk_assignee', 'uk_plan_ver', 'idx_check_task',
+           'idx_dispatch_status_due', 'uk_assignee', 'uk_plan_ver', 'idx_check_task',
            'uk_notice_dedupe', 'idx_notice_rcv', 'idx_attach_task', 'uk_alert_chat']
 
 CHECKS = ['ck_alert_type', 'ck_alert_level', 'ck_task_status', 'ck_task_verifier',
