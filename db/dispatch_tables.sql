@@ -110,7 +110,10 @@ CREATE INDEX IF NOT EXISTS idx_task_alert ON dispatch_task (alert_id);
 CREATE INDEX IF NOT EXISTS idx_task_assignee_due ON dispatch_task (reply_due_at);
 CREATE INDEX IF NOT EXISTS idx_task_creator ON dispatch_task (creator_id, create_time);
 CREATE INDEX IF NOT EXISTS idx_task_root ON dispatch_task (root_task_id);
-CREATE INDEX IF NOT EXISTS idx_task_status ON dispatch_task (status, reply_due_at);
+-- ⚠️ 索引名不能叫 idx_task_status：PG 的索引名在 schema 内唯一，而 async_task 表
+--    上已经有一个同名索引，`IF NOT EXISTS` 会让这条**静默跳过** ⇒ dispatch_task 上
+--    这个复合索引根本没建上（2026-10-20 实测发现）。改名为 idx_dispatch_status_due。
+CREATE INDEX IF NOT EXISTS idx_dispatch_status_due ON dispatch_task (status, reply_due_at);
 CREATE UNIQUE INDEX IF NOT EXISTS uk_task_no ON dispatch_task (task_no);
 
 CREATE TABLE IF NOT EXISTS dispatch_task_assignee (
