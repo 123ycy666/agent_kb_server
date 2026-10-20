@@ -85,6 +85,9 @@ class AuditAction:
     # 检索
     SEARCH = "search"
     CHAT = "chat"
+    # 历史对话删除（2026-10-20 新增）：删除会让人看不到自己的问答记录，
+    # 属于「事后难以对证」的操作，必须留痕（谁、什么时候、删的哪一场）。
+    CHAT_DELETE = "chat.delete"
 
     # 冲突
     CONFLICT_CREATE = "conflict.create"

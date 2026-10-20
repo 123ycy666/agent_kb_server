@@ -100,7 +100,15 @@ def _resolve_kb_scope(requested):
     readable = {int(r[0]) for r in rows}
     if requested:
         return [k for k in requested if k in readable], True
-    return [int(r[0]) for r in rows if r[1]], False
+    marked = [int(r[0]) for r in rows if r[1]]
+    if marked:
+        return marked, False
+    # ★ 2026-10-20：一个库都没标 qa_enabled 时，**不再退回写死的 config.KB_IDS**
+    #   —— 那个 id 会随删库/重建漂移，悬空后检索静默返回 0 条。
+    #   改为动态默认（有切片的 active 库），保证「总有一个能用的默认库」。
+    from app.secretary import kb_adapter as _kb_adapter
+
+    return _kb_adapter.default_kb_ids(), False
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(os.path.dirname(HERE), "secretary", "static")
@@ -373,26 +381,104 @@ async def _read_json(request: Request) -> dict:
 #  历史会话 / 统计 / 缺口 / 异步页面 / 模型清单（需登录）
 # ══════════════════════════════════════════════════════════════
 
-@router.get("/sessions", summary="我的会话列表（按当前登录用户过滤）")
+def _can_view_all_chats(actor) -> bool:
+    """能否查看**所有人**的对话历史（管理员/审计用）。
+
+    ⚠️ 判据用权限码 + 角色码，不写死用户名：
+       - 写死 'admin' 会在换管理员账号后失效；
+       - 只看角色又会漏掉通过权限直接授权的账号。
+    两个条件取并集：有 system:* 运维权限码，或角色名是 admin 系。
+    """
+    perms = set(actor.permissions or [])
+    if perms & {"system:config", "system:audit", "user:read", "user:list"}:
+        return True
+    roles = {str(x).strip().lower() for x in (actor.role_codes or [])}
+    return bool(roles & {"admin", "super_admin", "superadmin", "sys_admin"})
+
+
+@router.get("/sessions", summary="会话列表（默认只看自己；管理员可看全部）")
 def sessions(
     limit: int = Query(default=0),
     offset: int = Query(default=0),
+    all_users: bool = Query(default=False, description="管理员专用：返回所有人的会话"),
     actor: CurrentActor = Depends(get_current_actor),
 ):
-    """统一用户后不再需要 uid 参数：只返回当前登录用户自己的会话。
+    """会话列表。
 
+    默认只返回当前登录用户自己的（统一用户后不再需要 uid 参数）。
     limit=0（不传）= 全部返回，受 config.API_MAX_ROWS 防呆上限保护。
+
+    ★ 2026-10-20 加 `all_users`：
+    管理员反馈「看不到别人的对话历史」—— 但这不是 bug，是**权限按设计生效**了：
+    普通用户 A 问的会话归属 A，admin 查自己自然看不到。
+    运维/审计场景确实需要「看全部」，所以加这个开关，并且**必须校验权限**，
+    否则任何登录用户构造函数就能翻别人的问答原文。
     """
+    if all_users and not _can_view_all_chats(actor):
+        all_users = False
     try:
-        return _jr(
-            qa_log.list_sessions(user_id=actor.user_id, limit=limit or None, offset=offset or 0)
+        data = qa_log.list_sessions(
+            # all_users：两个过滤条件都不传 ⇒ list_sessions 不过滤
+            user_id=None if all_users else actor.user_id,
+            user_code=None if (all_users or actor.user_id) else actor.username,
+            limit=limit or None, offset=offset or 0,
         )
+        # ★ 前端要决定「全用户」开关显不显示。让它自己猜角色名不可靠
+        #   （实测 /auth/me 返回的 role_names、administrator_flag 都是 None），
+        #   所以由服务端直接告诉它 —— 判据只在一处，不会前后端不一致。
+        data['can_view_all'] = _can_view_all_chats(actor)
+        data['all_users'] = all_users
+        return _jr(data)
     except Exception as e:                         # noqa: BLE001
         return _jr(
             {"total": 0, "returned": 0, "limit": 0, "offset": 0,
              "truncated": False, "sessions": [],
              "error": "%s: %s" % (type(e).__name__, str(e)[:200])}
         )
+
+
+@router.delete("/sessions/{session_id}", summary="删除一场历史会话（软删，仅限本人）")
+@router.post("/sessions/{session_id}/delete", summary="删除历史会话（兼容不支持 DELETE 的前端）")
+def delete_session(session_id: str, request: Request,
+                   actor: CurrentActor = Depends(get_current_actor)):
+    """删除历史会话。
+
+    同时挂了 DELETE /api/sessions/{id} 和 POST /api/sessions/{id}/delete：
+    后者是给**不方便发 DELETE** 的前端用的（有些网关/老代理会拦 DELETE）。
+    两个都走同一段逻辑，不存在两套行为。
+
+    ⚠️ 必须是**本人的**会话：session_id 会出现在页面、日志、截图中，不是密钥。
+       只按 session_id 删 = 知道 id 就能删别人的历史。
+       归属不符时统一返回 404（不返回 403）—— 否则等于告诉对方「这个 id 存在」。
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return _jr({"error": "缺少 session_id"}, status_code=400)
+    try:
+        r = qa_log.delete_session(sid, user_id=actor.user_id,
+                                  user_code=None if actor.user_id else actor.username)
+    except Exception as e:                         # noqa: BLE001
+        return _jr({"error": "%s: %s" % (type(e).__name__, str(e)[:200]),
+                    "session_id": sid}, status_code=500)
+    if not r.get("ok"):
+        return _jr({"error": r.get("reason") or "删除失败", "session_id": sid},
+                   status_code=404)
+    try:                                           # 删除是敏感操作，审计留痕
+        from app.core.database import SessionLocal
+        from app.services import audit
+
+        db = SessionLocal()
+        try:
+            audit.log_action(
+                db, actor=actor, action=audit.AuditAction.CHAT_DELETE,
+                resource_type="chat_session", resource_name=sid,
+                detail={"session_id": sid}, request=request, commit=True,
+            )
+        finally:
+            db.close()
+    except Exception as e:                         # noqa: BLE001  审计失败不影响删除结果
+        print("[audit] 会话删除留痕失败：%s: %s" % (type(e).__name__, e), flush=True)
+    return _jr({"ok": True, "session_id": sid})
 
 
 @router.get("/history", summary="某场会话的历史记录（含每轮口径/质量信息）")
@@ -409,6 +495,16 @@ def history(
         r = qa_log.get_history(sid, limit=limit or None, with_steps=with_steps)
         if r is None:
             return _jr({"error": "session 不存在", "session_id": sid}, status_code=404)
+        # ★ 归属校验（2026-10-20 补）：原来只查 session_id，任何登录用户
+        #   拿到别人的 id 就能看别人的问答原文。会话行里有 user_id，比对即可。
+        owner = (r.get("session") or {}).get("user_id")
+        if owner not in (None, "") and actor.user_id is not None:
+            try:
+                same = int(owner) == int(actor.user_id)
+            except (TypeError, ValueError):
+                same = str(owner) == str(actor.user_id)
+            if not same:
+                return _jr({"error": "session 不存在", "session_id": sid}, status_code=404)
         return _jr(r)
     except Exception as e:                         # noqa: BLE001
         return _jr(
@@ -450,6 +546,19 @@ def page(token: str = Query(default=""), actor: CurrentActor = Depends(get_curre
 @router.get("/models", summary="可选模型清单（online=公网网关实测可用；local=内网已部署）")
 def models(actor: CurrentActor = Depends(get_current_actor)):
     return _jr({"default": sec_config.MODEL, "models": sec_config.MODELS})
+
+
+@router.get("/presets", summary="预设问题清单（问答页一键提问用）")
+def presets(actor: CurrentActor = Depends(get_current_actor)):
+    """预设问题。
+
+    不需要登录也能给（纯静态清单），但这里仍然走 get_current_actor ——
+    与其它问答接口保持同一套鉴权口径，避免出现「公开端点」被单独扫。
+    文案与分组的维护约定见 `app/secretary/presets.py` 顶部注释。
+    """
+    from app.secretary import presets as _presets
+
+    return _jr(_presets.payload())
 
 
 @router.post("/feedback", summary="给某次回答打评价（1 赞 / 0 踩）")

@@ -318,6 +318,57 @@ def _cap(limit, total, max_rows):
     return limit, False
 
 
+def delete_session(session_id, user_id=None, user_code=None):
+    """删除一场历史会话（软删，可恢复）。
+
+    ★ 为什么是软删而不是 DELETE（2026-10-20 加）
+    ------------------------------------------------
+    `t_chat_session` 本来就有 `deleted_flag`，列表与历史接口都按它过滤；
+    删错了（用户手滑、同名会话看错）只能靠数据库备份找回，代价太高。
+    软删之后：列表立刻看不到、按 session_id 直接查历史也 404（get_history 带
+    `deleted_flag=0`），但数据还在，必要时一条 UPDATE 就能恢复。
+
+    ★ 归属校验不能省
+    ----------------
+    session_id 不是密钥：它会出现在页面上、日志里、别人转发的截图里。
+    只凭 session_id 就删，等于「知道 id 就能删别人的历史」。
+    所以传了 user_id 就**必须匹配**；两个都没传则拒绝（不给「匿名删任意会话」的口子）。
+
+    返回 {'ok': bool, 'deleted': int, 'reason': str}
+    """
+    sid = (session_id or '').strip()
+    if not sid:
+        return {'ok': False, 'deleted': 0, 'reason': '缺少 session_id'}
+    if not user_id and not user_code:
+        return {'ok': False, 'deleted': 0, 'reason': '缺少归属信息，拒绝删除'}
+
+    where = ' WHERE session_id=%s AND deleted_flag=0'
+    params = [sid]
+    if user_id:
+        where += ' AND user_id=%s'
+        params.append(int(user_id))
+    elif user_code:
+        where += ' AND user_code=%s'
+        params.append(user_code)
+
+    c = _conn()
+    try:
+        cur = c.cursor()
+        cur.execute('UPDATE t_chat_session SET deleted_flag=1' + where, params)
+        n = int(cur.rowcount or 0)
+        if n:
+            # 明细跟着一起标记：单会话查询已经进不去了，但统计/导出是按明细扫的，
+            # 不标记就会在「问答量」里继续被算进去（删了还占用数字）。
+            cur.execute('UPDATE t_chat_message SET deleted_flag=1 '
+                        'WHERE chat_session_id=%s AND deleted_flag=0', (sid,))
+            cur.execute('UPDATE t_chat_query_trace SET deleted_flag=1 '
+                        'WHERE chat_session_id=%s AND deleted_flag=0', (sid,))
+        return {'ok': bool(n), 'deleted': n,
+                'reason': '' if n else '会话不存在或不属于当前用户'}
+    finally:
+        c.close()
+
+
 def list_sessions(user_code=None, limit=None, offset=0, max_rows=None, user_id=None):
     """历史对话列表：一行一场会话，按最后活动时间倒序。
 
@@ -353,7 +404,7 @@ def list_sessions(user_code=None, limit=None, offset=0, max_rows=None, user_id=N
         limit, truncated = _cap(limit, total, max_rows)
         # 原来每行挂两个相关子查询（N 行 = 2N 次查询）；改成一个 LEFT JOIN + GROUP BY，
         # 一次性把每场会话的问答数/缺口数算好再关联。放开 limit 全量取时这是数量级的差别。
-        sql = ('SELECT s.session_id, s.user_code, s.title, s.ai_model, s.channel, s.client_ip, '
+        sql = ('SELECT s.session_id, s.user_id, s.user_code, s.title, s.ai_model, s.channel, s.client_ip, '
                '       s.msg_count, s.status, s.create_time, s.last_msg_at, s.ended_at, '
                '       COALESCE(t.ask_count, 0) AS ask_count, '
                '       COALESCE(t.gap_count, 0) AS gap_count '
@@ -390,7 +441,7 @@ def get_history(session_id, limit=None, with_steps=False, max_rows=None):
     c = _conn()
     try:
         cur = c.cursor()
-        cur.execute('SELECT session_id, user_code, title, ai_model, channel, msg_count, '
+        cur.execute('SELECT session_id, user_id, user_code, title, ai_model, channel, msg_count, '
                     'status, create_time, last_msg_at, ended_at '
                     'FROM t_chat_session WHERE session_id=%s AND deleted_flag=0', (session_id,))
         session = cur.fetchone()

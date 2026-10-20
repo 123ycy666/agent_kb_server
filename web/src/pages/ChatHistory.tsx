@@ -4,10 +4,12 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Collapse,
   Empty,
   Input,
   List,
+  Popconfirm,
   Space,
   Spin,
   Tag,
@@ -16,6 +18,7 @@ import {
 } from 'antd'
 import {
   ClockCircleOutlined,
+  DeleteOutlined,
   HistoryOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -49,22 +52,56 @@ export default function ChatHistory() {
   const [activeId, setActiveId] = useState('')
   const [detail, setDetail] = useState<ChatHistoryResult | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  /**
+   * 管理员可切换「全部用户」（2026-10-20 加）。
+   *
+   * 起因：管理员反馈「看不到别人的对话历史」。那不是 bug —— 会话按 user_id 归属，
+   * admin 查自己当然只有自己的。但运维/审计确实需要看全部，所以给个开关。
+   *
+   * ⚠️ 能不能看**由服务端判定**（响应里的 can_view_all），不在前端猜角色：
+   *    实测 /auth/me 返回的 role_names、administrator_flag 都是 None，
+   *    前端按角色名判断会永远判成「不是管理员」，开关压根不显示。
+   * 服务端还会二次校验，普通用户即使传 all_users 也只拿到自己的。
+   */
+  const [allUsers, setAllUsers] = useState(false)
+  const [canViewAll, setCanViewAll] = useState(false)
 
   const loadSessions = useCallback(async () => {
     setListLoading(true)
     try {
-      const r = await chatHistoryApi.sessions()
+      const r = await chatHistoryApi.sessions({ allUsers })
       setSessions(r.sessions || [])
+      setCanViewAll(Boolean(r.can_view_all))
       if (r.error) message.warning('会话列表加载异常：' + r.error)
     } catch (e) {
       message.error((e as Error).message || '加载会话列表失败')
     } finally {
       setListLoading(false)
     }
-  }, [])
+  }, [allUsers])
 
   useEffect(() => {
     loadSessions()
+  }, [loadSessions])
+
+  /**
+   * 回到本页时自动刷新会话列表。
+   *
+   * 为什么必须有（2026-10-20 修的「刚回答的问题没有历史」）：
+   * 原来只在组件挂载时拉一次。用户在问答页问完，**切回已打开的历史页标签**时
+   * 组件并没有重新挂载 —— 看到的一直是进页面那一刻的旧列表，
+   * 于是判定「刚问的没落库」。数据其实在库里（查过 /api/sessions 每次都在）。
+   *
+   * 只监听 visibilitychange 就够：跨标签切换、从后台切回来都会触发；
+   * 同标签内路由跳转本来就会重新挂载，不需要额外处理。
+   * focus 事件太吵（点一下输入框就触发），不监听。
+   */
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadSessions()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
   }, [loadSessions])
 
   // 选中某会话后加载详情（带竞态保护：快速点击时丢弃过期的响应）
@@ -107,6 +144,37 @@ export default function ChatHistory() {
     navigate('/agent')
   }
 
+  /**
+   * 删除一场会话。
+   *
+   * 服务端是**软删**（deleted_flag=1），删错的还能由管理员恢复，
+   * 但界面上就是"没了"，所以必须二次确认（Popconfirm）——误触代价不对称：
+   * 多点一次的代价是一秒，误删的代价是整场问答记录看不见了。
+   */
+  const removeSession = async (sid: string) => {
+    try {
+      await chatHistoryApi.remove(sid)
+      message.success('已删除该会话')
+      // 本地状态同步：只从列表里摘掉，不整表重拉（重拉会闪、还会丢滚动位置）
+      setSessions((prev) => prev.filter((x) => x.session_id !== sid))
+      if (activeId === sid) {
+        setActiveId('')
+        setDetail(null)
+      }
+      // 如果删的正是问答页正在用的那场，把 localStorage 清掉，
+      // 否则切回问答页会继续往已删除的会话里追加消息
+      try {
+        if (localStorage.getItem('secretary_session') === sid) {
+          localStorage.removeItem('secretary_session')
+        }
+      } catch {
+        /* 忽略 */
+      }
+    } catch (e) {
+      message.error((e as Error).message || '删除失败')
+    }
+  }
+
   const messages = detail?.messages || []
 
   return (
@@ -133,6 +201,16 @@ export default function ChatHistory() {
             <Space>
               <HistoryOutlined />
               <span>会话记录（{filtered.length}）</span>
+              {/* 开关显不显示由服务端的 can_view_all 决定；普通用户即使放开也拿不到别人的 */}
+              {canViewAll && (
+                <Checkbox
+                  checked={allUsers}
+                  onChange={(e) => setAllUsers(e.target.checked)}
+                  style={{ fontWeight: 400, fontSize: 12 }}
+                >
+                  全部用户
+                </Checkbox>
+              )}
             </Space>
           }
         >
@@ -166,19 +244,45 @@ export default function ChatHistory() {
                     background: s.session_id === activeId ? '#e6f4ff' : undefined,
                   }}
                 >
-                  <div style={{ width: '100%' }}>
-                    <div style={{ marginBottom: 4 }}>
-                      <Text strong ellipsis style={{ maxWidth: 300 }}>
-                        {s.title || '（无标题会话）'}
-                      </Text>
+                  <div style={{ width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ marginBottom: 4 }}>
+                        <Text strong ellipsis style={{ maxWidth: 260 }}>
+                          {s.title || '（无标题会话）'}
+                        </Text>
+                      </div>
+                      <Space size={4} wrap>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          <ClockCircleOutlined /> {fmt(s.last_msg_at || s.create_time)}
+                        </Text>
+                        <Tag color="blue">{s.ask_count} 轮</Tag>
+                        {/* 「全部用户」模式下必须标出归属，否则分不清是谁问的 */}
+                        {allUsers && (
+                          <Tag color="purple">
+                            {s.user_code || (s.user_id ? `用户#${s.user_id}` : '未归属')}
+                          </Tag>
+                        )}
+                        {s.gap_count > 0 && <Tag color="orange">{s.gap_count} 缺口</Tag>}
+                      </Space>
                     </div>
-                    <Space size={4} wrap>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        <ClockCircleOutlined /> {fmt(s.last_msg_at || s.create_time)}
-                      </Text>
-                      <Tag color="blue">{s.ask_count} 轮</Tag>
-                      {s.gap_count > 0 && <Tag color="orange">{s.gap_count} 缺口</Tag>}
-                    </Space>
+                    {/* 删除按钮：必须先 stopPropagation，否则点它会把这场会话选中 */}
+                    <Popconfirm
+                      title="删除这场会话？"
+                      description="删除后列表不再显示（服务端为软删，可由管理员恢复）"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => removeSession(s.session_id)}
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        title="删除该会话"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </Popconfirm>
                   </div>
                 </List.Item>
               )}
@@ -210,13 +314,27 @@ export default function ChatHistory() {
                 </Space>
               }
               extra={
-                <Button
-                  type="primary"
-                  icon={<SendOutlined />}
-                  onClick={() => continueSession(activeId)}
-                >
-                  继续此会话
-                </Button>
+                <Space>
+                  <Popconfirm
+                    title="删除这场会话？"
+                    description="删除后列表不再显示（服务端为软删，可由管理员恢复）"
+                    okText="删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => removeSession(activeId)}
+                  >
+                    <Button danger icon={<DeleteOutlined />}>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                  <Button
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={() => continueSession(activeId)}
+                  >
+                    继续此会话
+                  </Button>
+                </Space>
               }
             >
               <Space size={16} wrap style={{ marginBottom: 16 }}>

@@ -542,6 +542,8 @@ export const systemApi = {
 /** 会话列表项（GET /api/sessions） */
 export interface ChatSession {
   session_id: string
+  /** 归属用户（管理员切「全部用户」时用来区分是谁的；普通用户恒等于自己） */
+  user_id?: number | null
   user_code?: string | null
   /** 会话标题（建会话时取首个问题前 50 字） */
   title?: string | null
@@ -568,6 +570,21 @@ export interface ChatSessionListResult {
   truncated: boolean
   sessions: ChatSession[]
   error?: string
+  /** 当前账号有没有「看全部用户」的权限（服务端判定，前端据此决定开关显不显示） */
+  can_view_all?: boolean
+  /** 本次请求实际有没有按「全部用户」返回（权限不足时服务端会降级为 false） */
+  all_users?: boolean
+}
+
+/**
+ * 预设问题（2026-10-20 新增）。
+ * 空输入框最劝退：给一批「点一下就能问」的真实示例，新用户不用猜该怎么描述。
+ * 文案与分组的维护约定见服务端 `app/secretary/presets.py`。
+ */
+export interface PresetQuestion {
+  id: string
+  group: string
+  text: string
 }
 
 /** 工具调用轨迹的一步（t_chat_trace_step） */
@@ -648,12 +665,36 @@ export interface ChatHistoryResult {
 }
 
 export const chatHistoryApi = {
-  /** 我的会话列表（服务端按登录用户过滤，按最后活动时间倒序） */
-  sessions: (params?: { limit?: number; offset?: number }) =>
-    agentHttp.get<any, ChatSessionListResult>('/api/sessions', { params }),
+  /**
+   * 会话列表（服务端按登录用户过滤，按最后活动时间倒序）。
+   * allUsers=true 仅对管理员生效（服务端会再校验权限，普通用户传了也无效）。
+   */
+  sessions: (params?: { limit?: number; offset?: number; allUsers?: boolean }) =>
+    agentHttp.get<any, ChatSessionListResult>('/api/sessions', {
+      params: params
+        ? { limit: params.limit, offset: params.offset, all_users: params.allUsers || undefined }
+        : undefined,
+    }),
   /** 某场会话的完整对话记录；withSteps=true 时每轮附带工具轨迹 */
   history: (sessionId: string, withSteps = false) =>
     agentHttp.get<any, ChatHistoryResult>('/api/history', {
       params: { session_id: sessionId, with_steps: withSteps },
     }),
+  /**
+   * 删除一场会话（服务端软删，仅限本人的）。
+   * 走 POST 而不是 DELETE：部分反向代理会拦 DELETE，服务端两个都支持。
+   * 归属不符时服务端返回 404（不返回 403，避免泄露 id 是否存在）。
+   */
+  remove: (sessionId: string) =>
+    agentHttp.post<any, { ok: boolean; session_id: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/delete`,
+    ),
+}
+
+/** 预设问题（问答页一键提问） */
+export const presetApi = {
+  list: () =>
+    agentHttp.get<any, { total: number; groups: string[]; items: PresetQuestion[] }>(
+      '/api/presets',
+    ),
 }
