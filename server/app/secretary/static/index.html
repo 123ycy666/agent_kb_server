@@ -80,7 +80,12 @@ button:active:not(:disabled){background:#0958d9}
   <h1>项目管理秘书 · 模型自主问答</h1>
   <select id="model" title="选择模型"></select>
   <span id="modelnote" style="font-size:12px;color:rgba(0,0,0,.45)"></span>
-  <a href="/agent/skills" style="margin-left:auto;font-size:13px;color:#1677ff;text-decoration:none">技能触发台 →</a>
+  <!-- target="_top" 必不可少：本页是 iframe 嵌在 SPA 里的，
+       普通 <a href> 只会在 iframe 内部跳转，结果 /history 又在 iframe 里渲染一遍
+       ⇒ 左边两套侧边栏（用户截图看到的就是这个）。
+       target="_top" 让**顶层窗口**跳转，SPA 正常单层渲染。 -->
+  <a href="/history" target="_top" style="margin-left:auto;font-size:13px;color:#1677ff;text-decoration:none">历史记录 →</a>
+  <a href="/agent/skills" target="_top" style="font-size:13px;color:#1677ff;text-decoration:none">技能触发台 →</a>
 </header>
 <div class="wrap">
   <div>
@@ -125,6 +130,9 @@ button:active:not(:disabled){background:#0958d9}
       <div id="jobout" style="margin-top:10px;font-size:13px"></div>
     </div>
     <div id="sessbar" style="margin-top:7px;font-size:12px;color:#8a95a1"></div>
+    <!-- 预设问题（2026-10-20 新增）：空输入框最劝退，给一批点一下就能问的真实示例。
+         清单由服务端 /api/presets 给（维护约定见 app/secretary/presets.py）。 -->
+    <div id="presets" style="margin-top:10px"></div>
     <div style="margin-top:10px">
       <textarea id="profile" rows="2" placeholder="用户画像（可选）：例如 我是市公司运检部专责，只看全市和随县，重点看线损与工单"
         style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #f0f0f0;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'Microsoft YaHei',sans-serif;font-size:13px;resize:vertical"></textarea>
@@ -204,7 +212,41 @@ function updateKbHint(){
     n===0 ? '⚠️ 未勾选任何库：将按系统默认范围检索' : ('已选 '+n+' / '+all+' 个');
 }
 loadKbs();
+loadPresets();
 setSession(getSession());
+
+/* ---------------- 预设问题（2026-10-20 新增） ----------------
+   空输入框最劝退：新用户不知道该问什么、能写成什么样。给一批真实示例，
+   点一下直接发问。清单在服务端 presets.py（约定见那里的注释）。 */
+function loadPresets(){
+  var box=document.getElementById('presets');
+  if(!box)return;
+  fetch('/api/presets').then(function(r){return r.json();}).then(function(d){
+    var items=(d&&d.items)||[];
+    if(!items.length)return;
+    var groups={},order=[];
+    items.forEach(function(p){
+      if(!groups[p.group]){groups[p.group]=[];order.push(p.group);}
+      groups[p.group].push(p);
+    });
+    var h='<div style="font-size:12px;color:#8a95a1;margin-bottom:6px">试试这些（点一下就问）：</div>';
+    order.forEach(function(g){
+      h+='<div style="margin-bottom:7px"><span style="font-size:12px;color:#5b6673;margin-right:8px">'+esc(g)+'</span>';
+      groups[g].forEach(function(p){
+        h+='<button class="preset" data-q="'+esc(p.text)+'" onclick="usePreset(this)" '
+          +'style="margin:0 6px 6px 0;padding:4px 9px;font-size:12px;cursor:pointer;'
+          +'background:#f4f7ff;color:#2d5bb9;border:1px solid #dbe6ff;border-radius:12px">'
+          +esc(p.text)+'</button>';
+      });
+      h+='</div>';
+    });
+    box.innerHTML=h;
+  }).catch(function(){});
+}
+function usePreset(btn){
+  document.getElementById('q').value=btn.getAttribute('data-q')||'';
+  ask();
+}
 function tagCls(t){return t==='kb_search'?'t-kb':(t==='run_sql'?'t-db':(t==='answer'?'t-ans':'t-meta'));}
 
 /* ---------------- 会话（多轮记忆） ----------------

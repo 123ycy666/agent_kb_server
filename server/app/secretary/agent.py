@@ -11,6 +11,7 @@ import hashlib
 import socket
 import threading
 import uuid
+from contextvars import copy_context
 import json
 import re
 import ssl
@@ -34,9 +35,15 @@ _BIZ = re.compile(r'供电所|供电公司|台区|工单|预算|审批|线损|�
 TOOLS = [
     {'type': 'function', 'function': {
         'name': 'kb_search',
-        'description': '检索业务知识库，用于弄清术语、指标口径、业务背景。返回按相关度排序的文档切片。',
+        'description': '检索业务知识库里的**制度文件、管理办法、流程规定原文**。'
+                       '★ 问的是「流程 / 规定 / 标准 / 制度 / 怎么规定的 / 谁审批」这类问题时，'
+                       '**答案就在这个工具的返回原文里** —— 直接据此作答；'
+                       '不要因为业务库查了 0 行就说「系统里没有」（实测踩过：知识库里明明有'
+                       '《请假流程》原文，模型却答「没有请假流程」）。'
+                       '★ 问的是**业务数字**时，用它确认术语口径与定义，数字仍以 run_sql 为准。'
+                       '返回按相关度排序的文档切片（含所属章节）。',
         'parameters': {'type': 'object', 'properties': {
-            'query': {'type': 'string', 'description': '检索意图'},
+            'query': {'type': 'string', 'description': '检索意图（用文档里可能出现的词，别用口语缩写）'},
             'top_k': {'type': 'integer', 'description': '返回几条，默认 5'}},
             'required': ['query']}}},
     {'type': 'function', 'function': {
@@ -79,14 +86,110 @@ class ModelUnavailable(RuntimeError):
     """
 
 
-def _model_error_text(model, exc):
-    """把 urllib 的异常翻成一句人话（路由层直接回给用户）。"""
+def _model_error_text(model, exc, detail=''):
+    """把 urllib 的异常翻成一句人话（路由层直接回给用户）。
+
+    2026-10-20 修：原来只报 HTTP 码，完全不看网关返回的 body ——
+    结果「请求体里 tool 消息没补齐」（HTTP 400）被一律显示成
+    「模型不可用，请换一个」，把用户和运维都引到错误方向（模型其实是好的）。
+    现在把网关原文带上，并在能判定时直接说清是哪一类问题。
+    """
     if isinstance(exc, urllib.error.HTTPError):
-        return ('模型「%s」在当前模型网关不可用（HTTP %d）。'
+        low = (detail or '').lower()
+        if 'tool_calls' in low or 'tool_call_id' in low:
+            # 请求结构问题：_sanitize_messages 已经兜过一层，还报说明上游有别的缺口
+            return ('模型「%s」拒绝了本次请求（HTTP %d）：工具调用消息结构不完整。'
+                    '已自动重试仍失败，请把这条反馈给管理员（附时间）。'
+                    % (model, exc.code))
+        if 'model' in low and ('not found' in low or 'does not exist' in low
+                               or 'not exist' in low or 'no such' in low):
+            return ('模型「%s」在当前模型网关不存在（HTTP %d）。'
+                    '请到「模型」下拉框换一个再问，或联系管理员确认该模型是否已部署。'
+                    % (model, exc.code))
+        tail = ('网关返回：%s' % detail[:200]) if detail else '网关未返回错误详情'
+        if exc.code == 400:
+            # 400 一律不是「模型没部署」——模型名不对会走上面的 not found 分支
+            return ('模型「%s」返回参数错误（HTTP 400）。%s。'
+                    '这通常是网关不接受本次请求的某个参数，请把这条反馈给管理员。'
+                    % (model, tail))
+        return ('模型「%s」在当前模型网关不可用（HTTP %d）。%s。'
                 '请到「模型」下拉框换一个再问，或联系管理员确认该模型是否已部署。'
-                % (model, exc.code))
+                % (model, exc.code, tail))
     return ('无法连接模型服务（%s）。请确认模型地址与网络是否正常。'
             % (getattr(exc, 'reason', exc),))
+
+
+def _sanitize_messages(messages):
+    """发送前修复 messages 结构 —— 挡住严格网关（DeepSeek）的两类 HTTP 400。
+
+    2026-10-20 实测复现（原样报给用户的却是「模型不可用」，误导排查方向）：
+
+      ① 缺 tool 响应
+         {"code":"invalid_parameter_error",
+          "message":"An assistant message with 'tool_calls' must be followed by tool
+                     messages responding to each 'tool_call_id'.
+                     (insufficient tool messages following tool_calls message)"}
+      ② tool_call_id 对不上
+         {"message":"The tool_call_id in the response message does not match the
+                     tool_call_id in the tool_call: messages: message[2]."}
+
+    产生原因（都在上游，不该让用户看见）：
+      - 循环里某个工具结果取不到时走了 `continue`，少回填一条 tool 消息；
+      - 网关偶发**不返回 id**，我们照着 None 回填；
+      - 预算/步数到顶时 break，assistant(tool_calls) 后面还没来得及补 tool。
+
+    qwen 系列对这两点很宽容（照常返回），所以只在 DeepSeek 上炸 ——
+    这就是「同一个问题换个模型就好了」的真相，不是模型没部署。
+
+    ⚠️ 这里是**兜底**，不替上游修 bug：能补就补（宁可让模型看到「结果缺失」，
+       也不能让整轮问答 500）。返回新列表，不改调用方持有的 messages。
+    """
+    out = []
+    n = len(messages)
+    i = 0
+    while i < n:
+        m = messages[i]
+        i += 1
+        if m.get('role') != 'assistant' or not m.get('tool_calls'):
+            out.append(m)
+            continue
+
+        # 深拷贝一层：下面可能要改 id，不能污染调用方（它后面还要接着用）
+        m = dict(m)
+        m['tool_calls'] = [dict(tc) for tc in m['tool_calls']]
+        out.append(m)
+        calls = m['tool_calls']
+        # 网关没给 id → 自己造一个。必须**在 assistant 消息里也改**，
+        # 只改 tool 消息没用（两边都对不上）。
+        for k, tc in enumerate(calls):
+            if not tc.get('id'):
+                tc['id'] = 'call_auto_%d_%d' % (i, k)
+        want = [tc.get('id') for tc in calls]
+
+        got = set()
+        # 先把紧随其后的 tool 消息原样搬过去（保持原有顺序）
+        while i < n and messages[i].get('role') == 'tool':
+            tm = messages[i]
+            tid = tm.get('tool_call_id')
+            if tid not in want:
+                # 对不上的 id（典型是 None）：重映射到**还没被响应**的那个 call。
+                # 丢弃它反而会少一条响应，重映射是唯一能同时满足「数量够 + id 匹配」的做法。
+                spare = [w for w in want if w not in got]
+                if spare:
+                    tm = dict(tm, tool_call_id=spare[0])
+                    tid = spare[0]
+            if tid in want and tid not in got:
+                got.add(tid)
+                out.append(tm)
+            i += 1
+        # 仍然缺响应的 call：补占位。宁可让模型看到「结果缺失」，
+        # 也不能让它整轮 400 —— 那会连历史记录都留不下来。
+        for tid in want:
+            if tid not in got:
+                out.append({'role': 'tool', 'tool_call_id': tid,
+                            'content': '{"ok":false,"error":"工具结果缺失，已用占位补齐"}',
+                            'name': 'unknown'})
+    return out
 
 
 def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_choice=None):
@@ -96,7 +199,7 @@ def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_cho
     #   开思考时过程落在 reasoning 字段，content 只剩最终回答。
     # 代价：reasoning 也占 completion token，max_tokens 给小了会把正文挤空 —— 所以放大到 4000。
     # 2026-10-10：模型换百炼 deepseek-v4.1-flash（内网 v4 到期），思考开关用 enable_thinking。
-    body = {'model': model, 'messages': messages,
+    body = {'model': model, 'messages': _sanitize_messages(messages),
             'temperature': 0, 'max_tokens': max_tokens}
     if not think:
         # ★ 只用**查数轮**（正文不要，只要 tool_calls）：关思考每轮 59 token / 1.3s，
@@ -117,16 +220,25 @@ def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_cho
     #   直接抛出去就变成「服务异常：TimeoutError」这种用户看不懂的东西 —— 等于这题废了。
     #   所以**超时重试一次**并把等待放宽：多等一会儿，换回一个答案。
     last = None
+    last_detail = ''
     for tmo in (config.HTTP_TIMEOUT, config.HTTP_TIMEOUT + 90):
         try:
             raw = urllib.request.urlopen(req, timeout=tmo, context=_ctx).read().decode('utf-8', 'replace')
             return json.loads(raw)
         except urllib.error.HTTPError as e:
+            # ★ 必须先把 body 读出来：这是唯一能区分「模型没部署」和「请求体不合法」的证据。
+            #   漏掉它，400 就只能笼统报「模型不可用」（2026-10-20 的真实误诊）。
+            try:
+                last_detail = e.read().decode('utf-8', 'replace')[:500]
+            except Exception:                      # noqa: BLE001  body 读失败不影响主流程
+                last_detail = ''
+            print('[agent] 模型 %s 返回 HTTP %d：%s'
+                  % (model, e.code, last_detail[:300]), flush=True)
             # 429/5xx 是**端点侧暂时不可用**：实测 3 并发时页面调用被 429 打回，
             # 一次不重试就白丢一张页面（日志证据见 output/test_results/…/EV-0005）。
             # 4xx（除 429）是请求本身的问题，重试没意义，照样抛。
             if e.code not in (429, 500, 502, 503, 504):
-                raise ModelUnavailable(_model_error_text(model, e)) from e
+                raise ModelUnavailable(_model_error_text(model, e, last_detail)) from e
             last = e
             time.sleep(5)
             print('[agent] 模型端点暂时不可用（HTTP %s），等 5 秒重试一次' % e.code, flush=True)
@@ -140,7 +252,7 @@ def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_cho
             last = e
             time.sleep(2)
             print('[agent] 模型连接被重置，重试一次', flush=True)
-    raise ModelUnavailable(_model_error_text(model, last)) from last
+    raise ModelUnavailable(_model_error_text(model, last, last_detail)) from last
 
 
 def _final_answer(messages, model, max_tokens=2500):
@@ -513,6 +625,14 @@ COMMON = (
     '· 一句话只留支撑结果的那几个数；同一件事只说一遍（不要开头概括一遍、分条再说一遍）。\n'
     '· 数字必须来自本次查询，或本轮写清依据的推算；不许无依据估算、不许补 0、不许拿别的年份顶。\n'
     '· 查到 0 行就是答案：写清"按什么口径没有记录"，不要回"未找到相关信息"，也不要放宽条件重查。\n'
+    # ★ 2026-10-20 加：制度类问题与查数题**取源不同**，不分清就会「知识库明明有、却答没有」。
+    #   实测：知识库检索准确返回《第四章 请假管理：企业微信提交→直属上级→部门负责人→人力备案》，
+    #   但模型因为 run_sql 查请假单 0 行，回答成「系统里没有请假流程」。
+    '· **分清题目类型再定答案来源**：问「流程 / 规定 / 标准 / 制度 / 办法 / 谁审批 / 怎么算」'
+    '属于**制度题，答案来自知识库原文**，答的时候说清是哪份制度的第几条；业务库里查不到不影响作答。'
+    '问「多少 / 几个 / 排第几 / 同比」才是**查数题，数字来自 run_sql**。\n'
+    '· 知识库检索到相关原文时，**不要**再说"系统里没有相关记录"；只有连知识库也查不到，'
+    '才说"知识库里没有这份制度"，并说明是按什么词检索的。\n'
     '· 问"有哪些"要逐条列全（一行一条），说 N 条就得正好 N 条。\n'
 )
 
@@ -642,11 +762,35 @@ def _one_call(tc):
 
 
 def _exec_calls(calls):
-    """同一轮的多个工具调用并发执行；返回顺序与 calls 一一对应。"""
+    """同一轮的多个工具调用并发执行；返回顺序与 calls 一一对应。
+
+    ★ 2026-10-20 修的真实缺陷（「知识库检索不用于回答」的根因之一）
+    ------------------------------------------------------------------
+    `kb_search` 的检索范围与登录身份**不是通过参数传的**，而是路由层
+    用 ContextVar 登记的（`kb_adapter.set_scope / set_actor`）——因为工具是
+    模型自主调用的，调用点不在我们的代码栈里，没法层层传参。
+
+    contextvars 的语义是「按执行上下文隔离」：`anyio.to_thread`（路由层用的
+    `run_in_threadpool`）会**复制**上下文，所以走进线程池那一刻还是对的；
+    但 `ThreadPoolExecutor` **不会**——它用的是全新的空上下文。
+
+    后果（实测：同一轮同时发 run_sql + kb_search）：
+      - `current_scope()` 变 None ⇒ 检索范围退回 `config.KB_IDS`（常常是空）
+        ⇒ `_search(kb_ids=[])` 命中 0 条 ⇒ 模型如实回答「知识库里没有相关记录」，
+        可检索测试页明明能命中 —— 用户看到的就是「检索不用于回答」；
+      - `current_actor_key()` 变 "service" ⇒ 只能看公开文档，且缓存按 service 分桶。
+
+    而**单个**工具调用走下面的 fast path（同线程），完全不复现 ——
+    这正是它一直没被发现的原因：现象时有时无，取决于模型这一轮发了几个工具。
+
+    修法：提交任务时在**当前线程**复制上下文（`copy_context()` 必须在提交线程调用），
+    再交给工作线程 run。每个任务各复制一份，避免同一个 Context 被并发 enter。
+    """
     if len(calls) == 1:
         return [_one_call(calls[0])]
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(calls))) as ex:
-        return list(ex.map(_one_call, calls))
+        futs = [ex.submit(copy_context().run, _one_call, c) for c in calls]
+        return [f.result() for f in futs]
 
 
 # 「分析页面」用的系统提示：**独立的一次模型调用**，只产出一个单页 HTML 数据大屏。

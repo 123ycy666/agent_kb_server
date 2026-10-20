@@ -17,8 +17,10 @@ _CACHE_MAX = 200
 
 
 def kb_search(query, top_k=3, kb_ids=None, limit=450):
-    # 检索范围优先级：显式参数 > 本次请求上下文（问答页选中的库）> 配置默认
-    kb_ids = kb_ids or kb_adapter.current_scope() or config.KB_IDS
+    # 检索范围优先级：显式参数 > 本次请求上下文（问答页选中的库）> 动态默认库
+    # 兜底用 default_kb_ids() 而不是 config.KB_IDS：写死的 id 会随删库/重建漂移，
+    # 一旦悬空就会「检索到 0 条但不报错」（2026-10-20 修，见 kb_adapter 注释）。
+    kb_ids = kb_ids or kb_adapter.current_scope() or kb_adapter.default_kb_ids()
     # ⚠️ 缓存键**必须含身份**（2026-10-16 修的真实缺陷）：
     #    底层检索是按登录身份做权限过滤的（公开 + 自己上传的），
     #    键里不带身份 ⇒ 用户 A 的私有切片会被缓存返回给用户 B。

@@ -12,6 +12,7 @@
 无登录身份时兜底为服务身份（只能看公开文档）。
 """
 from contextvars import ContextVar
+import os
 
 from app.secretary import config
 
@@ -45,6 +46,96 @@ def set_scope(kb_ids) -> None:
 def current_scope():
     """取当前请求的检索范围（None 表示未指定，调用方用默认）。"""
     return _scope_var.get()
+
+
+# ── 默认知识库（2026-10-20 新增）─────────────────────────────
+# 为什么要有它：原来的兜底是 `config.KB_IDS`（.env 里写死的 id 列表）。
+# 但**自增 id 会漂移** —— 删库不复用、重建拿更大值，写死的配置就悬空了。
+# 本项目就踩到了：.env 写着 `SECRETARY_KB_IDS=1,2`，实际库 1 是「秘书问答规则」
+# （规则文档）、库 2 是**空库**，真正装了业务知识的库 3（82 条切片）不在范围里。
+# 表现就是「检索测试能命中、问答却说什么都查不到」—— 而且**不报错**。
+#
+# 所以默认范围改成**按内容动态确定**：谁有切片谁是默认库。
+# 顺序（优先级从高到低）：
+#   ① 前端勾选的 kb_ids（已由路由层校验）
+#   ② 库里 `qa_enabled=1` 的 active 库
+#   ③ .env 的 SECRETARY_DEFAULT_KB_ID（显式钉死，建库后 id 稳定时用这个）
+#   ④ 切片数最多的 active 库（动态兜底，不依赖任何写死的 id）
+_DEFAULT_CACHE = {'ids': None, 'at': 0.0}
+_DEFAULT_TTL = 60.0          # 秒：建库/删库后最多 1 分钟生效，不必重启
+
+
+def default_kb_ids(force: bool = False):
+    """当前应当默认检索的知识库 id 列表（按上面 ①④ 的规则，带 60s 缓存）。
+
+    任何异常都返回空列表 —— 宁可让上层显式报「没配知识库」，
+    也不要抛异常把整轮问答带崩。
+    """
+    import time as _t
+
+    if not force and _DEFAULT_CACHE['ids'] is not None \
+            and (_t.time() - _DEFAULT_CACHE['at']) < _DEFAULT_TTL:
+        return list(_DEFAULT_CACHE['ids'])
+    try:
+        from sqlalchemy import func, select
+
+        from app.core.database import SessionLocal
+        from app.models import DocumentChunk, KnowledgeBase
+
+        db = SessionLocal()
+        try:
+            # ② qa_enabled 标记
+            marked = [int(x) for x in db.execute(
+                select(KnowledgeBase.id).where(KnowledgeBase.status == 'active',
+                                               KnowledgeBase.qa_enabled.is_(True))
+            ).scalars()]
+            if marked:
+                ids = marked
+            else:
+                # ③ 显式钉死
+                pinned = (os.environ.get('SECRETARY_DEFAULT_KB_ID')
+                          or config.ENV.get('SECRETARY_DEFAULT_KB_ID') or '').strip()
+                ids = []
+                if pinned:
+                    try:
+                        pid = int(pinned)
+                    except ValueError:
+                        pid = 0
+                    if pid and db.get(KnowledgeBase, pid) is not None:
+                        ids = [pid]
+                # ④ 所有「有切片」的 active 库
+                #    ⚠️ 不是只挑最大的那一个：知识天然分散在多个库。
+                #    本项目实测：kb=1 装「考勤管理制度（含第四章请假流程）」、
+                #    kb=3 装「信息安全管理制度」。只查 kb=3 时问「请假流程」，
+                #    检索返回的却是信息安全制度（rerank 0.07，几乎不相关），
+                #    模型只能如实说「系统里没有请假流程」—— 用户看到的就是
+                #    「知识库检索不用于回答」。所以默认范围要覆盖**所有有内容的库**。
+                if not ids:
+                    rows = db.execute(
+                        select(DocumentChunk.kb_id)
+                        .join(KnowledgeBase, KnowledgeBase.id == DocumentChunk.kb_id)
+                        .where(KnowledgeBase.status == 'active')
+                        .group_by(DocumentChunk.kb_id)
+                        .order_by(func.count(DocumentChunk.id).desc())
+                    ).all()
+                    ids = [int(r[0]) for r in rows]
+        finally:
+            db.close()
+    except Exception as e:                          # noqa: BLE001
+        print('[kb] 解析默认知识库失败：%s: %s' % (type(e).__name__, e), flush=True)
+        ids = []
+    if not ids:
+        # 最后一层：仍然沿用 .env 的写死值（可能为空）
+        ids = list(config.KB_IDS or [])
+    _DEFAULT_CACHE['ids'] = list(ids)
+    _DEFAULT_CACHE['at'] = _t.time()
+    return list(ids)
+
+
+def reset_default_cache() -> None:
+    """建库/删库/改 qa_enabled 后调一次，让默认范围立刻重算（不用等 60s）。"""
+    _DEFAULT_CACHE['ids'] = None
+    _DEFAULT_CACHE['at'] = 0.0
 
 
 def current_actor_key() -> str:
@@ -95,8 +186,10 @@ def search(query, kb_ids=None, top_k=5, rerank=True, tag_filters=None,
     from app.services.retrieval.search import search as _search
 
     actor = _actor_var.get() or _fallback_actor()
-    # 检索范围优先级：显式参数 > 本次请求上下文 > 配置默认
-    effective_kb_ids = list(kb_ids or _scope_var.get() or config.KB_IDS)
+    # 检索范围优先级：显式参数 > 本次请求上下文 > 动态默认库 > .env 写死值
+    # 最后一层改成 default_kb_ids()：写死的 id 会因删库/重建漂移（见上方注释），
+    # 动态默认至少保证「检索的是真有内容的那个库」。
+    effective_kb_ids = list(kb_ids or _scope_var.get() or default_kb_ids())
     db = SessionLocal()
     try:
         resp = _search(
