@@ -20,6 +20,42 @@ import json
 import os
 import threading
 import uuid
+from datetime import timezone
+from zoneinfo import ZoneInfo
+
+# ══════════════════════════════════════════════════════════════
+#  时间输出：库里是 UTC，给前端必须是**本地时间**
+# ══════════════════════════════════════════════════════════════
+#
+# 2026-10-20 修（用户报「历史对话的时间有问题，瞎写的」）
+# ------------------------------------------------------
+# `t_chat_session.create_time` 是 timestamptz，psycopg 取回来带 tzinfo=UTC。
+# 原来直接 `str(dt)` 输出成 "2026-10-20 05:01:38.392015" —— **没有时区标识**，
+# 前端 dayjs 只能按「本地时间」解析，于是把 UTC 的 05:01 当北京时间 05:01 显示，
+# 实际是 13:01，整整差 8 小时。
+#
+# 为什么在服务端转、而不是让前端 `dayjs.utc()`：
+#   - sga 前端是直接 `.slice(0,16)` 截字符串显示的，改成 ISO（带 T）会让他们全乱；
+#   - 服务端一次性转成本地，所有消费方（SPA / 静态页 / sga）都对，前端不需要懂时区。
+#
+# 时区可用 DISPLAY_TZ 覆盖（默认 Asia/Shanghai，本项目场景固定国内）。
+_DISPLAY_TZ = ZoneInfo(os.environ.get('DISPLAY_TZ') or 'Asia/Shanghai')
+
+
+def _local_str(dt):
+    """UTC datetime → 本地时间字符串 'YYYY-MM-DD HH:mm:ss'。
+
+    None 原样返回；已经是字符串的也原样返回（幂等，避免二次转换）。
+    """
+    if dt is None:
+        return None
+    if isinstance(dt, str):
+        return dt
+    if dt.tzinfo is None:            # 无时区 = 库里的约定是 UTC
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_DISPLAY_TZ).strftime('%Y-%m-%d %H:%M:%S')
+
+
 
 from app.secretary import pgdb
 
@@ -418,10 +454,10 @@ def list_sessions(user_code=None, limit=None, offset=0, max_rows=None, user_id=N
                ' ORDER BY COALESCE(s.last_msg_at, s.create_time) DESC, s.id DESC LIMIT %s OFFSET %s')
         cur.execute(sql, params + [limit, offset])
         rows = cur.fetchall()
-        for r in rows:                            # datetime → 字符串，便于 JSON 输出
+        for r in rows:                            # datetime → 本地时间字符串，便于 JSON 输出
             for k in ('create_time', 'last_msg_at', 'ended_at'):
                 if r.get(k) is not None:
-                    r[k] = str(r[k])
+                    r[k] = _local_str(r[k])
         return {'total': total, 'returned': len(rows), 'limit': limit, 'offset': offset,
                 'truncated': truncated, 'sessions': rows}
     finally:
@@ -449,7 +485,7 @@ def get_history(session_id, limit=None, with_steps=False, max_rows=None):
             return None
         for k in ('create_time', 'last_msg_at', 'ended_at'):
             if session.get(k) is not None:
-                session[k] = str(session[k])
+                session[k] = _local_str(session[k])
         # total = 这场会话的消息总数（不是本页条数）；再用防呆上限算出本次实际取多少。
         cur.execute('SELECT COUNT(*) AS n FROM t_chat_message '
                     'WHERE chat_session_id=%s AND deleted_flag=0', (session_id,))
@@ -471,7 +507,7 @@ def get_history(session_id, limit=None, with_steps=False, max_rows=None):
         msgs = cur.fetchall()
         for m in msgs:
             if m.get('create_time') is not None:
-                m['create_time'] = str(m['create_time'])
+                m['create_time'] = _local_str(m['create_time'])
         if with_steps:
             ids = [m['qa_id'] for m in msgs if m.get('qa_id')]
             steps = {}
