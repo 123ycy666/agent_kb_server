@@ -66,3 +66,16 @@ class AskResponse(BaseModel):
         default_factory=list,
         description="⚠️ 工具调用轨迹，**仅调试用**；外部集成可忽略，也可要求不返回",
     )
+
+    # ── 大屏跳转意图（2026-10-21）──────────────────────────────────────
+    # 仅当请求带 want_screen=true 且 SCREEN_PREVIEW_URL 已配置时才有值；
+    # 其余情况下**这四个字段不会出现在响应里**（调用失败也一样），前端据此不跳转。
+    # 字段名与对方 Java 接口保持一致，便于直接透传。
+    layer: str = Field(default="", description="大屏二级页面标识（对方白名单值）")
+    method: str = Field(default="", description="大屏动作；unknownIntent = 未识别（前端不跳转）")
+    mainId: int | str | None = Field(  # noqa: N815 - 与对方接口字段名一致
+        default=None, description="页面跳转用的业务主键；可为 null")
+    data: list = Field(
+        default_factory=list,
+        description="意图参数列表（如 [{'stationName':'两水供电所','year':'2026'}]）",
+    )

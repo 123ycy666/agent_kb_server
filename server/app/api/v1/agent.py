@@ -27,6 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.config import settings
 from app.core.deps import CurrentActor, get_current_actor
 from app.secretary import agent as agent_mod
+from app.services import screen_intent as screen_intent_svc
 from app.secretary import config as sec_config
 from app.secretary import doc_context
 from app.secretary import doc_files as sec_doc_files
@@ -216,6 +217,9 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
     channel = (data.get("channel") or "").strip() or "web"
     history_turns = data.get("history_turns")
     want_page = bool(data.get("want_page"))
+    # 大屏跳转意图（2026-10-21）：只有大屏前端才带这个开关，其它调用方一律不调，
+    # 免得每个问题都替大屏多等一次模型识别。multipart 时值是字符串，要按文本判。
+    want_screen = str(data.get("want_screen") or "").strip().lower() in ("1", "true", "yes", "on")
     page_async = (data.get("page_mode") or "").strip().lower() == "async"
     scope = (data.get("scope") or data.get("business_scope") or "").strip() or None
     today = (data.get("today") or data.get("business_date") or "").strip() or None
@@ -341,6 +345,24 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
                 _db.close()
     except Exception as _exc:  # noqa: BLE001 - 拟办失败不影响问答
         print('[task_draft] 自动拟办跳过：%s: %s' % (type(_exc).__name__, _exc), flush=True)
+
+    # ── 大屏跳转意图（2026-10-21）──────────────────────────────────────
+    # 只有带 want_screen 的调用（大屏前端）才调，其它调用方零开销。
+    # 用**补全后**的问题：completed_question 只做地名/时间补全、不改写语义，
+    # 比原始问法更容易被对方识别（「环谭」已纠成「环潭」、「今年」已补成具体年份）。
+    # 结果**平铺**进响应（layer / method / mainId / data，字段名与对方一致）；
+    # 调用失败或没识别就什么都不加 —— 前端没有 method 即不跳转，正常看问答。
+    if want_screen and screen_intent_svc.enabled():
+        try:
+            _si = await run_in_threadpool(
+                screen_intent_svc.preview,
+                r.get("completed_question") or r.get("fixed_question") or q,
+            )
+            if _si:
+                r.update(_si)
+        except Exception as _exc:      # noqa: BLE001 - 增强能力，绝不影响问答
+            print('[screen] 跳转识别跳过：%s: %s' % (type(_exc).__name__, _exc), flush=True)
+
     return _jr(r)
 
 

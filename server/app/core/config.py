@@ -147,6 +147,16 @@ class Settings(BaseSettings):
     sso_login_enabled: bool = True
     sso_login_key: str = ""
 
+    # ── 大屏跳转意图识别（对方 Java 服务，2026-10-21）──────────
+    # `/api/ask` 带 want_screen=true 时，用**补全后的问题**调这个接口，
+    # 把 layer / method / mainId / data 平铺进响应，供大屏前端跳转。
+    # 留空 = 功能关闭（默认）；填完整 URL，例如：
+    #   SCREEN_PREVIEW_URL=http://127.0.0.1:11999/api/ai/big-screen/preview
+    # ⚠️ 若本服务跑在容器里，127.0.0.1 指向容器自身，要换成宿主机 IP 或 host.docker.internal。
+    screen_preview_url: str = ""
+    # 对方识别是模型推理，正常 1~3 秒；给 5 秒超时，超时就当没识别（不影响问答）。
+    screen_preview_timeout: float = 5.0
+
     # ══════════════════════════════════════════════════════════
     #  派生属性
     # ══════════════════════════════════════════════════════════
