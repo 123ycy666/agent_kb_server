@@ -293,7 +293,9 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
             client_ip=client_ip,
             channel=channel,
             history_turns=history_turns,
-            kb_ids=kb_scope or None,   # None ⇒ kb_adapter 退回配置默认
+            # 检索范围已在上面用 kb_adapter.set_scope(kb_scope) 登记到线程上下文；
+            # 不给 ask() 传 kb_ids（2026-10-20 cce1d3e 的方案，合流时被覆盖过一次，
+            # 2026-10-21 恢复：形参传不进去那一步，kb_search 由模型自主调用）。
             doc_context=ctx.get("context") or None,
             doc_files=ctx.get("files") or None,
         )

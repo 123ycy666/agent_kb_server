@@ -979,7 +979,7 @@ def _summary_worth_it(session_id):
 def ask(question, model=None, max_steps=None, profile=None, want_page=False, today=None, scope=None,
         page_async=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
-        history_turns=None, kb_ids=None,
+        history_turns=None,
         doc_context=None, doc_files=None):
     """question = 用户的原话（不需要上游预处理）。
 
@@ -1007,14 +1007,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 必须先存下来：下面 time_scope 的结果也叫 scope，直接 scope = … 会把形参吞掉
     # （曾经的 bug：传了范围却全按「全市」作答，证据 output/test_results/…/EV-0003）。
     force_scope = (scope or '').strip() or None
-    # 检索范围：路由层按登录用户勾选的库算好，这里落到 kb_adapter 的线程上下文里
-    # （2026-10-19 合流后 API 传了 kb_ids，而 ask() 没接 → /api/ask 直接 500 TypeError）。
-    if kb_ids:
-        try:
-            from app.secretary import kb_adapter
-            kb_adapter.set_scope(kb_ids)
-        except Exception:                                  # noqa: BLE001
-            pass
+    # 检索范围**只走 kb_adapter 的线程上下文**（路由层 set_scope 登记）。
+    # 2026-10-19 曾在这里接 kb_ids 形参兜底兼容，2026-10-20 cce1d3e 改为只走上下文；
+    # 2026-10-21 合流时形参又被带回来，现已删除（两条路并存是冗余，且测试按原设计断言）。
     # ⓪ 字面纠错 + 名称归一（阶段①的「字面」部分，在问题补全之前）。
     #    必须先做：字没改对，后面检索知识库、补全、写 SQL 全是白费。
     t_fix = time.time()
