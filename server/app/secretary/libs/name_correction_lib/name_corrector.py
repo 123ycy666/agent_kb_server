@@ -538,7 +538,13 @@ def _map_span(ops: list, s: int, e: int) -> tuple[int, int]:
 # 用户自己写在名字后面的类型词 —— 补全时要把它并进替换区间，别再补一遍。
 # 「随县供电公司」：滑窗只切出「随县」，补成「国网随县供电公司」，
 # 可「供电公司」四个字还在原地 → 叠成「国网随县供电公司供电公司」。
-_ABSORB_TAILS = tuple(sorted(set(UNIT_KINDS) | set(AREA_SUFFIX), key=len, reverse=True))
+_ABSORB_TAILS = tuple(sorted(set(UNIT_KINDS) | set(AREA_SUFFIX) | {"公司", "所"},
+                            key=len, reverse=True))
+
+# 单字尾词（「广水所」的「所」）风险高：「广水所有台区」里的「所」是「所有」的一半。
+# 后接这些字时不吸收。
+_SINGLE_CHAR_TAILS = frozenset({"所"})
+_TAIL_BLOCK_NEXT = frozenset("有以在属述长谓需及对上下级内外的了均都也还是把将会")
 
 
 def _absorb_tail(text: str, e: int, std: str) -> int:
@@ -547,11 +553,52 @@ def _absorb_tail(text: str, e: int, std: str) -> int:
     只有当候选标准名**本身就以这个尾词收尾**时才并 ——
     「白鹤变压器」补成「白鹤变压器」不该并，「白鹤」补成「白鹤台区」也不该并，
     唯有「随县」→「国网随县供电公司」这种"名字里已经含了用户写的后缀"才适用。
+
+    2026-10-26 补：①加「公司」「所」两个尾词（否则「广水公司」→「广水供电所公司」）；
+    ②单字「所」加护栏，「广水所有台区」里的「所」不能被当成后缀吃掉。
     """
     for tail in _ABSORB_TAILS:
-        if std.endswith(tail) and text.startswith(tail, e):
-            return e + len(tail)
+        if not std.endswith(tail) or not text.startswith(tail, e):
+            continue
+        if tail in _SINGLE_CHAR_TAILS and text[e + 1:e + 2] in _TAIL_BLOCK_NEXT:
+            continue
+        return e + len(tail)
     return e
+
+
+# 用户口语里的单位级别词 —— 按「长词优先」匹配，避免「供电公司」被「公司」先吃掉。
+_ASKED_UNIT_SUFFIX = (
+    ("供电服务站", frozenset({"供电服务站"})),
+    ("供电营业站", frozenset({"供电服务站"})),
+    ("供电服务中心", frozenset({"供电服务站"})),
+    ("供电中心", frozenset({"供电所"})),
+    ("供电公司", frozenset({"供电公司"})),
+    ("分公司", frozenset({"供电公司"})),
+    ("服务站", frozenset({"供电服务站"})),
+    ("营业站", frozenset({"供电服务站"})),
+    ("公司", frozenset({"供电公司"})),
+    ("供电所", frozenset({"供电所"})),
+)
+
+
+def _asked_unit_kind(tail: str) -> frozenset[str] | None:
+    """从「地名之后紧跟的那几个字」读出用户问的是哪一级单位。
+
+    为什么需要它：`rank()` 末尾是「短名优先」，而「广水供电所」永远比
+    「国网广水市供电公司」短 —— 用户明明说了「广水公司」，仍会被判成所
+    （2026-10-26 线上现象）。用户既然点明了级别，就不该再按长度猜。
+
+    只认**紧跟在片段后面的开头**，不看整句：否则「查广水所，对比市公司」
+    后半句的「公司」会把前半句带偏。返回 None 表示用户没提级别，按原逻辑走。
+    """
+    t = (tail or "").lstrip()
+    for suf, kinds in _ASKED_UNIT_SUFFIX:
+        if t.startswith(suf):
+            return kinds
+    # 单字「所」：「广水所线损」能认；「广水所有台区」不能（那是「所有」）。
+    if t.startswith("所") and t[1:2] not in _TAIL_BLOCK_NEXT:
+        return frozenset({"供电所", "供电服务站"})
+    return None
 
 
 @dataclass
@@ -1249,6 +1296,13 @@ class Corrector:
                     continue
                 for j in range(min(i + 12, n), i + 2, -1):
                     frag = text[i:j]
+                    # ★ 片段带电力单位后缀（供电公司/供电所/服务站）→ 用户说的是单位。
+                    #   库里有「市供电公司箱变」这种企业台区，不加这条，
+                    #   「广水市供电公司预算」会被改成「广水市供电公司箱变预算」
+                    #   （2026-10-26 实测）。注意只拦「供电公司」这类后缀，
+                    #   普通「XX有限公司」不受影响（形态一仍按类型后缀正常识别台区）。
+                    if UNIT_SUFFIX_RE.search(frag):
+                        continue
                     if self._area_exact(frag):
                         found.append((i, j, frag))
                         break
@@ -1533,8 +1587,10 @@ class Corrector:
         # 否则日志里写「两水 → 两水供电所」，对不上用户实际说的词。
         ops = SequenceMatcher(None, text, t).get_opcodes()
         hits: list[NameResolution] = []
-        for s, e, frag in reversed(self._resolve_spans(t)):
-            hit = self._best_name(frag)
+        for s, e, frag, hit in reversed(self._resolve_spans(t)):
+            # 片段在 _resolve_spans 里已经用「用户说的级别」判过了，这里直接用。
+            # ⚠️ 不要再拿 frag 重新 _best_name：frag 已吸收过后缀（「广水公司」），
+            #    重算时 tail 只剩「2026…」，级别信息丢失 → 匹配不到任何候选。
             if hit is not None and _is_glued_homophone(t, s, e, frag, hit):
                 hit = None                     # 纯同音又贴着功能字：判为噪声，不动原文
             if hit is None:
@@ -1584,7 +1640,7 @@ class Corrector:
                     break
         return spans
 
-    def _resolve_spans(self, text: str) -> list[tuple[int, int, str]]:
+    def _resolve_spans(self, text: str) -> list[tuple[int, int, str, NameResolution]]:
         """框出「可能是名字」的片段，两类形态：
 
         A. **带类型后缀**的 —— 边界交给 `_area_frag_at`（「白鹤二组台区」「公家棚台区」）；
@@ -1601,7 +1657,7 @@ class Corrector:
         def blocked(s: int, e: int) -> bool:
             return any(s < pe and e > ps for ps, pe in protected)
 
-        found: list[tuple[int, int, str]] = []
+        found: list[tuple[int, int, str, NameResolution | None]] = []
         for m in AREA_SUFFIX_RE.finditer(text):
             end = m.end()
             frag = self._area_frag_at(text, end)
@@ -1612,7 +1668,11 @@ class Corrector:
                 continue
             if normalize(frag) in self.no_partial:
                 continue
-            found.append((s, end, frag))
+            # ⚠️ 带类型后缀这条也要带上 hit：_resolve_spans 统一返回 4 元组，
+            #    漏一条会在解包时 ValueError，被上层吞掉 → 整个归一静默失效
+            #    （2026-10-26 改这里时踩到过，test_namefix 第 2 条就是这么红的）。
+            found.append((s, end, frag,
+                          self._best_name(frag, text[end:end + 8])))
 
         n = len(text)
 
@@ -1675,7 +1735,7 @@ class Corrector:
                     continue
                 if self._decomposable(frag):
                     continue              # 能切成已知词，不是专有名词
-                hit = self._best_name(frag)
+                hit = self._best_name(frag, text[i + L:i + L + 8])
                 if hit is not None:
                     # 行政区划护栏：片段后面紧跟「镇 / 乡 / 村 / 区」这类字时，
                     # 它是地名的一部分，不是独立对象 ——
@@ -1688,20 +1748,35 @@ class Corrector:
                     # 不这么做，「凉水2025售电量」会被整段换成「两水供电所」，
                     # 年份 2025 连同年份口径一起丢掉。
                     end = i + L - _core_tail_cut(frag)
+                    # ★ 用户已经把后缀写出来了（「广水公司」「广水所」）→ 并进替换区间。
+                    #   不并会叠成「广水供电所公司」「广水供电所所」（2026-10-26 实测）。
+                    if hit.kind in UNIT_KINDS:
+                        end = _absorb_tail(text, end, hit.std)
                     if end - i < 2:
                         continue
-                    found.append((i, end, text[i:end]))
+                    found.append((i, end, text[i:end], hit))
                     break
 
         found.sort(key=lambda x: (x[0], -(x[1] - x[0])))
-        kept: list[tuple[int, int, str]] = []
-        for s, e, frag in found:
-            if any(s < ke and e > ks for ks, ke, _ in kept):
+        kept: list[tuple[int, int, str, NameResolution]] = []
+        for s, e, frag, hit in found:
+            if any(s < ke and e > ks for ks, ke, _, _ in kept):
                 continue              # 被更长的片段包含
-            kept.append((s, e, frag))
+            kept.append((s, e, frag, hit))
         return kept
 
-    def _best_name(self, frag: str) -> NameResolution | None:
+    def _best_name(self, frag: str, tail: str = "") -> NameResolution | None:
+        """见 _best_name_uncached。`tail` = 片段紧跟其后的原文（用来读单位级别）。"""
+        asked = _asked_unit_kind(tail)
+        key = (frag, asked)
+        if key in self._best_cache:
+            return self._best_cache[key]           # type: ignore[return-value]
+        res = self._best_name_uncached(frag, asked)
+        self._best_cache[key] = res
+        return res
+
+    def _best_name_uncached(self, frag: str,
+                            asked: frozenset[str] | None = None) -> NameResolution | None:
         """给一个片段找出库里的标准名；返回 None 表示库里没有像的。
 
         两条路都走：
@@ -1715,14 +1790,11 @@ class Corrector:
         否则「售电**量和**线损」里的「量和」会被读成「两河一组」——
         量和(lianghe) 与 两河(lianghe) 同音，但前者显然不是地名。
         汉字能对上的（「万和」→「万和供电所」）不受这条限制。
-        """
-        if frag in self._best_cache:
-            return self._best_cache[frag]          # type: ignore[return-value]
-        res = self._best_name_uncached(frag)
-        self._best_cache[frag] = res
-        return res
 
-    def _best_name_uncached(self, frag: str) -> NameResolution | None:
+        `asked` = 用户明说的单位级别（供电公司 / 供电所 / 供电服务站）。
+        有值时**只在该级别里选** —— 否则「广水公司」会被 rank() 的「短名优先」
+        判成「广水供电所」（2026-10-26 线上现象）。
+        """
         core = canon_digits(_area_core(frag))
         if len(core) < 2 or _only_suffix(frag):
             return None
@@ -1853,6 +1925,22 @@ class Corrector:
             return None
         if not cands:
             return None
+
+        # ★ 用户明说了级别（公司/所/服务站）→ 只在该级别里选。
+        #   缺了这一步，「广水公司」会因为 rank() 末位的「短名优先」被判成
+        #   「广水供电所」——用户说的是公司，查的却是所，口径与数据全错。
+        #   筛完为空则不动（说明用户说的级别库里根本没有，按原逻辑给最像的，
+        #   由下游的"多候选/库内精确名"信息去提示）。
+        if asked:
+            only = [c for c in cands if c[1] in asked]
+            if only:
+                cands = only
+            else:
+                # 用户点明的级别库里没有（例如说了「广水服务站」，但库里只有
+                # 广水供电所、没有广水供电服务站）→ **不跨级别替换**。
+                # 否则会拼出「广水供电所服务站」这种库里根本不存在的名字，
+                # 比不改更糟：下游拿着它查库必然为空。
+                return None
 
         q_has_digit = bool(qd)
 
