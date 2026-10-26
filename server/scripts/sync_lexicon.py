@@ -27,8 +27,9 @@ from __future__ import annotations
 import os
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根
-sys.path.insert(0, os.path.join(ROOT, 'server'))                    # app 包在 server/ 下
+SERVER = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # server/
+REPO = os.path.dirname(SERVER)                                        # 仓库根（.env 在这）
+sys.path.insert(0, SERVER)                                            # app 包在 server/ 下
 
 import pymysql                     # noqa: E402
 from dotenv import dotenv_values   # noqa: E402
@@ -37,7 +38,7 @@ from pypinyin import Style, lazy_pinyin  # noqa: E402
 from app.secretary import name_fix                       # noqa: E402
 from app.secretary.libs.name_correction_lib import name_corrector as nc  # noqa: E402
 
-ENV = dotenv_values(os.path.join(ROOT, '.env'))
+ENV = dotenv_values(os.path.join(REPO, '.env'))
 
 
 def mysql():
