@@ -36,6 +36,7 @@ from app.models.dispatch import (
 )
 from app.secretary import alert_scope
 from app.secretary import alerts as A
+from app.services import dispatch_chain as CH
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,20 @@ def _emp_by_role(role_code: str, dept_id) -> list[dict]:
               'WHERE e.deleted_flag=0 AND e.disabled_flag=0 AND r.role_code=%s AND e.department_id=%s',
               [role_code, int(dept_id)], limit=50)
     return [x for x in (_emp(r['employee_id']) for r in rows) if x]
+
+
+def _emps_up(role_code: str, dept_id) -> list[dict]:
+    """按组织树往上找这个角色的人。
+
+    为什么必须上溯：所长在 dept 56，县财务在 dept 10，`_emp_by_role('xgscwb', 56)`
+    永远是空的 —— 原实现找不到人就直接退化成"通知发起人自己"，
+    等于**所长上报给自己**，层级链其实是断的（2026-10-21 发现）。
+    """
+    for d in CH.ancestor_chain(dept_id, _dept_parent):
+        emps = _emp_by_role(role_code, d)
+        if emps:
+            return emps
+    return []
 
 
 def _role_of(employee_id) -> str | None:
@@ -312,6 +327,89 @@ def _idem_task(db: Session, key: str) -> DispatchTask | None:
     return db.get(DispatchTask, int(row[0]))
 
 
+def _next_case_id(db: Session) -> str:
+    """对外事项号 C<YYYYMMDD>-<5位>（人看着能念，机器看着唯一）。"""
+    day = time.strftime('%Y%m%d')
+    n = db.execute(select(func.count()).select_from(DispatchTask).where(
+        DispatchTask.case_id.like('C%s-%%' % day))).scalar_one()
+    seq = int(n) + 1
+    while True:
+        cid = 'C%s-%05d' % (day, seq)
+        if not db.execute(select(DispatchTask.id).where(
+                DispatchTask.case_id == cid).limit(1)).first():
+            return cid
+        seq += 1
+
+
+def case_key_of_alert(alert: AlertItem) -> str:
+    """一件事的指纹：和 `alert_service.case_key_of` 同一口径（= dedupe_key 去掉角色段）。"""
+    return '%s|%s|%s|%s|%s' % (alert.alert_type, alert.subtype, alert.scope_type,
+                                alert.scope_key, alert.object_key or '*')
+
+
+def case_root(db: Session, case_key: str) -> DispatchTask | None:
+    """这个事项上还活着的那棵树（根任务）。闭环/作废的不算，可以再建新的。"""
+    return db.execute(select(DispatchTask).where(
+        DispatchTask.case_key == case_key,
+        DispatchTask.parent_task_id.is_(None),
+        DispatchTask.deleted_flag == 0,
+        DispatchTask.status.notin_(('cancelled', 'closed')))
+        .order_by(DispatchTask.id.desc()).limit(1)).scalar_one_or_none()
+
+
+def _case_exists_error(act: dict, root: DispatchTask) -> DispatchError:
+    """同一件事已经有任务了 —— 明确告诉他能做什么，不许他再建一棵。"""
+    who = root.creator_name or root.creator_login
+    return DispatchError(
+        'CASE_EXISTS',
+        '这件事已经有任务在办了（%s，%s 发起，当前 %s）。同一件事只能有一张单，'
+        '你可以：① 补充要求 ② 修改方案 ③ 写说明。不能重复建任务。'
+        % (root.task_no, who, root.status),
+        409,
+        {'existing_task_id': root.id, 'existing_task_no': root.task_no,
+         'case_id': root.case_id, 'case_key': root.case_key,
+         'creator': who, 'status': root.status,
+         'actions': ['comment', 'supplement', 'plan'],
+         'endpoints': {'comment': '/api/tasks/%d/comment' % root.id,
+                       'supplement': '/api/tasks/%d/supplement' % root.id,
+                       'plan': '/api/tasks/%d/plan' % root.id,
+                       'case': '/api/tasks/case/%s' % (root.case_id or '')}})
+
+
+def _dept_parent(dept_id) -> int | None:
+    d = _dept(dept_id) if dept_id else {}
+    return _i(d.get('parent_id')) or None
+
+
+def _guard_chain(db: Session, act: dict, action: str, emp: dict,
+                 task: DispatchTask | None = None) -> None:
+    """层级守卫：越级/同级/跨组织一律 409，并写清"该发给谁"。
+
+    action: assign（派活）/ subtask（继续拆）/ transfer（转派）/ escalate（上报）
+    """
+    actor_role = act.get('role_code')
+    target_role = _role_of(emp['employee_id']) or None
+    ok, rel = CH.check(action, actor_role, target_role)
+    if not ok:
+        raise DispatchError('LEVEL_SKIP', CH.explain(action, actor_role, target_role, rel),
+                            409, {'reason': rel, 'actor_role': actor_role,
+                                  'target_role': target_role,
+                                  'allowed': sorted(CH.ACTION_ALLOW.get(action) or []),
+                                  'next_up': CH.next_ranks(actor_role, 1),
+                                  'next_down': CH.next_ranks(actor_role, -1)})
+    upward = rel == 'up' or (action == 'escalate')
+    if rel not in ('same', 'peer') and not CH.check_org(
+            act.get('dept_id'), emp.get('dept_id'), _dept_parent, upward=upward):
+        raise DispatchError(
+            'OUT_OF_CHAIN',
+            '层级对了但不在你的组织里：%s 的上级不是你这条线，只能在本单位往下传/往上报。'
+            % (emp.get('name') or emp.get('login_name') or ''),
+            409, {'actor_dept': act.get('dept_id'), 'target_dept': emp.get('dept_id')})
+    if action == 'escalate' and target_role == 'master' and DR.MASTER_ESCALATION_BLOCK:
+        raise DispatchError('MASTER_GUARD',
+                            '市领导只接大方向结论，执行层的事不要直接上报到市领导。', 409)
+
+
 def create(db: Session, account: str, alert_id: int, body: dict) -> dict:
     """确认下发：task + assignees + event + notice 同一事务。"""
     act = _actor(account)
@@ -326,6 +424,12 @@ def create(db: Session, account: str, alert_id: int, body: dict) -> dict:
     if dup:
         return task_detail(db, account, dup.id)
 
+    # 一件事只能一棵树：别人已经建了，就让他在那张单上补充/说明，不许再建
+    ckey = case_key_of_alert(alert)
+    root = case_root(db, ckey)
+    if root is not None:
+        raise _case_exists_error(act, root)
+
     assignees_in = body.get('assignees') or []
     if not assignees_in:
         raise DispatchError('NO_ASSIGNEE', '至少要有一个主责', 422)
@@ -339,6 +443,7 @@ def create(db: Session, account: str, alert_id: int, body: dict) -> dict:
         title=(body.get('title') or alert.title)[:200],
         requirement=body.get('requirement') or '',
         status='open', level=body.get('level') or alert.level,
+        case_id=_next_case_id(db), case_key=ckey,
         alert_id=alert.id, scope_type=alert.scope_type, scope_key=alert.scope_key,
         scope_name=alert.scope_name, biz_type=alert.object_type,
         biz_keys=[alert.object_key] if alert.object_key and alert.object_key != '*' else [],
@@ -363,6 +468,11 @@ def create(db: Session, account: str, alert_id: int, body: dict) -> dict:
         part = a.get('part') or 'owner'
         if part not in ('owner', 'collaborator', 'cc'):
             raise DispatchError('BAD_PART', 'part 只能是 owner/collaborator/cc', 422)
+        if part == 'owner':                    # 主责才叫派活
+            _guard_chain(db, act, 'assign', emp, task)
+        elif part == 'collaborator':           # 协办是请人配合，可相邻上下
+            _guard_chain(db, act, 'collab', emp, task)
+        # cc 只是知会，不限层级
         db.add(DispatchTaskAssignee(
             task_id=task.id, part=part, employee_id=emp['employee_id'],
             login_name=emp['login_name'], name=emp['name'], dept_id=emp['dept_id'],
@@ -544,6 +654,7 @@ def transfer(db: Session, account: str, task_id: int, to_employee_id: int) -> di
     emp = _emp(to_employee_id)
     if not emp or emp['disabled']:
         raise DispatchError('BAD_ASSIGNEE', '承接人不存在或已停用', 422)
+    _guard_chain(db, act, 'transfer', emp, t)
     for a in _assignees(db, t.id):
         if a.part == 'owner' and a.employee_id == act['employee_id'] and t.creator_id != act['employee_id']:
             a.part = 'collaborator'
@@ -567,11 +678,19 @@ def subtask(db: Session, account: str, task_id: int, body: dict) -> dict:
     if not assignees_in:
         raise DispatchError('NO_ASSIGNEE', '子任务至少要有一个主责', 422)
     now = _now()
+    # 子任务不改事项：整棵树共用一个 case_id / case_key，谁看都是同一件事
+    child_case_key = parent.case_key
+    if not child_case_key:
+        pa = db.get(AlertItem, parent.alert_id) if parent.alert_id else None
+        child_case_key = (case_key_of_alert(pa) if pa
+                          else 'task|%d' % (parent.root_task_id or parent.id))
+    child_case_id = parent.case_id or _next_case_id(db)
     child = DispatchTask(
         task_no=_next_task_no(db), task_type='alert', title=(body.get('title') or parent.title)[:200],
         requirement=body.get('requirement') or parent.requirement, status='open',
         level=body.get('level') or parent.level, parent_task_id=parent.id,
         root_task_id=parent.root_task_id or parent.id,
+        case_id=child_case_id, case_key=child_case_key,
         alert_id=parent.alert_id, scope_type=parent.scope_type, scope_key=parent.scope_key,
         scope_name=parent.scope_name, biz_type=parent.biz_type, biz_keys=parent.biz_keys,
         creator_id=int(act['employee_id']), creator_name=act['name'],
@@ -589,6 +708,10 @@ def subtask(db: Session, account: str, task_id: int, body: dict) -> dict:
         if not emp or emp['disabled']:
             raise DispatchError('BAD_ASSIGNEE', '承办人不存在或已停用', 422)
         part = a.get('part') or 'owner'
+        if part == 'owner':
+            _guard_chain(db, act, 'subtask', emp, child)
+        elif part == 'collaborator':
+            _guard_chain(db, act, 'collab', emp, child)
         db.add(DispatchTaskAssignee(
             task_id=child.id, part=part, employee_id=emp['employee_id'],
             login_name=emp['login_name'], name=emp['name'], dept_id=emp['dept_id'],
@@ -703,10 +826,13 @@ def _escalate_once(db: Session, t: DispatchTask, reason: str, actor: dict | None
         return False
 
     receivers: list[dict] = []
+    start_dept = (owners[0].dept_id if owners else None) or t.creator_dept_id
     for nxt in DR.next_roles(cat, role):
         if nxt == 'master' and DR.MASTER_ESCALATION_BLOCK and t.status != 'closed':
             break
-        emps = _emp_by_role(nxt, owners[0].dept_id if owners else 1) or _emp_by_role(nxt, 1)
+        if not CH.check('escalate', role, nxt)[0]:      # 职责线里若混进跨级项，跳过
+            continue
+        emps = _emps_up(nxt, start_dept)
         if emps:
             receivers = emps[:3]
             break
@@ -1000,6 +1126,7 @@ def _get_task(db: Session, task_id: int) -> DispatchTask:
 def serialize_task(t: DispatchTask) -> dict:
     return {
         'id': t.id, 'task_no': t.task_no, 'task_type': t.task_type, 'title': t.title,
+        'case_id': t.case_id, 'case_key': t.case_key,
         'requirement': t.requirement, 'status': t.status, 'level': t.level,
         'alert_id': t.alert_id, 'root_task_id': t.root_task_id, 'parent_task_id': t.parent_task_id,
         'scope_type': t.scope_type, 'scope_key': t.scope_key, 'scope_name': t.scope_name,
@@ -1055,6 +1182,30 @@ def list_tasks(db: Session, account: str, role: str = 'mine', status: str | None
             'items': [serialize_task(t) for t in rows]}
 
 
+def _plan_offer(db: Session, t: DispatchTask, act: dict) -> dict:
+    """要不要我替你起草方案？
+
+    他本来就该交方案，却对着空白框发呆 —— 这时候系统主动问一句，
+    比等他拖到逾期有用。起草复用已有的 ai/plan 接口，数字照样要过溯源。
+    """
+    if not int(t.require_plan or 0):
+        return {'offer': False, 'reason': '这个任务不要求交方案'}
+    mine = [a for a in _assignees(db, t.id) if a.employee_id == act.get('employee_id')]
+    if not mine:
+        return {'offer': False, 'reason': '不是我承办'}
+    has = db.execute(select(DispatchTaskPlan.id).where(
+        DispatchTaskPlan.task_id == t.id,
+        DispatchTaskPlan.kind == 'owner_plan').limit(1)).first()
+    if has:
+        return {'offer': False, 'reason': '方案已交'}
+    return {'offer': True,
+            'message': '这个任务要求交方案。要不要我按本所/本级的数据先起草一份，'
+                       '你改完再提交？',
+            'endpoints': {'draft': '/api/tasks/%d/ai/plan' % t.id,
+                          'submit': '/api/tasks/%d/plan' % t.id},
+            'deadline': _iso(t.reply_due_at)}
+
+
 def task_detail(db: Session, account: str, task_id: int) -> dict:
     act = _actor(account)
     t = _get_task(db, task_id)
@@ -1088,6 +1239,7 @@ def task_detail(db: Session, account: str, task_id: int) -> dict:
     out['children'] = [serialize_task(x) for x in db.execute(
         select(DispatchTask).where(DispatchTask.parent_task_id == t.id,
                                    DispatchTask.deleted_flag == 0)).scalars().all()]
+    out['plan_offer'] = _plan_offer(db, t, act)
     if t.alert_id:
         a = db.get(AlertItem, int(t.alert_id))
         if a is not None:
@@ -1385,11 +1537,10 @@ def _match_scope(text: str, act: dict) -> dict:
             return {'scope_type': 'station', 'scope_key': str(s['id']),
                     'scope_name': name, 'station_ids': [int(s['id'])],
                     'dept_id': int(s['department_id']), 'role': 'sz'}
-    for key, dept_id, role in (('曾都', 10, 'xgscwb'), ('随县', 11, 'xgscwb'),
-                               ('高新', 12, 'xgscwb'), ('广水', 13, 'xgscwb')):
+    for key, dept_id, role, label in _county_depts():
         if key in t:
             return {'scope_type': 'county', 'scope_key': str(dept_id),
-                    'scope_name': (key + '区供电公司') if key == '曾都' else (key + '供电公司'),
+                    'scope_name': label,
                     'station_ids': [], 'dept_id': dept_id, 'role': role}
     if '全市' in t:
         return {'scope_type': 'city', 'scope_key': 'city', 'scope_name': '全市',
@@ -1503,6 +1654,22 @@ def propose_from_chat(db: Session, account: str, session_id: str, question: str,
                 'message': _draft_confirm_text(existing, names),
                 'session_id': session_id, 'reused': True}
 
+    draft_case_key = (case_key_of_alert(alert) if alert is not None
+                      else 'talk|%d|%s' % (int(act['employee_id']), session_id or ''))
+    if alert is not None:
+        root0 = case_root(db, draft_case_key)
+        if root0 is not None:
+            return {
+                'intent': True, 'blocked': 'CASE_EXISTS',
+                'task_id': root0.id, 'case_id': root0.case_id,
+                'status': root0.status, 'draft': serialize_task(root0),
+                'session_id': session_id, 'reused': True, 'classifier': cls,
+                'message': (
+                    '这件事已经有任务在办了：**%s**（%s 发起，当前 %s）。\n'
+                    '同一件事只能有一张单，所以你不能再建一个。你可以：\n'
+                    '- 说「补充」加要求\n- 说「改方案」提修改\n- 说「说明」只留个记录\n'
+                    % (root0.task_no, root0.creator_name or root0.creator_login, root0.status)),
+            }
     if alert is not None:
         st = _station(alert.scope_key) if alert.scope_type == 'station' else {}
         scope = {'scope_type': alert.scope_type, 'scope_key': alert.scope_key,
@@ -1534,6 +1701,7 @@ def propose_from_chat(db: Session, account: str, session_id: str, question: str,
     task = DispatchTask(
         task_no=_next_task_no(db), task_type='alert' if alert else 'talk',
         title=title, requirement=requirement, status='draft', level=level,
+        case_id=_next_case_id(db), case_key=draft_case_key,
         alert_id=alert.id if alert else None,
         scope_type=scope.get('scope_type'), scope_key=scope.get('scope_key'),
         scope_name=scope.get('scope_name'), biz_type=biz_type, biz_keys=biz_keys,
@@ -1702,6 +1870,156 @@ def draft_from_conversation(db: Session, account: str, session_id: str,
 
 # ─────────────────────────────────────────────────────────── 通知
 
+# ─────────────────────────────────────────────────────────── 事项：补充 / 说明
+
+def _case_member(db: Session, t: DispatchTask, act: dict) -> bool:
+    """这个人算不算"看得到这件事"的人。
+
+    两类：
+      ① 任务树上的人（发起人 / 主责 / 协办 / 抄送 / 被升级到的上级）；
+      ② 同一事项的预警也推给了他 —— 哪怕他没参与任务，只要他是这一级的
+         责任人，就能看到处理方案、能补充、能说明，但**不能**改状态。
+    """
+    if _access(db, t, act) is not None:
+        return True
+    # 整棵树里任一任务参与过就算 —— 县财务常是第 3 层的发起人，不在根任务上
+    if t.case_id:
+        sibs = db.execute(select(DispatchTask).where(
+            DispatchTask.case_id == t.case_id,
+            DispatchTask.deleted_flag == 0)).scalars().all()
+        for x in sibs:
+            if _access(db, x, act) is not None:
+                return True
+    if not t.case_key:
+        return False
+    sc = act.get('scope') or {}
+    rows = db.execute(select(AlertItem).where(
+        AlertItem.case_key == t.case_key)).scalars().all()
+    for a in rows:
+        if a.assignee_role != act.get('role_code'):
+            continue
+        if (a.scope_type == sc.get('scope_type')
+                and str(a.scope_key) == str(sc.get('scope_key'))):
+            return True
+        if a.scope_type == 'station' and act.get('dept_id'):
+            st = _station(a.scope_key)
+            if CH.is_ancestor(act['dept_id'], st.get('dept_id'), _dept_parent):
+                return True
+    return False
+
+
+def _append_note(db: Session, account: str, task_id: int, content: str,
+                 supplement: bool) -> dict:
+    act = _actor(account)
+    t = _get_task(db, task_id)
+    body = (content or '').strip()
+    if not body:
+        raise DispatchError('EMPTY_CONTENT', '内容不能为空', 422)
+    if not _case_member(db, t, act):
+        raise DispatchError('NOT_PARTICIPANT', '这件事不在你的范围内，看不到也不该改', 403)
+    who = '%s（%s）' % (act.get('name') or act.get('login_name'),
+                       CH.name_of(act.get('role_code')))
+    frm = t.status
+    if supplement:
+        t.requirement = ((t.requirement or '') +
+                         '\n\n【补充 · %s】%s' % (who, body))
+        action, ev_text = 'supplement', '补充要求：%s' % body
+    else:
+        action, ev_text = 'comment', body
+    _event(db, t, action, act, frm, t.status, ev_text,
+           {'role': act.get('role_code'), 'supplement': bool(supplement)})
+    for a in _assignees(db, t.id):
+        if a.employee_id == act.get('employee_id'):
+            continue
+        emp = _emp(a.employee_id) or {'login_name': a.login_name, 'name': a.name}
+        _notice(db, t, 'comment', emp,
+                '【%s】%s' % ('补充' if supplement else '说明', t.title),
+                '%s：%s' % (who, body),
+                dedupe='task:%d:note:%s' % (t.id, uuid.uuid4().hex))
+    db.commit()
+    return {'task_id': t.id, 'task_no': t.task_no, 'case_id': t.case_id,
+            'status': t.status, 'added': 'supplement' if supplement else 'comment',
+            'requirement': t.requirement}
+
+
+def comment(db: Session, account: str, task_id: int, content: str) -> dict:
+    """说明：不要求任何人办，只留个记录（同级/上级/相关人都能写）。"""
+    return _append_note(db, account, task_id, content, supplement=False)
+
+
+def supplement(db: Session, account: str, task_id: int, content: str) -> dict:
+    """补充要求：追加到任务要求里，会上门通知承办人，不改状态。"""
+    return _append_note(db, account, task_id, content, supplement=True)
+
+
+def case_view(db: Session, account: str, case_id: str) -> dict:
+    """一个事项的全景：整棵树 + 各层方案 + 补充/说明时间线。
+
+    查法：先按事项号（C20261021-00001）查，查不到再按 case_key 查。
+    """
+    act = _actor(account)
+    key = (case_id or '').strip()
+    if not key:
+        raise DispatchError('CASE_NOT_FOUND', '没给事项号', 422)
+    tasks = db.execute(select(DispatchTask).where(
+        DispatchTask.case_id == key, DispatchTask.deleted_flag == 0)
+        .order_by(DispatchTask.id)).scalars().all()
+    if not tasks:
+        tasks = db.execute(select(DispatchTask).where(
+            DispatchTask.case_key == key, DispatchTask.deleted_flag == 0)
+            .order_by(DispatchTask.id)).scalars().all()
+    if not tasks:
+        raise DispatchError('CASE_NOT_FOUND', '没有这个事项', 404)
+    root = next((x for x in tasks if x.parent_task_id is None), tasks[0])
+    if not _case_member(db, root, act):
+        raise DispatchError('NOT_PARTICIPANT', '这件事不在你的范围内', 403)
+
+    ids = [x.id for x in tasks]
+    evs = db.execute(select(DispatchTaskEvent).where(
+        DispatchTaskEvent.task_id.in_(ids)).order_by(DispatchTaskEvent.id)).scalars().all()
+    plans = db.execute(select(DispatchTaskPlan).where(
+        DispatchTaskPlan.task_id.in_(ids)).order_by(DispatchTaskPlan.id)).scalars().all()
+
+    def depth(t):
+        d, cur, seen = 0, t, set()
+        while cur.parent_task_id and cur.parent_task_id not in seen and d < 8:
+            seen.add(cur.parent_task_id)
+            cur = next((x for x in tasks if x.id == cur.parent_task_id), cur)
+            d += 1
+        return d
+
+    tree = []
+    for x in tasks:
+        row = serialize_task(x)
+        row['depth'] = depth(x)
+        row['assignees'] = [{'name': a.name, 'login_name': a.login_name,
+                             'part': a.part, 'state': a.state} for a in _assignees(db, x.id)]
+        tree.append(row)
+
+    mine = _access(db, root, act)
+    return {
+        'case_id': root.case_id, 'case_key': root.case_key,
+        'title': root.title, 'status': root.status, 'level': root.level,
+        'scope_name': root.scope_name,
+        'creator': {'name': root.creator_name, 'login_name': root.creator_login},
+        'my_role': mine or 'observer',
+        'tree': tree,
+        'plans': [{'task_id': p.task_id, 'kind': p.kind, 'version': p.version,
+                   'title': p.title, 'content': p.content, 'items': p.items,
+                   'author_name': p.author_name, 'accepted': p.accepted,
+                   'create_time': _iso(p.create_time)} for p in plans],
+        'timeline': [{'task_id': e.task_id, 'action': e.action, 'actor_name': e.actor_name,
+                      'actor_role': e.actor_role, 'content': e.content,
+                      'payload': e.payload, 'create_time': _iso(e.create_time)}
+                     for e in evs],
+        'can': {'comment': True, 'supplement': True,
+                'revise_plan': mine in ('owner', 'collaborator'),
+                'change_status': mine in ('creator', 'owner', 'superior', 'admin'),
+                'create_task': False},
+        'note': '同一件事只有一张单：可以补充 / 改方案 / 写说明，不能重复建任务。',
+    }
+
+
 def list_notices(db: Session, account: str, unread: bool = False, limit: int = 50) -> dict:
     act = _actor(account)
     q = select(DispatchNotice).where(
@@ -1739,3 +2057,26 @@ __all__ = ['DispatchError', 'recommend', 'preview', 'create', 'accept', 'decline
            'list_notices', 'read_notice',
            'add_attachment', 'list_attachments', 'attachment_file', 'report_docx', 'ask',
            'propose_from_chat', 'confirm_draft', 'pending_draft', 'draft_from_conversation']
+
+
+# ── 站点可配：县公司清单（P3, 2026-10-21）──────────────────────────────
+# 原来写死 ('曾都',10,'xgscwb'), ('随县',11,...), ('高新',12,...), ('广水',13,...)。
+# 真源在 config/sites/<SITE>/scopes.yml 的 department.county_depts；换单位必须改这里。
+def _county_depts() -> list:
+    try:
+        from app.secretary import site_pack
+        dep = ((site_pack.load(strict=False) or {}).get('scopes') or {}).get('department') or {}
+        rows = dep.get('county_depts') or []
+        out = []
+        for r in rows:
+            key = str(r.get('key') or '').strip()
+            if not key:
+                continue
+            label = str(r.get('label') or (key + '供电公司'))
+            out.append((key, int(r.get('dept_id') or 0), str(r.get('role') or 'xgscwb'), label))
+        if out:
+            return out
+    except Exception:                              # noqa: BLE001
+        pass
+    return [('曾都', 10, 'xgscwb', '曾都区供电公司'), ('随县', 11, 'xgscwb', '随县供电公司'),
+            ('高新', 12, 'xgscwb', '高新供电公司'), ('广水', 13, 'xgscwb', '广水供电公司')]

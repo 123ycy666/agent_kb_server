@@ -1,0 +1,18 @@
+# 定时任务（随州）—— 用 APScheduler 跑；换单位改这个文件即可
+# 字段：id（唯一）/ fn（JOBS 白名单里的名字）/ cron（5 段：分 时 日 月 周）/ enabled / args
+# ⚠️ 只能引用 JOBS 里登记过的 fn；包里的 fn 不在白名单会被拒绝注册并记 skipped。
+
+jobs:
+  # 部署自检：每天 08:00 跑一次空活，确认调度链路正常（无副作用）
+  - id: selfcheck_daily
+    fn: noop
+    cron: "0 8 * * *"
+    enabled: true
+    args: {note: 部署自检}
+
+  # 指标日报（示例，默认关）：有业务库、且 alerts.daily 可用时再打开
+  - id: alerts_daily
+    fn: alerts_daily
+    cron: "0 8 * * *"
+    enabled: false
+    args: {}

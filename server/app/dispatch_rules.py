@@ -184,9 +184,16 @@ LEVEL_GRACE_DAYS = {'high': 1, 'mid': 1, 'low': 2}          # 超期宽限（天
 URGE_BEFORE_HOURS = 4                                        # 回执前 4 小时提醒
 URGE_MIN_INTERVAL_H = 24                                     # 催办最小间隔
 
+# 建议话术里的时限（天）。换单位/换节奏只改这里，别改代码里的句子。
+#   plan  要求下级交方案的期限
+#   turn  要求把执行率扭转到位的期限
+ADVICE_WINDOWS = {'plan': 7, 'turn': 30}
+
+
 # 判据阈值（与 alert_rules 保持一致，避免两套数）
 STAY_BACKLOG_DAYS = R.STAY_BACKLOG_DAYS      # 90
 STAY_SLOW_DAYS = R.STAY_SLOW_DAYS            # 15
+UNDERSPEND_COEF = R.UNDERSPEND_COEF          # 年底预计执行 / 分配 < 该值 = 花不完（来源 alert_rules）
 OVERRUN_RATIO = 1.0                          # 已审批 / 分配 > 1.0 = 超支
 LOSS_RATE_MAX = 3.0                          # 线损率优秀线（%）
 ROI_MIN = 0.1                                # 投入产出比下限
@@ -281,3 +288,149 @@ def next_roles(category: str, role_code: str) -> list[str]:
 def verify_kind(subtype: str) -> str:
     """默认核销方式：auto（可算）/ human（人工确认）。"""
     return 'auto' if meta(subtype).get('closure') == 'auto' else 'human'
+
+
+# ══════════════════════════════════════════════════════════════
+#  身份建议规则（智能体"给什么建议"的唯一真源）
+#
+#  为什么要有这张表：同一件事，市领导、县财务、所长要的答案完全不同。
+#  市领导要的是"怎么让下面动起来"，所长要的是"这笔钱该花在哪个方向"。
+#  不把口径写死，模型就会给所长讲"加强领导重视"，给市领导讲"去新建项目"。
+#
+#  字段：
+#    angle     一句话结论口径（给提示词当"你是谁、你该回答什么"）
+#    data      这个身份该看的数据维度（提示词里要求引用，且必须来自真实查询）
+#    must_any  结论里至少命中一个（机器粗判"有没有说到点上"）
+#    must_not  命中即判失败（越界了）
+#    actions   这个身份允许的下一步动作（超出就是不给他选项）
+#    no_noise  这个身份最怕的空话（额外禁）
+# ══════════════════════════════════════════════════════════════
+
+# 谁都说不得的空话（对所有身份生效）
+ADVICE_BANNED = (
+    '加强管理', '高度重视', '进一步提升', '切实做好', '狠抓落实',
+    '不断优化', '全面推进', '有效提升',
+)
+
+
+ROLE_ADVICE = {
+    'master': {
+        'name': '市领导',
+        'angle': '你管全市，不懂也不想懂具体怎么花钱。你要回答的是：哪些县垫底、'
+                 '卡在哪个环节、用什么办法让他们动起来。',
+        'data': ['县级执行率排名', '全市预算执行率', '已批未开工总额', '最长审批停留天数'],
+        'must_any': ['执行率', '排名', '垫底', '已批未开工', '停留', '督办', '限期', '约谈'],
+        'must_not': ['新建项目', '申报项目', '报审批', '调整线损', '编制预算',
+                     '储备项目', '可研', '施工'],
+        'actions': ['下发要求', '抄送知会', '写说明'],
+        'no_noise': ['具体项目', '技术方案'],
+    },
+    'sgscwb': {
+        'name': '市公司财务部',
+        'angle': '你管全市的钱。你要回答的是：全市怎么统筹调剂、给哪个县下限期、'
+                 '哪些必须报给市领导定大方向。执行细节不用你管。',
+        'data': ['县级执行率排名', '全市预算执行率', '全市余额', '可统筹调剂额度'],
+        'must_any': ['统筹', '调剂', '排名', '余额', '限期', '下发', '上报'],
+        'must_not': ['新建项目', '申报项目', '技术方案', '调整线损'],
+        'actions': ['全市统筹', '下发县财务', '上报市领导', '抄送知会'],
+        'no_noise': ['本所'],
+    },
+    'xgscwb': {
+        'name': '县公司财务部',
+        'angle': '你管一个县。你要回答的是：这件事本级能不能自己了结。'
+                 '能——给出县内调剂方案；不能——明确往下压给哪几个所、各要完成多少。',
+        'data': ['本县各所执行率排名', '卡住的审批节点与单数', '县内可调剂额度'],
+        'must_any': ['本级', '了结', '调剂', '往下', '下发', '上报', '各所'],
+        'must_not': ['新建项目', '申报项目', '技术方案', '调整线损'],
+        'actions': ['本级办结', '往下发子任务', '上报市公司财务部', '补充说明'],
+        'no_noise': ['全市排名'],
+    },
+    'cto': {
+        'name': '县公司运检部',
+        'angle': '你管一个县的专业线（运检）。预算怎么花不是你的活，'
+                 '你要回答的是：从运行检修这块能配合什么、能消化多少。',
+        'data': ['线损率', '跳闸次数', '平均停电时长', '抢修工单数'],
+        'must_any': ['线损', '跳闸', '停电', '抢修', '配合', '协办', '消纳'],
+        'must_not': ['新建项目', '编制预算', '下发任务', '要求各所'],
+        'actions': ['协办', '抄送知会', '写说明'],
+        'no_noise': ['预算分配'],
+    },
+    'yxb': {
+        'name': '县公司营销部',
+        'angle': '你管一个县的专业线（营销）。预算怎么花不是你的活，'
+                 '你要回答的是：从营销服务这块能配合什么、能消化多少。',
+        'data': ['售电量', '投诉工单数', '业扩报装', '电费回收'],
+        'must_any': ['售电', '投诉', '业扩', '电费', '配合', '协办', '消纳'],
+        'must_not': ['新建项目', '编制预算', '下发任务', '要求各所'],
+        'actions': ['协办', '抄送知会', '写说明'],
+        'no_noise': ['预算分配'],
+    },
+    'sz': {
+        'name': '供电所所长',
+        'angle': '你管一个所，你是真正要把钱花掉的人。你要回答的是：'
+                 '本所哪个指标拖后腿、这笔钱该往哪个方向花、先动哪个具体项目。',
+        'data': ['本所预算分配与执行', '线损率', '跳闸次数', '平均停电时长',
+                 '抢修/投诉工单数', '本所项目（审批中/已批未开工/施工中）与金额',
+                 '审批停留天数'],
+        'must_any': ['线损', '跳闸', '停电', '工单', '已批未开工', '审批', '储备',
+                     '报项目', '推进'],
+        'must_not': ['要求下级', '责成各所', '全县排名', '下发任务', '督办各县'],
+        'actions': ['自己办', '上报县公司财务部', '交方案', '补充说明'],
+        'no_noise': ['全市', '全县排名'],
+    },
+}
+
+# 有账号、但不管任务的角色：不给他们生成处置建议
+ADVICE_NO_ROLE = ('codea', 'admin')
+
+
+def advice_rule(role_code: str | None) -> dict:
+    """取这个身份的建议规则；不认识的按所长处理（最细的一层，宁可多给不看空话）。"""
+    rc = (role_code or '').strip()
+    if rc in ADVICE_NO_ROLE:
+        return {}
+    return ROLE_ADVICE.get(rc) or ROLE_ADVICE['sz']
+
+
+def advice_violations(role_code: str | None, text: str) -> list:
+    """粗判一段建议有没有越界。返回命中的词（空列表 = 没越界）。
+
+    只做词表级判断 —— 严格语义判断交给人工抽检，别假装机器能判"中不中肯"。
+    """
+    rule = advice_rule(role_code)
+    if not rule:
+        return []
+    body = str(text or '')
+    hits = [w for w in ADVICE_BANNED if w in body]
+    hits += [w for w in (rule.get('no_noise') or []) if w in body]
+    hits += [w for w in (rule.get('must_not') or []) if w in body]
+    return hits
+
+
+def advice_on_point(role_code: str | None, text: str) -> bool:
+    """说没说到点上：至少命中一个 must_any。"""
+    rule = advice_rule(role_code)
+    if not rule:
+        return True
+    body = str(text or '')
+    return any(w in body for w in (rule.get('must_any') or []))
+
+
+# ── Site pack override (P3, 2026-10-21) ─────────────────────────────────
+# 业务表（判据/阈值/角色码/节点）的真源在 config/sites/<SITE>/rules/*.yml。
+# 本文件只保留兜底默认值；包里有同名 UPPERCASE 键就覆盖，没有就沿用默认。
+def _apply_pack_rules(key: str) -> None:
+    try:
+        from app.secretary import site_pack
+        ov = ((site_pack.load(strict=False) or {}).get("rules") or {}).get(key) or {}
+    except Exception as exc:                       # noqa: BLE001
+        print("[rules] pack load failed, keep defaults:", exc)
+        return
+    for k, v in (ov or {}).items():
+        if not k.isupper() or k not in globals():
+            continue
+        cur = globals()[k]
+        globals()[k] = tuple(v) if isinstance(cur, tuple) and isinstance(v, list) else v
+
+
+_apply_pack_rules("dispatch")

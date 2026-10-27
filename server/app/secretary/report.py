@@ -21,8 +21,35 @@ SKILL_DOC = os.path.join(SKILL_DIR, '预算分配.md')
 TABLE_DOC = os.path.join(SKILL_DIR, '数据表说明书.md')
 RULE_DOC = os.path.join(SKILL_DIR, '判据规则.md')
 
+def _l1_identity() -> str:
+    """身份串优先用站点包 L1（P3, 2026-10-21）；拿不到才用旧的一句话。"""
+    try:
+        from app.secretary import site_pack
+        txt = ((site_pack.load(strict=False) or {}).get('prompts') or {}).get('identity') or ''
+        lines = [ln for ln in txt.strip().splitlines() if not ln.lstrip().startswith('#')]
+        clean = '\n'.join(lines).strip()
+        if clean:
+            return clean
+    except Exception:                              # noqa: BLE001
+        pass
+    return '你是随州供电公司的项目管理秘书。'
+
+
+def _default_station() -> str:
+    """报告默认供电所：读站点包 report.default_station（P3）；没有才用旧默认。"""
+    try:
+        from app.secretary import site_pack
+        rep = ((site_pack.load(strict=False) or {}).get('config') or {}).get('report') or {}
+        name = rep.get('default_station')
+        if name:
+            return str(name)
+    except Exception:                              # noqa: BLE001
+        pass
+    return '环潭供电所'
+
+
 BASE_SYSTEM = (
-    '你是随州供电公司的项目管理秘书。\n'
+    _l1_identity() + '\n'
     '【下面是约束你查数的，不是写进回答的】\n'
     '1. 回答里每个数字都要有出处：上游传过来的数据，或你用 run_sql 查到的结果；追不到出处的数字不许写。\n'
     '2. 项目清单与金额、缺陷类型、指标现状，都必须先查过才能写；一次工具都不调就想作答会被直接拦下。'
@@ -497,7 +524,7 @@ def build_notice(station, base_year=None, plan_year=None, prev_amount=None, cur_
 def run_report(notice=None, model=None, **kw):
     t0 = time.time()
     if notice is None:
-        notice = build_notice(kw.pop('station', '环潭供电所'), **kw)
+        notice = build_notice(kw.pop('station', _default_station()), **kw)
     model = model or agent.config.MODEL
     answer, trace, blocked = _loop(_system(), _notice_text(notice), model)
     calls = [t for t in trace if t.get('kind') == 'tool']

@@ -227,6 +227,45 @@ def _facts(station_ids, year, today, need_quality=True, need_metrics=True, need_
     return f
 
 
+# ─────────────────────────────────────────────────────────── 指标批量取
+# 为什么单独一个入口：所级预算建议要做多维分析（哪个指标拖后腿），
+# 但每个所各查一次指标，全量每日扫描 31s→127s（2026-10-27 实测）。
+# 指标对比表一年只有几十行，一次查全量、整轮扫描复用即可，成本与所数无关。
+_METRIC_CACHE: dict = {}
+
+
+def station_metrics(year, today) -> list:
+    """这一年所有**所级**指标（含未恶化的，判断"偏低"要用 cur vs base）。"""
+    key = (str(year), str(today))
+    if key in _METRIC_CACHE:
+        return _METRIC_CACHE[key]
+    rows: list = []
+    try:
+        if R.ABNORMAL_METRICS:
+            per = _one('SELECT MAX(current_period_key) AS k FROM t_power_ai_metric_comparison '
+                       "WHERE deleted_flag=0 AND period_type='year'")
+            pk = per.get('k')
+            if pk:
+                mnames = _marks(len(R.ABNORMAL_METRICS))
+                rows = _all(
+                    'SELECT scope_type, scope_name, metric_code, metric_name, '
+                    'current_value, base_value, change_rate, trend_result '
+                    'FROM t_power_ai_metric_comparison '
+                    "WHERE deleted_flag=0 AND current_period_key=%s AND period_type=%s "
+                    "AND scope_type=%s AND metric_code IN (" + mnames + ')',
+                    [pk, 'year', 'station'] + list(R.ABNORMAL_METRICS), limit=800)
+    except Exception as exc:                        # noqa: BLE001
+        print('[alerts] 指标批量取失败，所级画像降级:', exc)
+        rows = []
+    _METRIC_CACHE[key] = rows or []
+    return _METRIC_CACHE[key]
+
+
+def clear_metric_cache() -> None:
+    """一轮扫描结束调用，避免跨天拿到旧数据。"""
+    _METRIC_CACHE.clear()
+
+
 def _picked(facts, station_ids):
     out = []
     for sid in station_ids:
@@ -475,7 +514,7 @@ def _metric_deteriorated(facts, sc, today):
     hit = []
     for m in facts['metrics']:
         sn = str(m.get('scope_name') or '')
-        if sc['scope_type'] == 'city' and sn in ('随州市', '全市'):
+        if sc['scope_type'] == 'city' and sn in _city_names():
             hit.append(m)
         elif sc['scope_type'] == 'county' and sn == sc['scope']:
             hit.append(m)
@@ -585,3 +624,17 @@ def daily(account, today=None, when=None, limit=10):
     return dict(base, status='abnormal' if alerts else 'ok', alerts=alerts,
                 suppressed=suppressed,
                 elapsed_ms=int((time.time() - t0) * 1000))
+
+
+# ── 站点可配：市级口径的"范围名"写法（P3, 2026-10-21）────────────────────
+# 原来写死 ('随州市', '全市')。换单位时范围名不同（如"仙桃市"/"全市"），改包不改代码。
+def _city_names() -> tuple:
+    try:
+        from app.secretary import site_pack
+        dep = ((site_pack.load(strict=False) or {}).get('scopes') or {}).get('department') or {}
+        names = dep.get('city_names')
+        if names:
+            return tuple(names)
+    except Exception:                              # noqa: BLE001
+        pass
+    return ('随州市', '全市')

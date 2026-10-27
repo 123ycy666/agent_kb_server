@@ -117,6 +117,9 @@ button:active:not(:disabled){background:#0958d9}
         <option value="digest">速读（要点+待办）</option>
         <option value="proofread">审校（错字/格式）</option>
         <option value="table_audit">查表（Excel）</option>
+        <option value="deck">做PPT（材料转幻灯片）</option>
+        <option value="doc_write">写公文（按公文版式重排）</option>
+        <option value="compare">文件比对（需传两份）</option>
       </select>
       <button id="go" onclick="ask()">提问</button>
       <button id="newchat" onclick="newSession()" style="background:#f4f5f7;color:#3b4653;border:1px solid #f0f0f0">新会话</button>
@@ -320,7 +323,7 @@ function runJob(task){
   document.getElementById('answer').textContent='';
   document.getElementById('go').disabled=true;
   fetch('/api/docs/jobs',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({task:task,file_ids:DOCFILES.map(function(f){return f.file_id;})})})
+        body:JSON.stringify({task:task,file_ids:DOCFILES.map(function(f){return f.file_id;}),options:(task==='compare'&&DOCFILES.length>1)?{other_file_id:DOCFILES[1].file_id}:{}})})
    .then(function(r){return r.json();})
    .then(function(job){
      if(!job.job_id){

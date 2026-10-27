@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.request
 
+from app.secretary import agent_v2
 from app.secretary import config
 from app.secretary import gaps
 from app.secretary import name_fix
@@ -980,7 +981,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         page_async=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None, kb_ids=None,
-        doc_context=None, doc_files=None):
+        doc_context=None, doc_files=None, persona=None):
     """question = 用户的原话（不需要上游预处理）。
 
     本服务依次做：**载入多轮上下文** → 字面纠错与名称归一 → 时间与地点补全 →
@@ -1204,7 +1205,30 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             '\n④ 本次不需要查业务库；只有用户明确要求"和系统里的数据比对"时才调 run_sql。')
     # 上游强制范围不在这里再注入一遍：它已经在【统计范围】的地点行里写明「强制按此范围取数」，
     # 口径只留一个出处（以前这里注入的是 scope 这个 dict 的 repr，纯属噪声）。
-    messages = [{'role': 'system', 'content': _system(today)}, {'role': 'user', 'content': user_content}]
+    _mode = agent_v2.judge_mode(question, bool(doc_context))
+    _metric_md = agent_v2.prefetch_metric(question, _mode)
+    if _metric_md:
+        user_content += ('\n\n【已按固定口径查好】'
+                         '下面的数字已按统一口径算好，'
+                         '直接引用，不要自己再查、不要改算：\n' + _metric_md)
+    _persona = persona
+    if _persona is None and session_id:
+        try:
+            from app.secretary import persona as _persona_mod
+            _persona = (_persona_mod.get_persona(session_id) or {}).get('prompt')
+        except Exception:
+            _persona = None
+    _prefs = None
+    if user_id:
+        try:
+            from app.secretary import prefs as _prefs_mod
+            _prefs = _prefs_mod.get(user_id) or None
+        except Exception:
+            _prefs = None
+    messages = [{'role': 'system',
+                 'content': agent_v2.system(_mode, _system, today,
+                                            persona=_persona, prefs=_prefs)},
+                {'role': 'user', 'content': user_content}]
     answer = ''
     nudged = False
     blocked = False
@@ -1231,7 +1255,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         # 查数轮：关思考（省内心独白）+ tool_choice=required（不许写散文，只准发工具调用）。
         # 实测同一轮：auto 会写 240~3400 字过程散文（一轮 10~17s），required 只有 56 token / 1.7s。
         # 收尾靠 finish 工具，不靠"模型自己停下来顺手写答案"。
-        resp = _chat(messages, model, think=False, max_tokens=600)
+        resp = _chat(messages, model, think=False, max_tokens=600,
+                     use_tools=agent_v2.use_tools(_mode))
         llm_ms = int((time.time() - t0) * 1000)
         msg = resp['choices'][0]['message']
         calls = msg.get('tool_calls') or []
@@ -1244,7 +1269,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             # 通用问题（问候 / 介绍 / 常识 / 写东西）本来就不该查库：
             # 答案里没有业务数字、也没有业务对象 → 直接放行，不提醒、不加注。
             # 以前这里一律先"要求核实"，连"你能干什么"都要被逼着检索一次 —— 把模型当查库机。
-            if not used_tool and not _CLAIM.search(answer) and not _BIZ.search(question):
+            # V2：general 模式是纯写作/常识问答，不因为出现业务词就逼它去查库
+            _biz_force = bool(_BIZ.search(question)) and _mode != 'general'
+            if not used_tool and not _CLAIM.search(answer) and not _biz_force:
                 trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                               'content': answer[:600], 'note': '通用回答，未查业务库'})
                 break
@@ -1502,3 +1529,56 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     except Exception as e:                          # noqa: BLE001
         print('[agent] 投递摘要任务失败（不影响回答）：%s: %s' % (type(e).__name__, e), flush=True)
     return result
+
+
+# ── Site pack override (P3, 2026-10-21): lexicon/business_terms.yml ─────
+def _apply_pack_lexicon() -> None:
+    try:
+        from app.secretary import site_pack
+        lx = ((site_pack.load(strict=False) or {}).get("lexicon") or {}).get("business_terms") or {}
+    except Exception:                              # noqa: BLE001
+        return
+    patterns = {"station_hint": "_STATION_HINT", "biz_words": "_BIZ"}
+    for key, gname in patterns.items():
+        pat = (lx or {}).get(key)
+        if not pat or gname not in globals():
+            continue
+        try:
+            globals()[gname] = re.compile(pat)
+        except Exception:                          # noqa: BLE001
+            print("[lexicon] bad pattern, keep default:", key)
+
+
+_apply_pack_lexicon()
+
+
+# ── Identity from site pack (P3, 2026-10-21) ────────────────────────────
+# _FALLBACK 原是硬编码一行"你是随州供电公司的项目管理秘书"；现在优先用站点包的 L1 身份，
+# 拿不到才用旧的（保证任何环境下都有一句身份）。
+try:
+    from app.secretary import site_pack as _sp_identity
+    _PACK_IDENTITY = ((_sp_identity.load(strict=False) or {}).get("prompts") or {}).get("identity")
+    if _PACK_IDENTITY and _PACK_IDENTITY.strip():
+        _lines = [ln for ln in _PACK_IDENTITY.strip().splitlines()
+                  if not ln.lstrip().startswith('#')]
+        _clean = '\n'.join(_lines).strip()
+        if _clean:
+            _FALLBACK = _clean
+except Exception:                                  # noqa: BLE001
+    _PACK_IDENTITY = None
+
+# ── 口径兜底工具（2026-10-21）────────────────────────────────────────
+# 高频指标的 SQL 不让模型现编（实测同一问题会漂：22.79% vs 0.00%）。
+# 这里把 metrics.TOOL 挂进工具表，并把 execute 包一层转发；finish 仍排最后。
+from app.secretary import metrics as _metrics
+
+if not any((t.get("function") or {}).get("name") == "budget_execution" for t in TOOLS):
+    TOOLS.insert(len(TOOLS) - 1, _metrics.TOOL)
+
+_agent_execute_orig = execute
+
+
+def execute(name, args):                            # noqa: F811  包裹旧实现
+    if name == "budget_execution":
+        return _metrics.handle(args or {})
+    return _agent_execute_orig(name, args)

@@ -1,0 +1,138 @@
+alerts:
+  ABNORMAL_METRICS:
+  - tripCount
+  - lossRate
+  ALERT_TYPES:
+    approval_backlog:
+      level: high
+      name: 未审批积压预警
+      scope_level: any
+    approved_not_started:
+      level: mid
+      name: 已批未开工预警
+      scope_level: station
+    budget_underspend:
+      level: high
+      name: 预算花不完预警
+      scope_level: any
+    data_quality_amount:
+      level: mid
+      name: 金额存疑预警
+      scope_level: any
+    data_quality_missing:
+      level: low
+      name: 数据缺失预警
+      scope_level: any
+    data_quality_status:
+      level: low
+      name: 状态未登记预警
+      scope_level: any
+    extreme_amount:
+      level: mid
+      name: 金额异常预警
+      scope_level: any
+    metric_deteriorated:
+      level: mid
+      name: 指标恶化预警
+      scope_level: any
+    node_backlog:
+      level: mid
+      name: 审批环节积压预警
+      scope_level: any
+    node_stay_overdue:
+      level: high
+      name: 审批停留超期预警
+      scope_level: any
+    zero_execution:
+      level: mid
+      name: 零执行预警
+      scope_level: county
+  EXTREME_AMOUNT: 1000000.0
+  LEDGER_ROLE_BY_NODE:
+    供电所内部审核: sz
+    县公司财务部审核: xgscwb
+    县公司运检部审核: cto
+    市公司财务部审核: sgscwb
+    市公司领导审批: master
+    营销部审核: yxb
+  LEVEL_WEIGHT:
+    high: 0
+    low: 2
+    mid: 1
+  MAX_ALERTS:
+    codea: 0
+    cto: 4
+    master: 2
+    sgscwb: 7
+    sz: 6
+    xgscwb: 6
+    yxb: 3
+  NOT_STARTED_DAYS: 30
+  ROLE_ALERTS:
+    codea: []
+    cto:
+    - node_stay_overdue
+    - node_backlog
+    - approved_not_started
+    - approval_backlog
+    master:
+    - budget_underspend
+    - metric_deteriorated
+    sgscwb:
+    - budget_underspend
+    - zero_execution
+    - approval_backlog
+    - node_stay_overdue
+    - node_backlog
+    - extreme_amount
+    - data_quality_amount
+    - data_quality_status
+    - data_quality_missing
+    - metric_deteriorated
+    sz:
+    - budget_underspend
+    - approval_backlog
+    - approved_not_started
+    - node_stay_overdue
+    - node_backlog
+    - data_quality_amount
+    - extreme_amount
+    xgscwb:
+    - budget_underspend
+    - zero_execution
+    - approval_backlog
+    - node_stay_overdue
+    - node_backlog
+    - metric_deteriorated
+    yxb:
+    - node_stay_overdue
+    - node_backlog
+  ROLE_NAMES:
+    codea: 录入人员
+    cto: 县公司运检部
+    master: 市公司领导
+    sgscwb: 市公司财务部
+    sz: 供电所所长
+    xgscwb: 县公司财务部
+    yxb: 县公司营销部
+  ROLE_PRIORITY:
+  - master
+  - sgscwb
+  - xgscwb
+  - cto
+  - yxb
+  - sz
+  - codea
+  STATUS_APPROVED:
+  - '3'
+  - '6'
+  - '7'
+  STATUS_NOT_STARTED: '3'
+  STATUS_UNAPPROVED:
+  - '0'
+  - '1'
+  - '9'
+  STATUS_UNREGISTERED: '-1'
+  STAY_BACKLOG_DAYS: 90
+  STAY_SLOW_DAYS: 15
+  UNDERSPEND_COEF: 0.6

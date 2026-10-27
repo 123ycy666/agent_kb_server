@@ -22,7 +22,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.secretary import doc_files
 
 ROOT = Path(os.environ.get("DOC_JOBS_DIR") or "./data/doc_jobs")
 MAX_RUNNING_PER_USER = 3
@@ -185,6 +184,12 @@ def run(job_id: str, user_id: int) -> None:
             from app.secretary import pipeline_proofread as pipe
         elif task == "table_audit":
             from app.secretary import pipeline_table as pipe
+        elif task == "deck":
+            from app.secretary import pipeline_deck as pipe
+        elif task == "doc_write":
+            from app.secretary import pipeline_doc_write as pipe
+        elif task == "compare":
+            from app.secretary import pipeline_compare as pipe
         else:
             raise JobError("UNSUPPORTED_TASK", f"暂不支持的任务类型：{task}", 400)
 
@@ -208,3 +213,18 @@ def run(job_id: str, user_id: int) -> None:
 
 def cleanup(job_id: str, user_id: int) -> None:
     shutil.rmtree(_dir(user_id, job_id), ignore_errors=True)
+
+# ── 批量作业（2026-10-21，F2-5）──────────────────────────────────────
+# 一次给多份文件：每份建一个独立任务（同一个 task），返回建成的与没建成的。
+# 为什么要逐个建而不是一个任务塞多文件：单文件失败不影响其它文件，进度也能分开看。
+# 并发上限仍按 create() 的规则（同账号最多 MAX_RUNNING_PER_USER 个在跑）。
+def batch_create(user_id: int, task: str, file_ids: list[str],
+                 options: dict | None = None) -> dict:
+    created, skipped = [], []
+    for fid in file_ids or []:
+        try:
+            created.append(create(user_id, task, [fid], options))
+        except JobError as exc:
+            skipped.append({"file_id": fid, "code": exc.code, "message": exc.message})
+    return {"task": task, "created": created, "skipped": skipped,
+            "total": len(file_ids or []), "ok": len(created)}

@@ -259,6 +259,14 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
              "trace": [], "session_id": session_id},
             status_code=403,
         )
+    # ★ 2026-10-21：把「我的资料库」并进检索范围。
+    #   只并**本人**的库（personal_kb.ensure 按 created_by 查/建），别人的库进不来；
+    #   库不存在/数据库故障时**不阻断问答**，只少一路召回。
+    try:
+        from app.secretary import personal_kb as _pkb
+        kb_scope = _pkb.with_personal(kb_scope, actor.user_id, actor.username)
+    except Exception as exc:                       # noqa: BLE001
+        print('[ask] 个人资料库并入失败（不影响回答）：%s' % str(exc)[:120])
 
     # 检索身份 = 当前登录用户（线程/协程内生效，问答结束自动失效）
     kb_adapter.set_actor(actor)
@@ -648,7 +656,7 @@ async def report(request: Request, actor: CurrentActor = Depends(get_current_act
     try:
         r = await run_in_threadpool(
             report_mod.run_report, notice=data.get("notice") or None,
-            station=(data.get("station") or "环潭供电所"),
+            station=(data.get("station") or report_mod._default_station()),
             model=data.get("model") or None)
     except Exception as e:                         # noqa: BLE001
         r = {"report": "", "trace": [], "notice": {},
@@ -744,3 +752,54 @@ def asr_sample():
         with open(sample, "rb") as f:
             return Response(f.read(), media_type="audio/mpeg")
     return Response("sample not found", status_code=404, media_type="text/plain")
+
+# ── 会话人设（2026-10-21，P2）────────────────────────────────────────
+@router.post("/sessions/{session_id}/persona", summary="设置/清空某个会话的人设")
+async def set_session_persona(session_id: str, request: Request,
+                              actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import persona as P
+    data = await _read_json(request)
+    try:
+        res = P.set_persona(session_id, name=data.get("name"),
+                            text=data.get("text") or data.get("prompt"),
+                            user_id=actor.user_id, user_code=actor.username)
+    except P.PersonaError as exc:
+        return _jr({"error": str(exc), "limits": P.limits()}, status_code=400)
+    return _jr(res)
+
+
+@router.get("/sessions/{session_id}/persona", summary="读某个会话的人设")
+async def get_session_persona(session_id: str,
+                              actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import persona as P
+    return _jr({"session_id": session_id, "persona": P.get_persona(session_id),
+                "limits": P.limits()})
+
+# ── 个人知识库 / 个人偏好（2026-10-21，F4-2/F4-3）────────────────────
+@router.get("/me/prefs", summary="我的文风与格式偏好")
+def my_prefs(actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import prefs as P
+    return _jr({"user_id": actor.user_id, "prefs": P.get(actor.user_id),
+                "whitelist": {k: v[1] for k, v in P.WHITELIST.items()}})
+
+
+@router.post("/me/prefs", summary="设置我的文风与格式（整体替换，空对象=清空）")
+async def set_my_prefs(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import prefs as P
+    data = await _read_json(request)
+    try:
+        res = P.set(actor.user_id, data.get("prefs") or data or {})
+    except P.PrefError as exc:
+        return _jr({"error": str(exc)}, status_code=400)
+    return _jr(res)
+
+
+@router.get("/me/personal-kb", summary="我的资料库（文件清单 + 统计）")
+def my_personal_kb(actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import personal_kb as K
+    try:
+        kb_id = K.ensure(actor.user_id, actor.username)
+        docs = K.list_docs(actor.user_id)
+        return _jr({"kb_id": kb_id, **K.stats(actor.user_id), "documents": docs})
+    except K.PersonalKbError as exc:
+        return _jr({"error": str(exc)}, status_code=503)

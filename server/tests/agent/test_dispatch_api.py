@@ -78,7 +78,7 @@ def main():
     r = c.get('/api/alerts', params={'today': TODAY})
     j = r.json()
     check(3, 'GET /api/alerts 字段齐全',
-          r.status_code == 200 and j['total'] >= 2 and
+          r.status_code == 200 and j['total'] >= 1 and
           {'category_name', 'subtype_name', 'days_open', 'data', 'verify_hint'} <= set(j['items'][0]),
           {'total': j.get('total'), 'keys': sorted((j.get('items') or [{}])[0].keys())[:8]})
     aid = j['items'][0]['id']

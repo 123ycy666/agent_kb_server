@@ -19,7 +19,36 @@
 from app.secretary import alert_rules
 from app.secretary import tools_db
 
-CITY_DEPT_ID = 1        # 随州市供电所：市级口径的锚点
+# ── 站点可配项（2026-10-21 P3 外置）────────────────────────────────
+# 城市口径锚点与"县级角色"是随州的业务事实：仙桃的部门 ID 不一样、角色码也可能不同。
+# 真源在 config/sites/<SITE>/scopes.yml 的 department 段；代码只留兜底默认值。
+_DEFAULTS = {'city_dept_id': 1, 'city_label': '', 'county_roles': ('cto', 'yxb', 'xgscwb')}
+_CFG: dict = {}
+
+
+def _cfg() -> dict:
+    """读站点包里的 department 配置；读不到就用默认值（行为与改前一致）。"""
+    if 'v' not in _CFG:
+        try:
+            from app.secretary import site_pack
+            dep = ((site_pack.load(strict=False) or {}).get('scopes') or {}).get('department') or {}
+            _CFG['v'] = {
+                'city_dept_id': int(dep.get('city_dept_id') or _DEFAULTS['city_dept_id']),
+                'city_label': dep.get('city_label') or '',
+                'county_roles': tuple(dep.get('county_roles') or _DEFAULTS['county_roles']),
+            }
+        except Exception:                          # noqa: BLE001
+            _CFG['v'] = {'city_dept_id': _DEFAULTS['city_dept_id'], 'city_label': '',
+                         'county_roles': _DEFAULTS['county_roles']}
+    return _CFG['v']
+
+
+def reset_cache() -> None:
+    """站点包改了以后让本模块重新读（测试与热更新用）。"""
+    _CFG.clear()
+
+
+CITY_DEPT_ID = _DEFAULTS['city_dept_id']   # 旧名字保留兼容；运行时一律用 _cfg()
 
 
 def _rows(sql, args=None, limit=500):
@@ -61,7 +90,7 @@ def _stations_by_dept(dept_ids):
 
 def _scope_of(dept_id, dept, stations):
     """范围名 + 类型。全市的锚点是「部门 = 市公司」，不是「所数够多」。"""
-    if int(dept_id) == CITY_DEPT_ID:
+    if int(dept_id) == _cfg()['city_dept_id']:
         return {'scope': '全市', 'scope_type': 'city'}
     if len(stations) == 1:
         return {'scope': stations[0].get('name') or '', 'scope_type': 'station'}
@@ -74,9 +103,10 @@ def _is_org_level(dept_id, dept):
     **例外规则必须在这里止步**，否则曾都/随县这些县公司账号会一路上溯到市公司，
     把 47 个所全算进自己范围（实测踩过：xgscwb 的 n 从 7 变成 47）。
     """
-    if int(dept_id) == CITY_DEPT_ID:
+    if int(dept_id) == _cfg()['city_dept_id']:
         return True
-    return dept.get('parent_id') is not None and int(dept.get('parent_id')) == CITY_DEPT_ID
+    return (dept.get('parent_id') is not None
+            and int(dept.get('parent_id')) == _cfg()['city_dept_id'])
 
 
 
@@ -123,7 +153,7 @@ def resolve(account):
 
     # 例外：县级角色挂在**所级**部门 → 上溯父部门取真实范围（见文件头第 4 条）。
     # 已经在县公司/市公司层级的账号不走这一步（否则会一路上溯到全市）。
-    if role_code in ('cto', 'yxb', 'xgscwb') and not _is_org_level(dept_id, dept):
+    if role_code in _cfg()['county_roles'] and not _is_org_level(dept_id, dept):
         parent_id = dept.get('parent_id')
         up = None
         if parent_id is not None and int(parent_id) not in (0, dept_id):
@@ -233,7 +263,7 @@ def resolve_many(accounts):
         dept_id = int(e['department_id'])
         dept = depts.get(dept_id) or {}
         stations = stations_of(tree_ids(dept_id))
-        if role_code in ('cto', 'yxb', 'xgscwb') and not _is_org_level(dept_id, dept):
+        if role_code in _cfg()['county_roles'] and not _is_org_level(dept_id, dept):
             parent_id = dept.get('parent_id')
             up = None
             if parent_id is not None and int(parent_id) not in (0, dept_id):

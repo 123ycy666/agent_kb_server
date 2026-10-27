@@ -49,3 +49,21 @@ GROUPS = ['缺陷工单', '项目预算', '线损指标']
 def payload() -> dict:
     """给前端的结构（附带分组顺序，前端不用自己猜）。"""
     return {'total': len(PRESETS), 'groups': GROUPS, 'items': PRESETS}
+
+
+# ── Site pack override (P3, 2026-10-21): config/sites/<SITE>/presets.yml ──
+def _apply_pack_presets() -> None:
+    try:
+        from app.secretary import site_pack
+        cfg = ((site_pack.load(strict=False) or {}).get("presets") or {}).get("presets") or {}
+    except Exception:                              # noqa: BLE001
+        return
+    groups = cfg.get("GROUPS")
+    if groups:
+        globals()["GROUPS"] = [tuple(g) if isinstance(g, list) else g for g in groups]
+    items = cfg.get("PRESETS")
+    if items:
+        globals()["PRESETS"] = list(items)
+
+
+_apply_pack_presets()

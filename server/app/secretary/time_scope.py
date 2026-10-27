@@ -426,3 +426,39 @@ def describe(question, fixed=None, prev=None, today=None, force_place=None):
             'inherited': {'time': bool(t['note'] and '沿用上一轮' in t['note']),
                           'place': place_inherited},
             'scope_text': '\n'.join(lines), 'question': t['rewritten'] or question}
+
+
+# ── Site pack override (P3, 2026-10-21): lexicon/business_terms.yml ─────
+def _apply_pack_lexicon() -> None:
+    try:
+        from app.secretary import site_pack
+        lx = ((site_pack.load(strict=False) or {}).get("lexicon") or {}).get("business_terms") or {}
+    except Exception:                              # noqa: BLE001
+        return
+    patterns = {"station_hint": "_STATION_HINT", "biz_words": "_BIZ"}
+    for key, gname in patterns.items():
+        pat = (lx or {}).get(key)
+        if not pat or gname not in globals():
+            continue
+        try:
+            globals()[gname] = re.compile(pat)
+        except Exception:                          # noqa: BLE001
+            print("[lexicon] bad pattern, keep default:", key)
+
+
+_apply_pack_lexicon()
+
+
+# ── 站点可配：剥名字前缀（P3, 2026-10-21）──────────────────────────────
+def _apply_pack_strip_head() -> None:
+    try:
+        from app.secretary import site_pack
+        lx = ((site_pack.load(strict=False) or {}).get('lexicon') or {}).get('business_terms') or {}
+        pat = lx.get('strip_head')
+        if pat and '_STRIP_HEAD' in globals():
+            globals()['_STRIP_HEAD'] = tuple(pat)
+    except Exception:                              # noqa: BLE001
+        pass
+
+
+_apply_pack_strip_head()
