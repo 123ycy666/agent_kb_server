@@ -59,7 +59,7 @@ def _norm_company(name) -> str:
     实测同一家县公司有 6 种写法（§5.3 K1），不归一就会漏配。
     """
     n = str(name or '').strip()
-    for pre in ('国网', '国网湖北', '湖北省'):
+    for pre in _org_prefixes():
         if n.startswith(pre):
             n = n[len(pre):]
     n = n.replace('供电中心', '供电公司')
@@ -123,9 +123,12 @@ def _mk(sc, role_code, subtype, title, data, verify_hint=None,
     }
 
 
-def _rate_rule(sc, year, target=0.6):
+def _rate_rule(sc, year, target=None):
+    """预算执行率规则；达标线默认取 DR.RATE_TARGET（别在这里写死 0.6）。"""
     return {'kind': 'budget_rate', 'station_ids': list(sc['station_ids']),
-            'year': int(year), 'op': '>=', 'target': float(target), 'close_when_met': True}
+            'year': int(year), 'op': '>=',
+            'target': float(DR.RATE_TARGET if target is None else target),
+            'close_when_met': True}
 
 
 def _node_rule(sc, node):
@@ -147,6 +150,130 @@ def _metric_rule(sc, code, target, op='<=', period_type='yearToDate'):
 
 # ─────────────────────────────────────────────────────────── 预算
 
+_COUNTY_CACHE: dict = {}
+
+
+def _county_map(station_ids) -> dict:
+    """供电所 → (县公司 dept_id, 县公司名)。
+
+    市级预警要"点名到县"就得有这张表；没有它，给市领导的建议只能干说"余额多少万"。
+    """
+    ids = [int(x) for x in (station_ids or []) if x]
+    if not ids:
+        return {}
+    # 所→县是静态参照数据，整轮扫描只查一次（每条预警都查一遍会白花好几秒）
+    hit = {i: _COUNTY_CACHE[i] for i in ids if i in _COUNTY_CACHE}
+    miss = [i for i in ids if i not in _COUNTY_CACHE]
+    if not miss:
+        return hit
+    ids = miss
+    ph = ','.join(['%s'] * len(ids))
+    rows = _q('SELECT p.id AS sid, c.department_id AS cid, c.department_name AS cname '
+              'FROM t_power_company p '
+              'JOIN t_department d ON d.department_id = p.department_id '
+              'JOIN t_department c ON c.department_id = '
+              '     CASE WHEN COALESCE(d.parent_id,0) > 1 THEN d.parent_id ELSE d.department_id END '
+              'WHERE p.id IN (%s)' % ph, ids)
+    for r in rows:
+        sid = _i(r.get('sid'))
+        if sid:
+            _COUNTY_CACHE[sid] = (_i(r.get('cid')), r.get('cname') or '')
+    out = {i: _COUNTY_CACHE[i] for i in ids if i in _COUNTY_CACHE}
+    out.update(hit)
+    return out
+
+
+def _budget_breakdown(ctx) -> tuple:
+    """按所算出执行率，再按县汇总。返回 (by_station 升序, by_county 升序)。"""
+    sc = ctx['sc']
+    rows_items = A._picked(ctx['facts'], sc['station_ids'])
+    names = A._stations_of(sc, [r['sid'] for r in rows_items])
+    per = []
+    for row, nm in zip(rows_items, names):
+        a = _f(row['alloc'])
+        if a <= 0:
+            continue
+        ap = A._sum_wo(row['wo'], R.STATUS_APPROVED)
+        per.append({'station_id': _i(row['sid']), 'name': nm,
+                    'alloc': round(a, 2), 'approved': round(ap, 2),
+                    'left': round(max(0.0, a - ap), 2),
+                    'rate_pct': round(ap / a * 100.0, 2)})
+    by_station = sorted(per, key=lambda x: x['rate_pct'])[:8]
+
+    cmap = _county_map([x['station_id'] for x in per])
+    agg: dict = {}
+    for x in per:
+        cid, cname = cmap.get(x['station_id'], (None, ''))
+        if not cid:
+            continue
+        slot = agg.setdefault(cid, {'county_id': cid, 'name': cname or str(cid),
+                                    'alloc': 0.0, 'approved': 0.0, 'n': 0})
+        slot['alloc'] += x['alloc']
+        slot['approved'] += x['approved']
+        slot['n'] += 1
+    by_county = []
+    for slot in agg.values():
+        slot['alloc'] = round(slot['alloc'], 2)
+        slot['approved'] = round(slot['approved'], 2)
+        slot['left'] = round(max(0.0, slot['alloc'] - slot['approved']), 2)
+        slot['rate_pct'] = round((slot['approved'] / slot['alloc'] * 100.0)
+                                 if slot['alloc'] > 0 else 0.0, 2)
+        by_county.append(slot)
+    by_county.sort(key=lambda x: x['rate_pct'])
+    return by_station, by_county[:8]
+
+
+def _station_profile(ctx) -> dict:
+    """本所画像：审批卡点 + 本所指标 + 零结构项目。
+
+    这三样合起来才能回答"钱该往哪花"：
+      卡点 → 有一批已申报的单子被堵住，推过去就能花掉；
+      指标 → 哪个方向是短板，报项目该往哪偏；
+      零结构 → 哪些项目预算构成是空的，补结构就能进审批。
+    一律只取库里有的，取不到就不写这个键（宁可少说，不许编）。
+    """
+    sc = ctx['sc']
+    facts = ctx['facts'] or {}
+    sids = [int(x) for x in (sc.get('station_ids') or []) if x]
+    sid = sids[0] if sids else None
+    out: dict = {}
+
+    audits = (facts.get('audit') or {}).get(sid) or []
+    if audits:
+        top = max(audits, key=lambda x: _i(x.get('cnt')))
+        out['audit_node'] = top.get('node') or ''
+        out['audit_cnt'] = sum(_i(a.get('cnt')) for a in audits)
+        out['audit_amt'] = round(sum(_f(a.get('amt')) for a in audits), 2)
+        out['audit_max_days'] = max(_i(a.get('max_days')) for a in audits)
+        out['audit_over_cnt'] = sum(_i(a.get('over_cnt')) for a in audits)
+
+    me = _norm_company(sc.get('scope'))
+    zero = [x for x in (facts.get('struct_zero') or [])
+            if _norm_company(x.get('power_company_name')) == me]
+    if zero:
+        out['zero_struct_cnt'] = len(zero)
+        out['zero_struct_amt'] = round(sum(_f(x.get('budget_total')) for x in zero), 2)
+        out['zero_struct_top'] = str(zero[0].get('work_name') or '')[:40]
+
+    # 指标：一次批量取、整轮复用（alerts.station_metrics 内部按年+日期缓存）
+    mets: dict = {}
+    for row in A.station_metrics(ctx['year'], ctx['today']):
+        if _norm_company(row.get('scope_name')) != me:
+            continue
+        code = str(row.get('metric_code') or '')
+        if not code:
+            continue
+        cur = _f(row.get('current_value'))
+        base = _f(row.get('base_value'))
+        mets[code] = {'name': row.get('metric_name') or code,
+                      'cur': round(cur, 2), 'base': round(base, 2),
+                      # 只有真的比对比期更差才叫"拖后腿"；持平或转好不拿来说事
+                      'worse': bool(base and cur > base)}
+    if mets:
+        out['metrics'] = mets
+    return out
+
+
 def _d_budget_underspend(ctx):
     r = A._budget_underspend(ctx['facts'], ctx['sc'], ctx['today'])
     if not r:
@@ -157,7 +284,26 @@ def _d_budget_underspend(ctx):
     approved = max(0.0, alloc - left)
     d['approved'] = round(approved, 2)
     d['rate_pct'] = round((approved / alloc * 100.0) if alloc > 0 else 0.0, 2)
-    d['threshold_pct'] = round(R.UNDERSPEND_COEF * 100, 1)
+    # 达标线 = DR.RATE_TARGET（判据、建议话术、核销规则共用一份）；
+    # R.UNDERSPEND_COEF 只负责"算不算花不完"的识别，别拿它当达标线。
+    d['threshold_pct'] = round(DR.RATE_TARGET * 100, 1)
+    # 距达标线还差多少：建议里天天要用，必须是数据里的数，不能由模型现算
+    d['need'] = round(max(0.0, alloc * DR.RATE_TARGET - approved), 2)
+    # 按身份要看的明细：市里看县排名，县里看所排名，所里只看自己
+    try:
+        by_station, by_county = _budget_breakdown(ctx)
+        if ctx['sc']['scope_type'] == 'city':
+            d['by_county'] = by_county
+        elif ctx['sc']['scope_type'] == 'county':
+            d['by_station'] = by_station
+    except Exception as exc:                        # noqa: BLE001
+        print('[alerts4] 预算明细计算失败，降级为只有合计:', exc)
+    # 所级要的是"本所到底卡在哪、钱该往哪花"，光有执行率没用
+    if ctx['sc']['scope_type'] == 'station':
+        try:
+            d['station_profile'] = _station_profile(ctx)
+        except Exception as exc:                    # noqa: BLE001
+            print('[alerts4] 所级画像计算失败，降级:', exc)
     return [_mk(ctx['sc'], ctx['role'], 'budget.underspend',
                 _prefix(ctx['sc']) + r['title'], d,
                 _rate_rule(ctx['sc'], ctx['year']),
@@ -516,3 +662,17 @@ def detect(role_code, sc, today, facts, cadence='daily'):
 
 
 __all__ = ['detect', 'DETECTORS', '_norm_company']
+
+
+# ── 站点可配：组织名前缀（P3, 2026-10-21）──────────────────────────────
+# 原来写死 ('国网', '国网湖北', '湖北省')。前缀表随单位变（外省没有"湖北"）。
+def _org_prefixes() -> tuple:
+    try:
+        from app.secretary import site_pack
+        lx = ((site_pack.load(strict=False) or {}).get('lexicon') or {}).get('business_terms') or {}
+        pre = lx.get('org_prefixes')
+        if pre:
+            return tuple(pre)
+    except Exception:                              # noqa: BLE001
+        pass
+    return ('国网', '国网湖北', '湖北省')

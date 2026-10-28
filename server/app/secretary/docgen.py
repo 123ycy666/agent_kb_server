@@ -92,6 +92,10 @@ def write_docx(path: Path, title: str, sections: list[tuple[str, str]],
 
 # ── xlsx ──────────────────────────────────────────────────────
 
+XLSX_BORDER_COLOR = 'BFBFBF'
+XLSX_HEAD_FILL = 'DDEBF7'
+
+
 def write_xlsx(path: Path, sheets: list[tuple[str, list[str], list[list]]]) -> Path:
     """写 xlsx。sheets：[(表名, 表头, 行)]。"""
     from openpyxl import Workbook
@@ -101,9 +105,9 @@ def write_xlsx(path: Path, sheets: list[tuple[str, list[str], list[list]]]) -> P
     wb = Workbook()
     wb.remove(wb.active)
 
-    thin = Side(style="thin", color="BFBFBF")
+    thin = Side(style="thin", color=XLSX_BORDER_COLOR)
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    head_fill = PatternFill("solid", fgColor="DDEBF7")
+    head_fill = PatternFill("solid", fgColor=XLSX_HEAD_FILL)
 
     for name, header, rows in sheets:
         ws = wb.create_sheet(title=(name or "数据")[:28])
@@ -131,3 +135,39 @@ def write_xlsx(path: Path, sheets: list[tuple[str, list[str], list[list]]]) -> P
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(path))
     return path
+
+
+# ── Site pack override (P3, 2026-10-21): _platform/doc_defaults.yml ─────
+def site_pack_dd() -> dict:
+    try:
+        from app.secretary import site_pack
+        return (site_pack.load(strict=False) or {}).get('doc_defaults') or {}
+    except Exception:                          # noqa: BLE001
+        return {}
+
+
+def _apply_pack_doc_defaults() -> None:
+    try:
+        from app.secretary import site_pack
+        dx = ((site_pack.load(strict=False) or {}).get("doc_defaults") or {}).get("docx") or {}
+    except Exception:                              # noqa: BLE001
+        return
+    mapping = {"body_font_cn": "DOC_FONT", "body_font_fallback": "DOC_FONT_FALLBACK",
+               "title_font_cn": "TITLE_FONT", "body_pt": "BODY_PT",
+               "title_pt": "TITLE_PT", "line_spacing_pt": "LINE_SPACING_PT"}
+    for key, gname in mapping.items():
+        val = dx.get(key)
+        if val is None or gname not in globals():
+            continue
+        globals()[gname] = val
+    dr = (site_pack_dd() or {})
+    xx = dr.get('xlsx') or {}
+    xmap = {'header_fill': 'XLSX_HEAD_FILL', 'border_color': 'XLSX_BORDER_COLOR'}
+    for key, gname in xmap.items():
+        val = xx.get(key)
+        if val is None or gname not in globals():
+            continue
+        globals()[gname] = str(val)
+
+
+_apply_pack_doc_defaults()

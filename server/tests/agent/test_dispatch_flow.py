@@ -76,18 +76,23 @@ def main():
 
         lst = alert_service.list_alerts(db, 'sngdssz', today=TODAY)
         items = lst['items']
-        check(2, '两水所长：旧口径 5 条 → 新口径 2 条', lst['total'] == 2,
+        # 2026-10-22 对齐业务库：两水所审批已走完，只剩预算花不完 1 条
+        check(2, '两水所长：旧口径 5 条 → 新口径 1 条（只剩预算花不完）',
+              lst['total'] == 1 and items[0]['subtype'] == 'budget.underspend',
               [a['title'] for a in items])
         cats = {a['category'] for a in items}
         check(3, '只出现四类枚举', cats <= {'budget', 'project', 'review', 'metric'}, cats)
-        subtypes = {a['subtype'] for a in items}
+        # 取样账号改为县财务：两水所已无审批停留，但"节点是属性不是类型"要在有数据时校验
+        cty = alert_service.list_alerts(db, 'xgscwb', today=TODAY)
+        csub = {a['subtype'] for a in cty['items']}
         check(4, '审批不再按节点拆类型（只有 approval_stay）',
-              'project.approval_stay' in subtypes and
-              not any(s.startswith('node') for s in subtypes), subtypes)
-        stay = [a for a in items if a['subtype'] == 'project.approval_stay'][0]
+              'project.approval_stay' in csub and
+              not any(s.startswith('node') for s in csub), csub)
+        stay = [a for a in cty['items'] if a['subtype'] == 'project.approval_stay']
         check(5, '节点作为属性：data.by_node 有分布',
-              isinstance((stay['data'] or {}).get('by_node'), dict)
-              and stay['data']['by_node'], list((stay['data'] or {}).get('by_node') or {})[:5])
+              bool(stay) and isinstance((stay[0]['data'] or {}).get('by_node'), dict)
+              and stay[0]['data']['by_node'],
+              list(((stay[0]['data'] if stay else {}).get('by_node') or {}))[:5])
 
         # ── 2) 权限：范围与角色 ────────────────────────────────
         other = alert_service.list_alerts(db, 'xgscwb', today=TODAY)
@@ -233,14 +238,38 @@ def main():
         check(26, '超时催办 + 升级各触发一次', lvl1 >= 1, 'level=%s notices=%s' % (lvl1, n1))
         check(27, '重复 tick 不重复发通知', n1 == n2, '%s -> %s' % (n1, n2))
 
-        # ── 12) 子任务链 ──────────────────────────────────────
-        t4 = S.subtask(db, 'sngdssz', t1['id'], {
-            'title': '子任务：本周补 2 个储备项目', 'requirement': '周五前',
-            'assignees': [{'employee_id': int(cto['employee_id']), 'part': 'owner'}],
+        # ── 12) 子任务链：层级必须相邻 ────────────────────────
+        try:
+            S.subtask(db, 'sngdssz', t1['id'], {
+                'title': '子任务：请县运检部配合', 'requirement': '周五前',
+                'assignees': [{'employee_id': int(cto['employee_id']), 'part': 'owner'}],
+                'verifier_type': 'human'})
+            check(28, '所长不能把子任务往上级拆（越级）', False, '竟然成功')
+        except DispatchError as exc:
+            check(28, '所长不能把子任务往上级拆（越级）',
+                  exc.code == 'LEVEL_SKIP', '%s | %s' % (exc.code, exc.message[:60]))
+
+        # 县财务这条线才是正常下发：从县级预算预警建单，再拆给本县所长
+        aid2 = [a for a in alert_service.list_alerts(db, 'xgscwb', today=TODAY)['items']
+                if a['subtype'] == 'budget.underspend'][0]['id']
+        me = S.preview(db, 'xgscwb', aid2)['recommend']['candidates']
+        me = [c for c in me if c['login_name'] == 'xgscwb'] or me
+        t5 = S.create(db, 'xgscwb', aid2, {
+            'assignees': [{'employee_id': me[0]['employee_id'], 'part': 'owner'}],
+            'title': '曾都区：预算执行落后，分解到所', 'requirement': '本周内分解到位',
+            'verifier_type': 'human', 'idempotency_key': 'flow-2'})
+        sz56 = q("SELECT e.employee_id FROM t_employee e "
+                 "JOIN t_role_employee re ON re.employee_id=e.employee_id "
+                 "JOIN t_role r ON r.role_id=re.role_id "
+                 "WHERE r.role_code='sz' AND e.department_id=56 AND e.deleted_flag=0 LIMIT 1")[0]
+        t6 = S.subtask(db, 'xgscwb', t5['id'], {
+            'title': '两水所：本周补 2 个储备项目', 'requirement': '周五前报',
+            'assignees': [{'employee_id': int(sz56['employee_id']), 'part': 'owner'}],
             'verifier_type': 'human'})
-        check(28, '继续下发：父子任务链成立',
-              t4['parent_task_id'] == t1['id'] and t4['root_task_id'] == t1['root_task_id'],
-              '%s -> %s' % (t4['parent_task_id'], t4['root_task_id']))
+        check(28.1, '县财务 → 所长下发：父子链成立且共用事项号',
+              t6['parent_task_id'] == t5['id'] and t6['case_id'] == t5['case_id']
+              and bool(t6['case_id']),
+              '%s -> %s | case=%s' % (t6['parent_task_id'], t5['id'], t6['case_id']))
 
         # ── 13) 统计 / 健康 ───────────────────────────────────
         st = S.stats(db)

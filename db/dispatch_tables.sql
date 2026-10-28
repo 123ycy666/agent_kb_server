@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS alert_item (
 	subtype VARCHAR(32) NOT NULL, 
 	level VARCHAR(8) NOT NULL, 
 	dedupe_key VARCHAR(220) NOT NULL, 
+	case_key VARCHAR(220), 
 	scope_type VARCHAR(16) NOT NULL, 
 	scope_key VARCHAR(64) NOT NULL, 
 	scope_name VARCHAR(128) NOT NULL, 
@@ -68,6 +69,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_alert_dedupe ON alert_item (dedupe_key);
 CREATE TABLE IF NOT EXISTS dispatch_task (
 	id BIGSERIAL NOT NULL, 
 	task_no VARCHAR(32) NOT NULL, 
+	case_id VARCHAR(32), 
+	case_key VARCHAR(220), 
 	task_type VARCHAR(16) NOT NULL, 
 	title VARCHAR(200) NOT NULL, 
 	requirement TEXT NOT NULL, 
@@ -89,6 +92,7 @@ CREATE TABLE IF NOT EXISTS dispatch_task (
 	reply_due_at TIMESTAMP WITH TIME ZONE, 
 	due_at TIMESTAMP WITH TIME ZONE, 
 	require_plan SMALLINT NOT NULL, 
+	require_reply SMALLINT DEFAULT 1 NOT NULL, 
 	verifier_type VARCHAR(16) NOT NULL, 
 	verify_rule JSONB DEFAULT '{}'::jsonb NOT NULL, 
 	verify_state VARCHAR(16) NOT NULL, 
@@ -235,4 +239,67 @@ CREATE TABLE IF NOT EXISTS alert_chat_link (
 );
 CREATE INDEX IF NOT EXISTS idx_alert_chat_session ON alert_chat_link (session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uk_alert_chat ON alert_chat_link (alert_id, employee_id);
+
+-- ============================================================================
+-- 增量迁移（2026-10-21）：事项唯一 id + 层级传递
+--
+-- 为什么要这一节：`CREATE TABLE IF NOT EXISTS` 对**已存在**的表不会补列，
+-- 线上库已经有这 10 张表，所以新增列必须单独 ALTER。全部幂等，可重复执行。
+--
+--   · alert_item.case_key   事项指纹（= dedupe_key 去掉角色段）；
+--                           同一起问题推给所长/县财务/市财务是 3 行 alert，但 case_key 相同。
+--   · dispatch_task.case_id 对外事项号 C<日期>-<序号>，整棵树共用。
+--   · dispatch_task.case_key 事项指纹，用于"同一事项只能一棵树"的唯一约束。
+-- ============================================================================
+
+ALTER TABLE alert_item ADD COLUMN IF NOT EXISTS case_key VARCHAR(220);
+
+UPDATE alert_item
+   SET case_key = alert_type || '|' || subtype || '|' || scope_type || '|'
+                  || scope_key || '|' || COALESCE(object_key, '*')
+ WHERE case_key IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_alert_case ON alert_item (case_key);
+
+-- 要不要回执（0=只盯数据，不催回执）
+ALTER TABLE dispatch_task ADD COLUMN IF NOT EXISTS require_reply SMALLINT NOT NULL DEFAULT 1;
+
+ALTER TABLE dispatch_task ADD COLUMN IF NOT EXISTS case_id VARCHAR(32);
+ALTER TABLE dispatch_task ADD COLUMN IF NOT EXISTS case_key VARCHAR(220);
+
+-- 已有任务回填：先按 alert 取事项指纹，取不到的按任务自己算（对话类任务）
+UPDATE dispatch_task t
+   SET case_key = a.case_key
+  FROM alert_item a
+ WHERE t.alert_id = a.id AND t.case_key IS NULL;
+
+UPDATE dispatch_task
+   SET case_key = 'task|' || id
+ WHERE case_key IS NULL;
+
+-- 事项号：根任务生成，子任务继承根任务
+UPDATE dispatch_task
+   SET case_id = 'C' || to_char(create_time, 'YYYYMMDD') || '-'
+                 || lpad(id::text, 5, '0')
+ WHERE parent_task_id IS NULL AND case_id IS NULL;
+
+UPDATE dispatch_task c
+   SET case_id = r.case_id
+  FROM dispatch_task r
+ WHERE c.root_task_id = r.id AND c.case_id IS NULL;
+
+UPDATE dispatch_task
+   SET case_id = 'C' || to_char(create_time, 'YYYYMMDD') || '-'
+                 || lpad(id::text, 5, '0')
+ WHERE case_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_task_case ON dispatch_task (case_key);
+
+-- 一个事项只能一棵树：只约束"根任务 + 未作废"。
+-- 草稿也占位（防两个人同时拟同一件事的稿）；作废/闭环后释放，允许下一轮再建。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_task_case_root
+    ON dispatch_task (case_key)
+ WHERE parent_task_id IS NULL AND deleted_flag = 0
+   AND status NOT IN ('cancelled', 'closed');
+
 

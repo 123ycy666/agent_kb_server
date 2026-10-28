@@ -130,3 +130,23 @@ def year_of(today=None):
         return str(int(str(t)[:4]))
     except Exception:                                   # noqa: BLE001
         return str(time.localtime().tm_year)
+
+
+# ── Site pack override (P3, 2026-10-21) ─────────────────────────────────
+# 业务表（判据/阈值/角色码/节点）的真源在 config/sites/<SITE>/rules/*.yml。
+# 本文件只保留兜底默认值；包里有同名 UPPERCASE 键就覆盖，没有就沿用默认。
+def _apply_pack_rules(key: str) -> None:
+    try:
+        from app.secretary import site_pack
+        ov = ((site_pack.load(strict=False) or {}).get("rules") or {}).get(key) or {}
+    except Exception as exc:                       # noqa: BLE001
+        print("[rules] pack load failed, keep defaults:", exc)
+        return
+    for k, v in (ov or {}).items():
+        if not k.isupper() or k not in globals():
+            continue
+        cur = globals()[k]
+        globals()[k] = tuple(v) if isinstance(cur, tuple) and isinstance(v, list) else v
+
+
+_apply_pack_rules("alerts")

@@ -273,8 +273,17 @@ NUMBER_GUARD_ON = (ENV.get('SECRETARY_NUMBER_GUARD') or '1') not in ('0', 'false
 #                    （原 `question_splitter` 目前是“原样透传、不做补全”，不能直接用）
 #   work_order_rules 缺陷工单取数口径（默认排除草稿 work_status=0）
 #                    2026-09-23 新增，行在 ai_prompt id=40；改这条规则只改库，不改代码
+# 注入哪几道提示词：**由站点包声明**（config/sites/<SITE>/site.yml 的 prompts.db）。
+# 代码不再写死 key 名单；.env 的 SECRETARY_PROMPTS 仍可整表覆盖（运维临时排查用）。
+# 站点包读不到时退回旧默认，保证不会因为包缺失就起不来。
+try:
+    from app.secretary import site_pack as _site_pack
+    _DB_PROMPT_KEYS = _site_pack.load(strict=False)['db_prompt_keys']
+except Exception:                                  # noqa: BLE001
+    _DB_PROMPT_KEYS = ['answer_agent', 'business_rules', 'sql_plan_rules',
+                       'work_order_rules', 'caliber_rules']
 PROMPTS = [x for x in os.environ.get('SECRETARY_PROMPTS',
-    'answer_agent,business_rules,sql_plan_rules,work_order_rules,caliber_rules').replace(' ', '').split(',') if x]
+    ','.join(_DB_PROMPT_KEYS)).replace(' ', '').split(',') if x]
 
 # 上游「信息补全」工作流应用（含机构名自动纠错，如 凉水供电所→两水供电所）。
 # 已不在问答链路里，但 tools_app.py 还在用它，保留以免打断那个工具。

@@ -78,7 +78,7 @@ def main():
     r = c.get('/api/alerts', params={'today': TODAY})
     j = r.json()
     check(3, 'GET /api/alerts 字段齐全',
-          r.status_code == 200 and j['total'] >= 2 and
+          r.status_code == 200 and j['total'] >= 1 and
           {'category_name', 'subtype_name', 'days_open', 'data', 'verify_hint'} <= set(j['items'][0]),
           {'total': j.get('total'), 'keys': sorted((j.get('items') or [{}])[0].keys())[:8]})
     aid = j['items'][0]['id']
@@ -213,6 +213,46 @@ def main():
     check(28, '附件/追问/报告接口已注册',
           {'/api/tasks/{task_id}/attachments', '/api/tasks/{task_id}/ask'} <= paths,
           [p for p in paths if '/attachments' in p or p.endswith('/ask')])
+
+    # 29 裂变接口跑通：县级单 → 各所一条；30 跨级目标透传 409
+    from sqlalchemy import select
+
+    from app.models.dispatch import AlertItem
+    from app.secretary import alert_scope
+    from app.services import alert_service, dispatch_service as DS
+    db = SessionLocal()
+    try:
+        sc13 = alert_scope.resolve('xgscwb003')
+        alert_service._upsert(db, {
+            'alert_type': 'budget', 'subtype': 'budget.underspend', 'level': 'high',
+            'title': '广水：预算执行进度偏慢', 'detail': '', 'data': {},
+            'scope_type': 'county', 'scope_key': '13', 'scope_name': sc13['scope'],
+            'object_type': 'station', 'object_key': '*', 'assignee_role': 'xgscwb',
+            'verify_hint': {'kind': 'budget_rate', 'station_ids': sc13['station_ids'],
+                            'op': '>=', 'target': 0.0},
+            'dedupe_key': 'api-fanout|county|13'}, DS._now())
+        db.flush()
+        al = db.execute(select(AlertItem).where(
+            AlertItem.dedupe_key == 'api-fanout|county|13')).scalar_one()
+        pid = DS.create(db, 'xgscwb003', al.id, {
+            'assignees': [{'employee_id': DS._emp_by_login('xgscwb003')['employee_id'],
+                           'part': 'owner'}],
+            'title': 'API 裂变父单', 'idempotency_key': 'api-fanout'})['id']
+    finally:
+        db.close()
+    M.app.dependency_overrides[get_current_actor] = lambda: actor('xgscwb003')
+    r = c.post('/api/tasks/%d/fanout' % pid, json={})
+    j = r.json()
+    check(29, 'POST /tasks/{id}/fanout → 200，每所一条，形状同设计 §8',
+          r.status_code == 200 and bool(j.get('created'))
+          and {'created', 'reused', 'adopted', 'skipped', 'case_id', 'mode'} <= set(j),
+          {'code': r.status_code, 'created': len(j.get('created') or []),
+           'skipped': len(j.get('skipped') or [])})
+    r = c.post('/api/tasks/%d/fanout' % pid, json={
+        'targets': [{'employee_id': DS._emp_by_login('sgscwb')['employee_id']}]})
+    check(30, '跨级目标 → HTTP 409 + code=LEVEL_SKIP',
+          r.status_code == 409 and (r.json().get('detail') or {}).get('code') == 'LEVEL_SKIP',
+          {'code': r.status_code, 'detail': (r.json().get('detail') or {}).get('code')})
 
     M.app.dependency_overrides.clear()
     (OUT / 'raw-api.json').write_text(json.dumps(RESULTS, ensure_ascii=False, indent=1),

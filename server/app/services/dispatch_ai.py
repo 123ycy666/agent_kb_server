@@ -172,20 +172,25 @@ def _safe_polish(text: str, must_keep: str) -> tuple[str, bool]:
 
 # ─────────────────────────────────────────────────────────── 建议
 
-def _advice(alert: dict) -> list[dict]:
-    """按子判据给 3 条建议；每条都必须带 evidence（来自 data）。"""
+def _advice_by_subtype(alert: dict) -> list[dict]:
+    """按子判据给 3 条建议；每条都必须带 evidence（来自 data）。
+
+    这是**兜底口径**（默认按所长说），按身份的版本在 `_advice()` 里先分流。
+    """
     d = alert.get('data') or {}
     st = alert.get('subtype') or ''
     if st == 'budget.underspend':
         alloc = d.get('alloc') or 0
         approved = d.get('approved') or 0
         left = d.get('left') or 0
-        need = max(0.0, float(alloc) * 0.6 - float(approved))
+        tgt = DR.RATE_TARGET                       # 达标线只在配置里有一份
+        tgt_txt = '%d%%' % round(float(tgt) * 100)
+        need = max(0.0, float(alloc) * float(tgt) - float(approved))
         return [
             {'action': '本月内再审批通过约 %s 的储备项目' % _wan(need),
-             'evidence': '当前已审批 %s、执行率 %s%%，距 60%% 还差 %s'
-                         % (_wan(approved), _num(d.get('rate_pct')), _wan(need)),
-             'expected': '年底预计执行率达到 60% 以上'},
+             'evidence': '当前已审批 %s、执行率 %s%%，距 %s 还差 %s'
+                         % (_wan(approved), _num(d.get('rate_pct')), tgt_txt, _wan(need)),
+             'expected': '年底预计执行率达到 %s 以上' % tgt_txt},
             {'action': '先清审批积压：把待审批件推到通过或退回补正',
              'evidence': '余额 %s，不推进则年底结余接近余额' % _wan(left),
              'expected': '30 天内待审批件明显下降'},
@@ -297,6 +302,208 @@ def _advice(alert: dict) -> list[dict]:
     ]
 
 
+def _coeff() -> int:
+    """达标线（百分比）：来配置，不写死。
+
+    取 `RATE_TARGET`（和预警判据、核销规则同一份），不是 `UNDERSPEND_COEF`
+    —— 后者是"算不算花不完"的识别线，两个概念别混（2026-10-28 分家）。
+    """
+    from app import dispatch_rules as DR
+    return int(round(DR.RATE_TARGET * 100))
+
+
+def _win(key: str) -> int:
+    """话术里的时限（天）：来配置，不写死。"""
+    from app import dispatch_rules as DR
+    return int((DR.ADVICE_WINDOWS or {}).get(key) or 30)
+
+
+def _role_of_alert(alert: dict) -> str:
+    return (alert.get('assignee_role') or 'sz').strip() or 'sz'
+
+
+def _advice_master(alert: dict) -> list:
+    """市领导：只回答"让谁动、限期、怎么督"。
+
+    他不需要知道怎么花钱 —— 给他"去新建项目"是把他当所长用。
+    """
+    d = alert.get('data') or {}
+    if (alert.get('subtype') or '') != 'budget.underspend':
+        return []
+    by = d.get('by_county') or []
+    low = '、'.join('%s（%s%%）' % (x.get('name'), _num(x.get('rate_pct')))
+                    for x in by[:3]) or '（分县排名未取到）'
+    return [
+        {'action': '给垫底县下限期：%d 天内交执行方案，%d 天内把执行率提到 %s%% 以上'
+                    % (_win('plan'), _win('turn'), _coeff()),
+         'evidence': '全市执行率 %s%%，低于 %s%% 的有 %s 个所；垫底：%s'
+                     % (_num(d.get('rate_pct')), _coeff(), _num(d.get('stations')), low),
+         'expected': '一周内各县都交出方案'},
+        {'action': '对垫底的县单独约谈，把预算执行率纳入月度考核排名',
+         'evidence': '垫底：%s；全市余额还有 %s' % (low, _wan(d.get('left'))),
+         'expected': '下月起垫底县执行率回升'},
+        {'action': '让市财务每周只报一张县级执行率排名，不要报项目明细',
+         'evidence': '余额还有 %s，靠各所自己推这个速度追不上' % _wan(d.get('left')),
+         'expected': '进度每周可追，不用开会问'},
+    ]
+
+
+def _advice_county(alert: dict) -> list:
+    """县财务：先回答"本级能不能了结"，再决定要不要往下压。"""
+    d = alert.get('data') or {}
+    if (alert.get('subtype') or '') != 'budget.underspend':
+        return []
+    by = d.get('by_station') or []
+    low = '、'.join('%s（余额 %s，执行 %s%%）'
+                    % (x.get('name'),
+                       _wan(max(0.0, float(x.get('alloc') or 0) - float(x.get('approved') or 0))),
+                       _num(x.get('rate_pct')))
+                    for x in by[:3]) or '（各所排名未取到）'
+    return [
+        {'action': '本级先调剂：把垫底所的余额调给执行快的所；能了结就在本级了结，不往下压',
+         'evidence': '本县执行率 %s%%，余额 %s；垫底：%s'
+                     % (_num(d.get('rate_pct')), _wan(d.get('left')), low),
+         'expected': '一周内完成县内调剂，不用惊动市里'},
+        {'action': '调剂不动的，往下压给上面点名的所，各要在 %d 天内把余额消化掉一半'
+                    % _win('turn'),
+         'evidence': '垫底所：%s' % low,
+         'expected': '%d 天内各所执行率明显回升' % _win('turn')},
+        {'action': '两样都推不动，就上报市公司财务部申请全市统筹，别压在县里',
+         'evidence': '本县余额 %s，县内已无调剂空间' % _wan(d.get('left')),
+         'expected': '进入全市统筹，责任上移'},
+    ]
+
+
+def _advice_city_fin(alert: dict) -> list:
+    """市财务：管全市的钱。比市领导多一层"能调剂"，但同样不该管到项目和所。"""
+    d = alert.get('data') or {}
+    if (alert.get('subtype') or '') != 'budget.underspend':
+        return []
+    by = d.get('by_county') or []
+    low = '、'.join('%s（%s%%，余额 %s）'
+                    % (x.get('name'), _num(x.get('rate_pct')),
+                       _wan(max(0.0, float(x.get('alloc') or 0) - float(x.get('approved') or 0))))
+                    for x in by[:3]) or '（分县排名未取到）'
+    return [
+        {'action': '全市统筹：把垫底县的余额调到执行快的县，先从高新区、曾都区动',
+         'evidence': '全市执行率 %s%%，余额 %s；垫底：%s'
+                     % (_num(d.get('rate_pct')), _wan(d.get('left')), low),
+         'expected': '一个月内垫底三县执行率过 30%'},
+        {'action': '给垫底的县财务下发限期要求：%d 天内报方案，每月报一次进度'
+                    % _win('plan'),
+         'evidence': '垫底县：%s' % low,
+         'expected': '每周能看到进度变化'},
+        {'action': '统筹后还推不动的，上报市领导定大方向（比如全市统一调减）',
+         'evidence': '余额 %s 里，垫底三个县占了大部分' % _wan(d.get('left')),
+         'expected': '大方向由市领导拍板，责任上移'},
+    ]
+
+
+def _advice_station(alert: dict) -> list:
+    """所长：先说清本所卡在哪，再说钱该往哪花。
+
+    顺序就是干活的顺序：**先清卡点**（已经有单子被堵住，推过去就能花掉），
+    **再看指标**（哪个方向是短板，报项目往那偏），**最后才是申请调减**。
+    """
+    from app import dispatch_rules as DR
+    d = alert.get('data') or {}
+    if (alert.get('subtype') or '') != 'budget.underspend':
+        return []
+    coeff = _coeff()
+    win = DR.ADVICE_WINDOWS or {}
+    turn = int(win.get('turn') or 30)
+    p = d.get('station_profile') or {}
+    out = []
+
+    if p.get('audit_cnt'):
+        out.append({
+            'action': '先清卡点：把卡在%s的 %d 单推到通过' % (p.get('audit_node') or '审批环节',
+                                                      int(p['audit_cnt'])),
+            'evidence': '这 %d 单涉及 %s，最长已停 %s 天；本所今年已审批 %s'
+                        % (int(p['audit_cnt']), _wan(p.get('audit_amt')),
+                           _num(p.get('audit_max_days')), _wan(d.get('approved'))),
+            'expected': '%d 天内过审一批，执行率离开 0' % turn})
+
+    mets = p.get('metrics') or {}
+    loss = mets.get('lossRate') or {}
+    if loss and loss.get('worse', True):
+        out.append({
+            'action': '报降损类项目：线损 %s%%（对比期 %s%%），把预算往配网降损上放'
+                      % (_num(loss.get('cur')), _num(loss.get('base'))),
+            'evidence': '本所线损 %s%% 高于同类；已审批 %s、余额 %s'
+                        % (_num(loss.get('cur')), _wan(d.get('approved')), _wan(d.get('left'))),
+            'expected': '%d 天内线损下降、同期花掉部分余额' % turn})
+    trip = mets.get('tripCount') or {}
+    if trip and trip.get('worse', True):
+        out.append({
+            'action': '报可靠性类项目：跳闸 %s 次（对比期 %s 次），优先解决频繁跳闸台区'
+                      % (_num(trip.get('cur')), _num(trip.get('base'))),
+            'evidence': '跳闸次数偏高会压可靠性指标；余额还有 %s' % _wan(d.get('left')),
+            'expected': '%d 天内跳闸次数下降' % turn})
+
+    if p.get('zero_struct_cnt'):
+        out.append({
+            'action': '补预算构成：%d 个项目（%s 等）预算构成是空的，补齐就能进审批'
+                      % (int(p['zero_struct_cnt']), p.get('zero_struct_top') or ''),
+            'evidence': '涉及 %s，现在卡在"有项目没钱"' % _wan(p.get('zero_struct_amt')),
+            'expected': '补齐后进入审批流，年底前形成支出'})
+
+    need = float(d.get('need') or 0)
+    if len(out) < 3 and need > 0:
+        # 不引新数字（每周该推多少由他按剩余周数自己除），保证每个数都能溯源
+        out.append({
+            'action': '把还差的 %s 按月拆到周，每周盯一次过审进度' % _wan(need),
+            'evidence': '距 %d%% 还差 %s；本所今年已审批 %s'
+                        % (coeff, _wan(need), _wan(d.get('approved'))),
+            'expected': '四周内把差额补上，而不是年底一次性冲'})
+    out.append({
+        'action': '以上都推不动，就向县财务申请调减，把余额让给执行快的所',
+        'evidence': '距 %d%% 还差 %s，本所今年已审批 %s'
+                    % (coeff, _wan(need), _wan(d.get('approved'))),
+        'expected': '预算不闲置，责任上移'})
+    return out[:3] if len(out) > 3 else out
+
+
+_ROLE_ADVICE_BUILDERS = {
+    'sz': _advice_station,
+    'master': _advice_master,
+    'sgscwb': _advice_city_fin,
+    'xgscwb': _advice_county,
+}
+
+
+def _advice(alert: dict) -> list[dict]:
+    """先按身份分流，对不上身份才回落到按子判据的兜底口径。"""
+    role = _role_of_alert(alert)
+    build = _ROLE_ADVICE_BUILDERS.get(role)
+    if build:
+        try:
+            out = build(alert) or []
+        except Exception as exc:                   # noqa: BLE001
+            print('[dispatch_ai] 身份建议失败，回落通用建议:', exc)
+            out = []
+        if out:
+            return out
+    return _advice_by_subtype(alert)
+
+
+def advice_check(alert: dict, items: list | None = None) -> dict:
+    """输出后闸门：越界词 + 是否说到点上。
+
+    **作用范围只有一处**：系统主动推给这个人的"默认处置建议"（`brief()`）。
+    用户在对话里问什么，任何身份都要照实答 —— 市领导想知道某个所该报哪个项目，
+    就得告诉他。身份卡是"默认该主动说什么"，不是"只许说这几个词"，别当笼子用。
+    """
+    from app import dispatch_rules as DR
+    role = _role_of_alert(alert)
+    items = items if items is not None else _advice(alert)
+    body = '\n'.join('%s %s' % (a.get('action', ''), a.get('evidence', '')) for a in items)
+    return {'role': role,
+            'violations': DR.advice_violations(role, body),
+            'on_point': DR.advice_on_point(role, body),
+            'n': len(items)}
+
+
 def _why(alert: dict) -> str:
     st = alert.get('subtype') or ''
     d = alert.get('data') or {}
@@ -341,8 +548,12 @@ def _impact(alert: dict) -> str:
 
 
 def brief(alert: dict) -> dict:
-    """预警首段话（A7）+ 3 条建议（A1）。"""
+    """预警首段话（A7）+ 3 条建议（A1）；建议按 alert.assignee_role 分流。"""
     advice = _advice(alert)
+    gate = advice_check(alert, advice)
+    if gate['violations']:                 # 越界就换回兜底口径，不把不该说的话发出去
+        advice = _advice_by_subtype(alert)
+        gate = advice_check(alert, advice)
     lines = [
         '**%s**' % (alert.get('title') or ''),
         '',
@@ -359,7 +570,9 @@ def brief(alert: dict) -> dict:
     lines += ['', '**要不要我帮你发起？** 选一条，我把要求、承办人、时限和核销方式都拟好，你确认后再下发。']
     text = '\n'.join(lines)
     polished, used = _safe_polish(text, text)
-    return {'markdown': polished, 'advice': advice, 'ai_used': used}
+    return {'markdown': polished, 'advice': advice, 'ai_used': used,
+            'role': gate['role'], 'violations': gate['violations'],
+            'on_point': gate['on_point']}
 
 
 def _key_numbers(alert: dict) -> str:

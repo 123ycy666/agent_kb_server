@@ -1,0 +1,54 @@
+# 定时任务（随州）—— 用 APScheduler 跑；换单位改这个文件即可
+# 字段：id（唯一）/ fn（JOBS 白名单里的名字）/ cron（5 段：分 时 日 月 周）/ enabled / args
+# ⚠️ 只能引用 JOBS 里登记过的 fn；包里的 fn 不在白名单会被拒绝注册并记 skipped。
+
+jobs:
+  # 部署自检：每天 08:00 跑一次空活，确认调度链路正常（无副作用）
+  - id: selfcheck_daily
+    fn: noop
+    cron: "0 8 * * *"
+    enabled: true
+    args: {note: 部署自检}
+
+  # ── 任务心跳：催办 / 升级 / 自动核销，每 10 分钟一次 ──
+  # 原来写死在环境变量 DISPATCH_TICK_MINUTES 里；包里有这条且 enabled，
+  # 就自动关掉程序内置的循环，避免同一份活跑两遍。
+  - id: dispatch_tick
+    fn: dispatch_tick
+    cron: "*/10 * * * *"
+    enabled: true
+    args: {}
+
+  # ── 预警扫描：四类预警什么时候算、什么时候落库，全在这里改 ──
+  # 之前这个时间写在部署机的系统 crontab 里（alert_cron.sh），仓库里看不到、也改不动。
+  # 现在统一收到这里：改 cron 即可，不用动代码、不用上服务器改 crontab。
+  - id: dispatch_scan_daily
+    fn: dispatch_scan
+    cron: "0 8 * * *"
+    enabled: true
+    args: {cadence: daily}
+
+  - id: dispatch_scan_weekly
+    fn: dispatch_scan
+    cron: "10 8 * * 1"
+    enabled: true
+    args: {cadence: weekly}
+
+  - id: dispatch_scan_monthly
+    fn: dispatch_scan
+    cron: "20 8 5 * *"
+    enabled: true
+    args: {cadence: monthly}
+
+  - id: dispatch_scan_yearly
+    fn: dispatch_scan
+    cron: "30 8 1 1,7 *"
+    enabled: true
+    args: {cadence: yearly}
+
+  # 指标日报（示例，默认关）：有业务库、且 alerts.daily 可用时再打开
+  - id: alerts_daily
+    fn: alerts_daily
+    cron: "0 8 * * *"
+    enabled: false
+    args: {}
