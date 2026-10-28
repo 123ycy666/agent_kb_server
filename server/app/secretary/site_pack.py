@@ -70,10 +70,56 @@ def _render(text: str, vars_: dict) -> str:
     return out
 
 
+# ── 装载缓存 ─────────────────────────────────────────────────
+# 为什么必须缓存：`load()` 每次读 10 来个文件并解析 YAML，一次约 19ms；
+# 它被 `_norm_company()` 这类到处用的小工具调用，一轮全量扫描能调到 1300+ 次，
+# 光解析 YAML 就 25 秒（2026-10-27 实测：扫描 31s→229s 的元凶）。
+_CACHE: dict = {}
+
+
+def _cache_on() -> bool:
+    return (os.environ.get('SITE_PACK_NO_CACHE') or '').strip() not in ('1', 'true', 'yes')
+
+
+def clear_cache() -> None:
+    """清缓存（改完站点包、或测试里要换配置时调用）。"""
+    _CACHE.clear()
+
+
+def _stamp(root: Path, name: str) -> tuple:
+    """失效判据：站点目录 + 平台目录 + 几个子目录的 mtime。"""
+    out = []
+    for d in (root / name, root / PLATFORM_NAME):
+        try:
+            out.append(d.stat().st_mtime_ns if d.is_dir() else 0)
+            for sub in ('rules', 'prompts', 'lexicon'):
+                p = d / sub
+                out.append(p.stat().st_mtime_ns if p.is_dir() else 0)
+        except OSError:
+            out.append(0)
+    return tuple(out)
+
+
 def load(site: str | None = None, *, strict: bool = True) -> dict:
-    """装载一个站点包。strict=True 时缺件/占位抛 PackError。"""
+    """装载一个站点包（带缓存）。strict=True 时缺件/占位抛 PackError。
+
+    返回的是缓存里的同一个 dict —— **调用方只读，不要就地改它**。
+    """
     root = sites_root()
     name = (site or os.environ.get('SITE') or 'suizhou').strip()
+    if not _cache_on():
+        return _load(root, name, strict)
+    key = (str(root), name, bool(strict))
+    stamp = _stamp(root, name)
+    hit = _CACHE.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    data = _load(root, name, strict)
+    _CACHE[key] = (stamp, data)
+    return data
+
+
+def _load(root: Path, name: str, strict: bool) -> dict:
     site_dir, plat_dir = root / name, root / PLATFORM_NAME
     if not site_dir.is_dir():
         raise PackError('站点不存在：%s（可选：%s）'

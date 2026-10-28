@@ -41,10 +41,46 @@ def _job_alerts_daily(**kwargs) -> str:
     return str(fn(**kwargs))
 
 
+def _job_dispatch_tick(**kwargs) -> str:
+    """催办/升级/自动核销心跳。间隔写在 jobs.yml 的 cron 里，不写在这个文件。"""
+    from app.core.database import SessionLocal
+    from app.services import dispatch_service
+    db = SessionLocal()
+    try:
+        r = dispatch_service.tick(db)
+        return 'tick %s' % str(r)[:180]
+    finally:
+        db.close()
+
+
+def _job_dispatch_scan(**kwargs) -> str:
+    """跑一轮预警扫描（四类预警算完落库）。
+
+    几点跑**不写在这里**，写在站点包 jobs.yml 的 cron 里；换单位/换作息只改包。
+    """
+    from app.core.database import SessionLocal
+    from app.services import alert_service
+    cadence = str(kwargs.get('cadence') or 'daily')
+    db = SessionLocal()
+    try:
+        r = alert_service.scan(db, cadence=cadence)
+        return 'cadence=%s found=%s new=%s resolved=%s' % (
+            cadence, r.get('found'), r.get('new'), r.get('resolved'))
+    finally:
+        db.close()
+
+
 JOBS = {
     'noop': _job_noop,
     'alerts_daily': _job_alerts_daily,
+    'dispatch_scan': _job_dispatch_scan,
+    'dispatch_tick': _job_dispatch_tick,
 }
+
+
+def pack_has(fn_name: str) -> bool:
+    """站点包里有没有启用这个活（用于"包接管了就别再跑内置循环"）。"""
+    return any((j.get('fn') == fn_name and j.get('enabled')) for j in _pack_jobs())
 
 
 def _pack_jobs() -> list[dict]:

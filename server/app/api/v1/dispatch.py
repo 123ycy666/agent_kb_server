@@ -15,10 +15,14 @@ from app.core.database import get_db
 from app.core.deps import CurrentActor, get_current_actor
 from app.models.dispatch import AlertItem, DispatchCheck, DispatchNotice, DispatchTask
 from app.schemas.dispatch import (
+    AdjustIn,
     AskIn,
     CloseIn,
+    CommentIn,
     ConversationDraftIn,
     DeclineIn,
+    ExtendIn,
+    FanoutIn,
     DraftConfirmIn,
     DraftIn,
     NoteIn,
@@ -26,11 +30,15 @@ from app.schemas.dispatch import (
     PolishIn,
     ReplyIn,
     SubtaskIn,
+    SupplementIn,
     TransferIn,
 )
 from app.secretary import config as sec_config
 from app.services import alert_service, dispatch_ai, dispatch_service
 from app.services.dispatch_service import DispatchError
+
+S = dispatch_service        # 本文件下面用 `S.` 的短名（原来漏了这行：case_view/comment/
+#                            supplement/fanout 四个路由会当场 NameError → 500）
 
 router_tasks = APIRouter(prefix='/tasks', tags=['任务流转'])
 router_dispatch = APIRouter(prefix='/dispatch', tags=['任务流转·系统'])
@@ -79,6 +87,15 @@ def list_tasks(role: str = Query('mine', pattern='^(mine|created|cc|all)$'),
                                            category=category, limit=limit, offset=offset)
     except DispatchError as exc:
         _fail(exc)
+
+
+@router_tasks.get('/case/{case_id}', summary='事项全景（整棵树+各层方案+补充说明；同一件事只有一张单）')
+def case_view(case_id: str, actor: CurrentActor = Depends(get_current_actor),
+              db: Session = Depends(get_db)):
+    try:
+        return S.case_view(db, actor.username, case_id)
+    except S.DispatchError as exc:
+        raise _fail(exc)
 
 
 @router_tasks.get('/{task_id}', summary='任务详情（时间线/方案/核销记录/子任务）')
@@ -152,6 +169,29 @@ def reply(task_id: int, body: ReplyIn,
         _fail(exc)
 
 
+@router_tasks.post('/{task_id}/adjust', summary='发起人改时限/要求（子任务夹在父任务窗口内）')
+def adjust(task_id: int, body: AdjustIn,
+           actor: CurrentActor = Depends(get_current_actor), db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return dispatch_service.adjust(db, actor.username, task_id,
+                                       body.model_dump(exclude_none=True))
+    except DispatchError as exc:
+        _fail(exc)
+
+
+@router_tasks.post('/{task_id}/extend', summary='承办人申请延期（留记录 + 通知发起人，不改时限）')
+def request_extend(task_id: int, body: ExtendIn,
+                   actor: CurrentActor = Depends(get_current_actor),
+                   db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return dispatch_service.request_extend(db, actor.username, task_id,
+                                               body.model_dump(exclude_none=True))
+    except DispatchError as exc:
+        _fail(exc)
+
+
 @router_tasks.post('/{task_id}/close', summary='人工核销（verify → closed）')
 def close(task_id: int, body: CloseIn | None = None,
           actor: CurrentActor = Depends(get_current_actor), db: Session = Depends(get_db)):
@@ -192,6 +232,37 @@ def subtask(task_id: int, body: SubtaskIn,
                                         body.model_dump(exclude_none=True))
     except DispatchError as exc:
         _fail(exc)
+
+
+@router_tasks.post('/{task_id}/fanout', summary='一次下发 → N 条任务（每个目标一条，各看各的核销范围）')
+def fanout(task_id: int, body: FanoutIn,
+           actor: CurrentActor = Depends(get_current_actor),
+           db: Session = Depends(get_db)):
+    _guard()
+    try:
+        return S.fanout(db, actor.username, task_id, body.model_dump())
+    except S.DispatchError as exc:
+        raise _fail(exc)
+
+
+@router_tasks.post('/{task_id}/comment', summary='说明（同一事项的人都能写，不要求谁办）')
+def comment(task_id: int, body: CommentIn,
+            actor: CurrentActor = Depends(get_current_actor),
+            db: Session = Depends(get_db)):
+    try:
+        return S.comment(db, actor.username, task_id, body.content)
+    except S.DispatchError as exc:
+        raise _fail(exc)
+
+
+@router_tasks.post('/{task_id}/supplement', summary='补充要求（追加到任务要求，通知承办人）')
+def supplement(task_id: int, body: SupplementIn,
+               actor: CurrentActor = Depends(get_current_actor),
+               db: Session = Depends(get_db)):
+    try:
+        return S.supplement(db, actor.username, task_id, body.content)
+    except S.DispatchError as exc:
+        raise _fail(exc)
 
 
 @router_tasks.post('/{task_id}/urge', summary='手动催办')

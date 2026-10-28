@@ -62,6 +62,21 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _cn_dt(v) -> str:
+    """给人看的时间：10月30日 18:00。接口里的 ISO 值不动，这是给人读的那一份。"""
+    if not v:
+        return '—'
+    try:
+        d = v if isinstance(v, datetime) else datetime.fromisoformat(
+            str(v).replace('Z', '+00:00'))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        d = d.astimezone(timezone(timedelta(hours=8)))
+    except (ValueError, TypeError):
+        return str(v)[:16]
+    return '%d月%d日 %02d:%02d' % (d.month, d.day, d.hour, d.minute)
+
+
 def _iso(v):
     return v.isoformat() if v else None
 
@@ -167,11 +182,9 @@ def _target_role(alert) -> tuple[str, str]:
         if role:
             return role, '按指标「%s」的应办角色' % code
     lv = _level_of(alert)
-    if lv == 'station':
-        return 'sz', '本所预算/项目由所长承办'
-    if lv == 'county':
-        return 'xgscwb', '县公司口径由县财务承办'
-    return 'sgscwb', '全市口径由市财务承办'
+    reason = {'station': '本所预算/项目由所长承办',
+              'county': '县公司口径由县财务承办'}.get(lv, '全市口径由市财务承办')
+    return DR.LEVEL_ROLE.get(lv, DR.LEVEL_ROLE['city']), reason
 
 
 def recommend(db: Session, alert: AlertItem) -> dict:
@@ -450,10 +463,12 @@ def create(db: Session, account: str, alert_id: int, body: dict) -> dict:
         creator_id=int(act['employee_id']), creator_name=act['name'],
         creator_login=act['login_name'], creator_dept_id=act.get('dept_id'),
         require_plan=int(body.get('require_plan') or 0),
+        require_reply=int(body.get('require_reply', 1) or 0),
         verifier_type=body.get('verifier_type') or 'auto',
         verify_rule=body.get('verify_rule') or alert.verify_hint or {},
-        reply_due_at=_parse_dt(body.get('reply_due_at')) or
-        (now + timedelta(hours=DR.reply_hours(alert.subtype, alert.level))),
+        reply_due_at=(None if int(body.get('require_reply', 1) or 0) == 0 else
+                      (_parse_dt(body.get('reply_due_at')) or
+                       (now + timedelta(hours=DR.reply_hours(alert.subtype, alert.level))))),
         due_at=_parse_dt(body.get('due_at')) or
         (now + timedelta(days=DR.target_days(alert.subtype))),
     )
@@ -523,7 +538,8 @@ def accept(db: Session, account: str, task_id: int) -> dict:
             a.state = 'accepted'
             a.accepted_at = _now()
     _event(db, t, 'accept', act, fs, 'doing')
-    _notify_creator(db, t, 'reply', '【已接单】%s' % t.title, '%s 已接单' % act['name'])
+    # 通知类型必须和"回执"分开：同一个 dedupe_key（分钟级）会把后面的回执通知挤掉
+    _notify_creator(db, t, 'accept', '【已接单】%s' % t.title, '%s 已接单' % act['name'])
     db.commit()
     return task_detail(db, account, t.id)
 
@@ -610,7 +626,8 @@ def reply(db: Session, account: str, task_id: int, content: str, attachments=Non
             DispatchAttachment.id.in_([int(x) for x in attachment_ids]))).scalars().all()
         for att in rows:
             att.event_id = ev.id
-    _notify_creator(db, t, 'reply', '【回执待核销】%s' % t.title, '%s 提交了回执' % act['name'])
+    _notify_creator(db, t, 'reply', '【回执待核销】%s' % t.title,
+                    '%s 提交了回执：%s' % (act['name'], (content or '')[:80]))
     db.commit()
     return task_detail(db, account, t.id)
 
@@ -621,11 +638,34 @@ def close(db: Session, account: str, task_id: int, conclusion: str = '', reason:
     _need(db, t, act, 'creator', 'superior', 'admin')
     if t.status != 'verify':
         raise DispatchError('INVALID_TRANSITION', '只有待核销任务可以核销（当前 %s）' % t.status, 409)
+    forced = act.get('role_code') == DR.ADMIN_ROLE
+    kids = _children_closed(db, t)
+    if kids['has_children'] and not kids['closed'] and not forced:
+        raise DispatchError(
+            'CHILDREN_OPEN',
+            '还有 %d 条子任务没闭环（%s）。下级都办完才能闭环；管理员可以强制闭环并留痕。'
+            % (len(kids['waiting']), '、'.join(kids['waiting'][:5])),
+            409, {'waiting': kids['waiting']})
+    res = check_task(db, t)
+    # 数据这一关：上级一定看（两个条件缺一不可）；末级只有"按数据核销"的任务才卡，
+    # 由人判定（verifier_type=human）的末级任务不拿规则挡人。
+    if ((kids['has_children'] or t.verifier_type == 'auto')
+            and res.get('passed') is False and not forced):
+        raise DispatchError(
+            'DATA_NOT_MET',
+            '本级数据还没达标（%s）。等数据达标再闭环，或由管理员强制闭环并留痕。'
+            % (res.get('message') or ''),
+            409, {'measured': res.get('measured'), 'children_closed': kids['closed']})
     fs = _move(t, 'closed')
     t.closed_at = _now()
-    t.close_reason = reason
-    _event(db, t, 'close', act, fs, 'closed', conclusion, {'reason': reason})
-    _notify_all(db, t, 'close', '【已闭环】%s' % t.title, conclusion or '任务已核销')
+    t.close_reason = 'admin_forced' if forced else reason
+    _event(db, t, 'close', act, fs, 'closed', conclusion,
+           {'reason': t.close_reason, 'forced': forced,
+            'children_closed': kids['closed'], 'waiting': kids['waiting'],
+            'data_ok': (res.get('measured') or {}).get('data_ok', res.get('passed')),
+            'measured': res.get('measured') or {}})
+    _notify_all(db, t, 'close', '【已闭环】%s' % t.title,
+                (conclusion or '任务已核销') + ('（管理员强制闭环）' if forced else ''))
     db.commit()
     return task_detail(db, account, t.id)
 
@@ -636,13 +676,88 @@ def reopen(db: Session, account: str, task_id: int) -> dict:
     _need(db, t, act, 'creator', 'admin')
     if t.status != 'closed':
         raise DispatchError('INVALID_TRANSITION', '只有已闭环任务可以重开', 409)
-    if t.closed_at and (_now() - t.closed_at).days > 7:
-        raise DispatchError('REOPEN_EXPIRED', '闭环超过 7 天不能重开', 409)
+    if t.closed_at and (_now() - t.closed_at).days > DR.REOPEN_DAYS:
+        raise DispatchError('REOPEN_EXPIRED',
+                            '闭环超过 %d 天不能重开' % DR.REOPEN_DAYS, 409)
     fs = _move(t, 'doing')
     t.closed_at = None
     t.close_reason = None
     _event(db, t, 'reopen', act, fs, 'doing')
     _notify_all(db, t, 'reopen', '【任务重开】%s' % t.title, '发起人重新打开了任务')
+    db.commit()
+    return task_detail(db, account, t.id)
+
+
+def adjust(db: Session, account: str, task_id: int, body: dict) -> dict:
+    """发起人改时限/要求（Fred 2026-10-28：改权限归发起人）。
+
+    子任务改期限必须夹在父任务窗口内 —— 同 `fanout` 那条口径，不许改出"父已逾期、子还早"。
+    """
+    act = _actor(account)
+    t = _get_task(db, task_id)
+    _need(db, t, act, 'creator', 'superior', 'admin')
+    if t.status in ('closed', 'cancelled'):
+        raise DispatchError('INVALID_TRANSITION', '任务已%s，不能再改' % t.status, 409)
+    parent = db.get(DispatchTask, int(t.parent_task_id)) if t.parent_task_id else None
+    before = {'due_at': _iso(t.due_at), 'reply_due_at': _iso(t.reply_due_at),
+              'requirement': t.requirement, 'require_reply': t.require_reply}
+    changed = []
+    if body.get('requirement') is not None and body['requirement'] != t.requirement:
+        t.requirement = str(body['requirement'])[:2000]
+        changed.append('要求')
+    due = _parse_dt(body.get('due_at'))
+    if due is not None:
+        t.due_at = _min_dt(due, parent.due_at) if parent is not None else due
+        changed.append('完成时限')
+    reply_due = _parse_dt(body.get('reply_due_at'))
+    if reply_due is not None:
+        t.reply_due_at = (_min_dt(reply_due, parent.reply_due_at)
+                          if parent is not None else reply_due)
+        t.require_reply = 1          # 定了回执时限就是要回执
+        changed.append('回执时限')
+    if not changed:
+        raise DispatchError('NO_CHANGE',
+                            '没带要改的东西（due_at / reply_due_at / requirement）', 422)
+    after = {'due_at': _iso(t.due_at), 'reply_due_at': _iso(t.reply_due_at),
+             'requirement': t.requirement, 'require_reply': t.require_reply}
+    _event(db, t, 'adjust', act, t.status, t.status, '改了%s' % '、'.join(changed),
+           {'before': before, 'after': after})
+    for a in _assignees(db, t.id):
+        if a.part != 'owner':
+            continue
+        emp = _emp(a.employee_id) or {'login_name': a.login_name, 'name': a.name}
+        _notice(db, t, 'adjust', emp, '【时限/要求有调整】%s' % t.title,
+                '完成时限：%s\n回执时限：%s\n要求：%s'
+                % (_cn_dt(t.due_at), _cn_dt(t.reply_due_at), t.requirement or '—'),
+                dedupe='task:%d:adjust:%s:%s' % (t.id, a.login_name,
+                                                 time.strftime('%Y%m%d%H%M%S')))
+    db.commit()
+    return task_detail(db, account, t.id)
+
+
+def request_extend(db: Session, account: str, task_id: int, body: dict) -> dict:
+    """承办人交不出时申请延期：只留记录 + 通知发起人，**不改时限**（改由发起人批）。
+
+    为什么不当场改：时限是发起人定的窗口，承办人自己往后退等于自己给自己批假。
+    """
+    act = _actor(account)
+    t = _get_task(db, task_id)
+    _need(db, t, act, 'owner')
+    if t.status not in ('open', 'doing', 'verify'):
+        raise DispatchError('INVALID_TRANSITION',
+                            '当前状态不能申请延期（%s）' % t.status, 409)
+    want = _parse_dt(body.get('due_at'))
+    reason = (body.get('reason') or '').strip()
+    if want is None and not reason:
+        raise DispatchError('BAD_EXTEND', '延期要说清楚延到什么时候，或者说明原因', 422)
+    _event(db, t, 'extend_request', act, t.status, t.status,
+           '申请延期到 %s：%s' % (_cn_dt(want) if want else '（没给日期）', reason),
+           {'want_due_at': _iso(want), 'reason': reason,
+            'current_due_at': _iso(t.due_at)})
+    _notify_creator(db, t, 'extend', '【申请延期】%s' % t.title,
+                    '%s 申请延期到 %s：%s'
+                    % (act['name'], _cn_dt(want) if want else '（没给日期）',
+                       reason or '未说明原因'))
     db.commit()
     return task_detail(db, account, t.id)
 
@@ -698,8 +813,10 @@ def subtask(db: Session, account: str, task_id: int, body: dict) -> dict:
         require_plan=int(body.get('require_plan') or 0),
         verifier_type=body.get('verifier_type') or 'human',
         verify_rule=body.get('verify_rule') or {},
-        reply_due_at=_parse_dt(body.get('reply_due_at')) or now + timedelta(hours=72),
-        due_at=_parse_dt(body.get('due_at')) or now + timedelta(days=30),
+        reply_due_at=_parse_dt(body.get('reply_due_at')) or now + timedelta(
+            hours=DR.LEVEL_REPLY_HOURS.get(parent.level, 72)),
+        due_at=_parse_dt(body.get('due_at')) or now + timedelta(
+            days=DR.LEVEL_TARGET_DAYS.get(parent.level, 30)),
     )
     db.add(child)
     db.flush()
@@ -723,6 +840,360 @@ def subtask(db: Session, account: str, task_id: int, body: dict) -> dict:
            '继续下发给 %d 人' % len(assignees_in), {'child_task_id': child.id})
     db.commit()
     return task_detail(db, account, child.id)
+
+
+# ─────────────────────────────────────────────────────────── 批量裂变
+
+def _down_roles(category: str, role_code: str | None) -> list[str]:
+    """职责线再往下一级是谁：把 `DR.DUTY_CHAIN` 反过来用（它写的是"往上报给谁"）。
+
+    例：budget 线 sgscwb → xgscwb → sz，所以市财务裂变的目标角色就是县财务。
+    这里不再写一份角色表 —— 口径只活在 dispatch_rules。
+    """
+    up = DR.DUTY_CHAIN.get(category) or {}
+    return [r for r, ups in up.items() if role_code in (ups or [])]
+
+
+def _child_scopes(parent: DispatchTask) -> list[dict]:
+    """下一级单位（只拆一层）：市级 → 县公司，县级 → 各供电所，所级 → 没有下级。"""
+    if parent.scope_type == 'county':
+        dept = _i(parent.scope_key)
+        if not dept:
+            return []
+        ids = alert_scope._dept_tree_ids(dept)
+        marks = ','.join(['%s'] * len(ids))
+        rows = _q('SELECT id, name, department_id FROM t_power_company '
+                  'WHERE deleted_flag=0 AND department_id IN (' + marks + ') ORDER BY id',
+                  ids, limit=200)
+        return [{'scope_type': 'station', 'scope_key': str(_i(r['id'])),
+                 'scope_name': r.get('name') or '', 'dept_id': _i(r.get('department_id'))}
+                for r in rows]
+    if parent.scope_type == 'city':
+        rows = _q('SELECT department_id, department_name FROM t_department '
+                  'WHERE parent_id=%s ORDER BY department_id',
+                  [alert_scope._cfg()['city_dept_id']], limit=50)
+        return [{'scope_type': 'county', 'scope_key': str(_i(r['department_id'])),
+                 'scope_name': r.get('department_name') or '',
+                 'dept_id': _i(r.get('department_id'))} for r in rows]
+    return []
+
+
+def _emp_scope_of(sc: dict | None) -> dict | None:
+    from app.services import alert_service
+    if not sc or not sc.get('ok'):
+        return None
+    return {'scope_type': sc.get('scope_type'),
+            'scope_key': alert_service._scope_key(sc),
+            'scope_name': sc.get('scope') or ''}
+
+
+def _emps_at(roles: list[str], dept_ids: list[int]) -> list[dict]:
+    """一次把这几个岗位在这几个部门的人查出来。
+
+    **别按单位一个个查**：县里 17 个所就是 17 次业务库往返，下发按钮会转半分钟
+    （交互接口要快是硬口径，见交接红线 8）。
+    """
+    if not roles or not dept_ids:
+        return []
+    mk_r = ','.join(['%s'] * len(roles))
+    mk_d = ','.join(['%s'] * len(dept_ids))
+    rows = _q('SELECT DISTINCT e.employee_id, e.login_name, e.actual_name, e.department_id, '
+              'r.role_code FROM t_employee e '
+              'JOIN t_role_employee re ON re.employee_id=e.employee_id '
+              'JOIN t_role r ON r.role_id=re.role_id '
+              'WHERE e.deleted_flag=0 AND e.disabled_flag=0 AND r.role_code IN (' + mk_r + ') '
+              'AND e.department_id IN (' + mk_d + ') ORDER BY e.employee_id',
+              list(roles) + list(dept_ids), limit=500)
+    return [{'employee_id': _i(r['employee_id']), 'login_name': r.get('login_name') or '',
+             'name': r.get('actual_name') or '', 'dept_id': _i(r.get('department_id')),
+             'role_code': r.get('role_code'), 'disabled': False} for r in rows]
+
+
+def _dept_names(dept_ids) -> dict:
+    """一次把部门名查回来（每开一条单查一次部门，下发按钮会转十几秒）。"""
+    ids = sorted({int(x) for x in (dept_ids or []) if x})
+    if not ids:
+        return {}
+    rows = _q('SELECT department_id, department_name FROM t_department WHERE department_id IN ('
+              + ','.join(['%s'] * len(ids)) + ')', ids, limit=500)
+    return {_i(r['department_id']): (r.get('department_name') or '') for r in rows}
+
+
+def _fanout_targets(db: Session, parent: DispatchTask, act: dict,
+                    body: dict) -> tuple[list[dict], list[dict], bool]:
+    """拆出目标：给了人就按人（坏账号进 skipped），没给就按"下一级每个单位找一个承办人"。
+
+    第三个返回值 `auto` 表示"目标是从组织树上自己找出来的"：这类目标的位置和层级
+    由 `_child_scopes` + 职责线保证，不用再逐个 `_guard_chain`（每次都要打业务库）。
+    """
+    skipped: list[dict] = []
+    targets: list[dict] = []
+    explicit = body.get('targets') or []
+    if explicit:
+        for t in explicit:
+            eid = _i((t or {}).get('employee_id'))
+            emp = _emp(eid) if eid else None
+            if not emp or emp['disabled']:
+                skipped.append({'target': str(eid or (t or {}).get('employee_id') or t),
+                                'reason': '该账号不存在或已停用'})
+                continue
+            targets.append(emp)
+        return targets, skipped, False
+
+    category = _category_of_task(db, parent)
+    roles = _down_roles(category, act.get('role_code'))
+    if not roles:
+        raise DispatchError('NO_TARGET',
+                            '%s下面没有可下发的岗位，这一级只能自己办。' % CH.name_of(act.get('role_code')),
+                            422)
+    scopes = _child_scopes(parent)
+    emps = _emps_at(roles, [s['dept_id'] for s in scopes if s['dept_id']])
+    by_key: dict[tuple, list[dict]] = {}
+    for e in emps:                      # 已按 employee_id 排序，取第一个就是确定性的人
+        by_key.setdefault((e['dept_id'], e['role_code']), []).append(e)
+    seen: set[int] = set()
+    for sc in scopes:
+        hit = []
+        for role in roles:
+            # 同一单位有多个同岗位账号时取第一个：一个单位只开一张单（不然一件事两张单）
+            cand = [e for e in (by_key.get((sc['dept_id'], role)) or [])
+                    if e['employee_id'] not in seen]
+            if cand:
+                hit.append(cand[0])
+        if not hit:
+            skipped.append({'target': sc['scope_name'],
+                            'reason': '该单位没有可用的%s账号'
+                                      % '、'.join(CH.name_of(r) for r in roles)})
+            continue
+        for emp in hit:
+            seen.add(emp['employee_id'])
+            targets.append(emp)
+    return targets, skipped, True
+
+
+def _own_alert(db: Session, parent: DispatchTask, sc: dict) -> AlertItem | None:
+    """目标自己那条预警：同一子类 + 范围正好是目标这一级。查不到就退 manual。"""
+    pa = db.get(AlertItem, int(parent.alert_id)) if parent.alert_id else None
+    if pa is None or not sc.get('scope_key'):
+        return None
+    return db.execute(select(AlertItem).where(
+        AlertItem.subtype == pa.subtype, AlertItem.scope_type == sc['scope_type'],
+        AlertItem.scope_key == str(sc['scope_key']),
+        AlertItem.status != 'closed').order_by(AlertItem.id.desc()).limit(1)).scalar_one_or_none()
+
+
+def _reuse_child(db: Session, parent: DispatchTask, emp: dict) -> DispatchTask | None:
+    """已经给他发过这一单了吗（同父 + 同主责 + 未闭环）。"""
+    ids = db.execute(select(DispatchTaskAssignee.task_id).where(
+        DispatchTaskAssignee.employee_id == emp['employee_id'],
+        DispatchTaskAssignee.part == 'owner')).scalars().all()
+    if not ids:
+        return None
+    return db.execute(select(DispatchTask).where(
+        DispatchTask.id.in_(list(ids)), DispatchTask.parent_task_id == parent.id,
+        DispatchTask.deleted_flag == 0,
+        DispatchTask.status.notin_(('closed', 'cancelled')))
+        .order_by(DispatchTask.id.desc()).limit(1)).scalar_one_or_none()
+
+
+def _min_dt(a, b):
+    return min(a, b) if (a and b) else (a or b)
+
+
+def _fanout_title(parent: DispatchTask, body: dict, scope_name: str) -> str:
+    tpl = (body.get('title_template') or '').strip()
+    title = tpl.replace('{scope}', scope_name) if tpl else '%s：%s' % (parent.title, scope_name)
+    return title[:200]
+
+
+def _fanout_time(parent: DispatchTask, body: dict, alert: AlertItem | None,
+                 now: datetime) -> tuple[int, object, object]:
+    """时限一律夹在父任务窗口内 —— 不然会出现"父已逾期升级、子还早"的荒唐状态。"""
+    reply = int(body.get('require_reply', 1) or 0)
+    due = _min_dt(_parse_dt(body.get('due_at')) or parent.due_at, parent.due_at)
+    if reply == 0:
+        return reply, due, None
+    default_reply = (parent.reply_due_at or
+                     now + timedelta(hours=DR.reply_hours(
+                         (alert.subtype if alert is not None else None),
+                         (alert.level if alert is not None else parent.level))))
+    reply_due = _min_dt(_parse_dt(body.get('reply_due_at')) or default_reply, parent.reply_due_at)
+    return reply, due, reply_due
+
+
+def _fanout_child(db: Session, parent: DispatchTask, act: dict, emp: dict, sc: dict,
+                  alert: AlertItem | None, body: dict, dept_name: str | None = None) -> DispatchTask:
+    """给一个目标开一条自己的单：核销范围、预警、对象全取他自己那条。"""
+    now = _now()
+    hint = dict((alert.verify_hint or {}) if alert is not None else {})
+    rule = hint if hint.get('kind') else {'kind': 'manual'}
+    reply, due, reply_due = _fanout_time(parent, body, alert, now)
+    task = DispatchTask(
+        task_no=_next_task_no(db), task_type=parent.task_type or 'alert',
+        title=_fanout_title(parent, body, sc['scope_name']),
+        requirement=(body.get('requirement') or parent.requirement or ''),
+        status='open', level=(alert.level if alert is not None else parent.level),
+        parent_task_id=parent.id, root_task_id=parent.root_task_id or parent.id,
+        case_id=parent.case_id or _next_case_id(db), case_key=parent.case_key,
+        alert_id=(alert.id if alert is not None else None),
+        scope_type=sc['scope_type'], scope_key=sc['scope_key'], scope_name=sc['scope_name'],
+        biz_type=(alert.object_type if alert is not None else None),
+        biz_keys=([alert.object_key] if alert is not None and alert.object_key
+                  and alert.object_key != '*' else []),
+        creator_id=int(act['employee_id']), creator_name=act['name'],
+        creator_login=act['login_name'], creator_dept_id=act.get('dept_id'),
+        require_plan=int(body.get('require_plan') or 0), require_reply=reply,
+        verifier_type=('auto' if rule.get('kind') not in (None, '', 'manual') else 'human'),
+        verify_rule=rule, reply_due_at=reply_due, due_at=due or now,
+    )
+    db.add(task)
+    db.flush()
+    db.add(DispatchTaskAssignee(
+        task_id=task.id, part='owner', employee_id=emp['employee_id'],
+        login_name=emp['login_name'], name=emp['name'], dept_id=emp['dept_id'],
+        dept_name=(dept_name if dept_name is not None
+                   else (_dept(emp['dept_id']) or {}).get('name')),
+        role_code=(emp.get('role_code') or _role_of(emp['employee_id'])), state='pending'))
+    _event(db, task, 'create', act, 'draft', 'open',
+           '由 %s 裂变下发' % parent.task_no,
+           {'parent_task_id': parent.id, 'source': 'fanout'})
+    _notice(db, task, 'assign', emp, '【新任务】%s' % task.title,
+            '要求：%s\n回执时限：%s' % (task.requirement, _iso(task.reply_due_at)),
+            dedupe='task:%d:assign:%s' % (task.id, emp['login_name']))
+    return task
+
+
+def _fanout_joint(db: Session, parent: DispatchTask, act: dict, targets: list[dict],
+                  body: dict) -> DispatchTask:
+    """协同：一件事几个单位一起干，拆不开范围 → 一条任务、多个主责、核销看父的整范围。"""
+    now = _now()
+    reply, due, reply_due = _fanout_time(parent, body, None, now)
+    task = DispatchTask(
+        task_no=_next_task_no(db), task_type=parent.task_type or 'alert',
+        title=_fanout_title(parent, body, parent.scope_name or '协同'),
+        requirement=(body.get('requirement') or parent.requirement or ''),
+        status='open', level=parent.level,
+        parent_task_id=parent.id, root_task_id=parent.root_task_id or parent.id,
+        case_id=parent.case_id or _next_case_id(db), case_key=parent.case_key,
+        alert_id=parent.alert_id, scope_type=parent.scope_type,
+        scope_key=parent.scope_key, scope_name=parent.scope_name,
+        biz_type=parent.biz_type, biz_keys=list(parent.biz_keys or []),
+        creator_id=int(act['employee_id']), creator_name=act['name'],
+        creator_login=act['login_name'], creator_dept_id=act.get('dept_id'),
+        require_plan=int(body.get('require_plan') or 0), require_reply=reply,
+        verifier_type=parent.verifier_type or 'auto',
+        verify_rule=dict(parent.verify_rule or {}),   # 整个范围，谁也别想只看自己那段
+        reply_due_at=reply_due, due_at=due or now,
+    )
+    db.add(task)
+    db.flush()
+    for emp in targets:
+        db.add(DispatchTaskAssignee(
+            task_id=task.id, part='owner', employee_id=emp['employee_id'],
+            login_name=emp['login_name'], name=emp['name'], dept_id=emp['dept_id'],
+            dept_name=(_dept(emp['dept_id']) or {}).get('name'),
+            role_code=_role_of(emp['employee_id']), state='pending'))
+        _notice(db, task, 'assign', emp, '【协同任务】%s' % task.title,
+                '这件事几个单位一起干，各自按分工推进',
+                dedupe='task:%d:assign:%s' % (task.id, emp['login_name']))
+    _event(db, task, 'create', act, 'draft', 'open', '由 %s 协同下发' % parent.task_no,
+           {'parent_task_id': parent.id, 'source': 'fanout', 'mode': 'joint'})
+    return task
+
+
+def fanout(db: Session, account: str, task_id: int, body: dict) -> dict:
+    """批量裂变：同一事项下一次给 N 个直接下级各开一条单。
+
+    三条口径（Fred 2026-10-28 定）：
+      ① 只拆一层：市 → 县、县 → 所；跨级/跨单位一律 409。
+      ② 每条子任务的核销范围是他**自己**那条预警，不继承父的全市。
+      ③ 时限夹在父任务窗口内。
+    范围拆不开（一件事几个单位一起干）→ `mode=joint`：一条任务、多个主责。
+    """
+    act = _actor(account)
+    parent = _get_task(db, task_id)
+    _need(db, parent, act, 'owner', 'creator', 'superior', 'admin')
+    if parent.status in ('closed', 'cancelled'):
+        raise DispatchError('INVALID_TRANSITION',
+                            '任务已%s，不能再下发' % parent.status, 409)
+    mode = (body.get('mode') or 'per_target').strip()
+    if mode not in ('per_target', 'joint'):
+        raise DispatchError('INVALID_MODE',
+                            'mode 只能是 per_target（一任务一所）或 joint（协同）', 422)
+
+    targets, skipped, auto = _fanout_targets(db, parent, act, body)
+    created: list[dict] = []
+    reused: list[dict] = []
+    adopted: list[dict] = []
+
+    if mode == 'joint':
+        want = sorted(e['login_name'] for e in targets)
+        for other in db.execute(select(DispatchTask).where(
+                DispatchTask.parent_task_id == parent.id, DispatchTask.deleted_flag == 0,
+                DispatchTask.status.notin_(('closed', 'cancelled')))).scalars().all():
+            owners = sorted(a.login_name for a in _assignees(db, other.id) if a.part == 'owner')
+            if owners == want:
+                reused.append({'task_id': other.id, 'task_no': other.task_no,
+                               'reason': '这批人已经有协同任务了'})
+                break
+        else:
+            if targets:
+                joint = _fanout_joint(db, parent, act, targets, body)
+                created.append({'task_id': joint.id, 'task_no': joint.task_no,
+                                'assignee': '、'.join(e['name'] for e in targets),
+                                'scope_name': joint.scope_name,
+                                'verify_rule': dict(joint.verify_rule or {})})
+    else:
+        # 一次批量解析所有人的范围（单个人一条 SQL × N 会让下发按钮转很久）
+        scopes = alert_scope.resolve_many([e['login_name'] for e in targets])
+        dept_names = _dept_names([e.get('dept_id') for e in targets])
+        for emp in targets:
+            sc = _emp_scope_of(scopes.get(emp['login_name']))
+            if sc is None:
+                skipped.append({'target': emp['name'] or emp['login_name'],
+                                'reason': '解析不出这个人的数据范围'})
+                continue
+            if not auto:            # 自动找出来的目标位置由组织树保证，不用再逐个查库
+                _guard_chain(db, act, 'subtask', emp, parent)
+            dup = _reuse_child(db, parent, emp)
+            if dup is not None:
+                reused.append({'task_id': dup.id, 'task_no': dup.task_no,
+                               'reason': '已给他发过这一单（%s）' % dup.status})
+                continue
+            alert = _own_alert(db, parent, sc)
+            if alert is not None:
+                root = case_root(db, case_key_of_alert(alert))
+                if root is not None and root.id != parent.id:
+                    adopted.append({'task_id': root.id, 'task_no': root.task_no,
+                                    'reason': '该单位已自行开单，已并入汇总'})
+                    continue
+            child = _fanout_child(db, parent, act, emp, sc, alert, body,
+                                  dept_name=dept_names.get(emp.get('dept_id')))
+            created.append({'task_id': child.id, 'task_no': child.task_no,
+                            'assignee': emp['name'] or emp['login_name'],
+                            'scope_name': sc['scope_name'],
+                            'verify_rule': dict(child.verify_rule or {})})
+
+    if not (created or reused or adopted):
+        raise DispatchError('NO_TARGET', '一个可下发的目标都没有：%s'
+                            % ('；'.join('%s（%s）' % (s['target'], s['reason'])
+                                        for s in skipped) or '没有下级单位'),
+                            422, {'skipped': skipped})
+
+    _event(db, parent, 'fanout', act, parent.status, parent.status,
+           '下发 %d 条，复用 %d 条，认领 %d 条，跳过 %d 条'
+           % (len(created), len(reused), len(adopted), len(skipped)),
+           {'mode': mode, 'targets': [e['employee_id'] for e in targets],
+            'created': [c['task_id'] for c in created],
+            'reused': [c['task_id'] for c in reused],
+            'adopted': [c['task_id'] for c in adopted], 'skipped': skipped})
+    _notice(db, parent, 'fanout', act, '【已下发】%s' % parent.title,
+            '已下发 %d 条，复用 %d 条，跳过 %d 条'
+            % (len(created), len(reused), len(skipped)),
+            dedupe='task:%d:fanout:%s' % (parent.id, time.strftime('%Y%m%d%H%M%S')))
+    db.commit()
+    return {'parent_task_id': parent.id, 'case_id': parent.case_id, 'mode': mode,
+            'created': created, 'reused': reused, 'adopted': adopted, 'skipped': skipped}
 
 
 def urge(db: Session, account: str, task_id: int, note: str = '') -> dict:
@@ -807,7 +1278,8 @@ def _escalate_once(db: Session, t: DispatchTask, reason: str, actor: dict | None
     """升级一级：只在职责线内找上一级；市领导不接执行层。"""
     cat = _category_of_task(db, t)
     owners = [a for a in _assignees(db, t.id) if a.part == 'owner']
-    role = (owners[0].role_code if owners and owners[0].role_code else None) or 'sz'
+    role = (owners[0].role_code if owners and owners[0].role_code else None) \
+        or DR.LEVEL_ROLE.get(t.scope_type, DR.LEVEL_ROLE['station'])
     level = int(t.escalate_level or 0) + 1
     if level > 2:
         return False
@@ -864,8 +1336,42 @@ def _category_of_task(db: Session, t: DispatchTask) -> str:
 
 # ─────────────────────────────────────────────────────────── 核销
 
+def _child_ids(db: Session, t: DispatchTask) -> list[int]:
+    """这条任务的"下级"：真子任务 + 认领（adopt）进来的那几棵树。"""
+    ids = [int(x) for x in db.execute(select(DispatchTask.id).where(
+        DispatchTask.parent_task_id == t.id, DispatchTask.deleted_flag == 0)).scalars().all()]
+    rows = db.execute(select(DispatchTaskEvent.payload).where(
+        DispatchTaskEvent.task_id == t.id,
+        DispatchTaskEvent.action == 'fanout')).scalars().all()
+    for payload in rows:
+        for x in ((payload or {}).get('adopted') or []):
+            x = _i(x)
+            if x and x not in ids:
+                ids.append(x)
+    return ids
+
+
+def _children_closed(db: Session, t: DispatchTask) -> dict:
+    """上级闭环的第一个条件：子任务全闭环。
+
+    口径照设计原文 `status == closed`；作废（cancelled）也算没闭环 ——
+    下级那单被撤了，上级这件事本来就没办完（要闭环只能管理员强制留痕）。
+    """
+    ids = _child_ids(db, t)
+    if not ids:
+        return {'has_children': False, 'closed': True, 'waiting': []}
+    rows = db.execute(select(DispatchTask.task_no, DispatchTask.status).where(
+        DispatchTask.id.in_(ids), DispatchTask.deleted_flag == 0)).all()
+    waiting = [r[0] for r in rows if r[1] != 'closed']
+    return {'has_children': True, 'closed': not waiting, 'waiting': waiting}
+
+
 def check_task(db: Session, t: DispatchTask) -> dict:
-    """按 verify_rule 跑一次实测；返回 {passed, measured, message}。"""
+    """按 verify_rule 跑一次实测；**上级还要看子任务是否全闭环**。
+
+    上级闭环要两个条件（Fred 2026-10-28 定）：子任务全闭环 **且** 本级数据达标，
+    缺一个都不闭环（缺一个 `passed` 就不是 True）。
+    """
     rule = t.verify_rule or {}
     kind = rule.get('kind')
     try:
@@ -880,10 +1386,12 @@ def check_task(db: Session, t: DispatchTask) -> dict:
         elif kind == 'task_tree':
             got = _check_tree(db, t)
         else:
-            return {'passed': None, 'measured': {}, 'message': '人工核销规则（%s）' % (kind or 'manual')}
+            return _apply_children(db, t, {'passed': None, 'measured': {},
+                                          'message': '人工核销规则（%s）' % (kind or 'manual')})
     except Exception as exc:  # noqa: BLE001 - 数据不可得不算通过
         logger.warning('核销规则执行失败 task=%s：%s', t.id, exc)
-        return {'passed': None, 'measured': {}, 'message': '数据不可得：%s' % str(exc)[:200]}
+        return _apply_children(db, t, {'passed': None, 'measured': {},
+                                       'message': '数据不可得：%s' % str(exc)[:200]})
 
     op, target = rule.get('op'), rule.get('target')
     val = got.get('value')
@@ -896,6 +1404,26 @@ def check_task(db: Session, t: DispatchTask) -> dict:
             passed = None
     got['passed'] = passed
     got['message'] = '实测 %s %s 目标 %s' % (val, op, target)
+    return _apply_children(db, t, got)
+
+
+def _apply_children(db: Session, t: DispatchTask, got: dict) -> dict:
+    """把"子任务全闭环"这一条件并进核销结果（`measured` 里写清缺哪个）。"""
+    kids = _children_closed(db, t)
+    if not kids['has_children']:
+        return got
+    got['has_children'] = True
+    got['measured'] = dict(got.get('measured') or {},
+                           children_closed=kids['closed'],
+                           data_ok=got.get('passed'), waiting=kids['waiting'])
+    base = got.get('passed')
+    got['passed'] = bool(kids['closed']) and base is True
+    if not kids['closed']:
+        got['message'] = '%s；还有 %d 条子任务没闭环（%s）' % (
+            got.get('message') or '', len(kids['waiting']),
+            '、'.join(kids['waiting'][:3]))
+    elif base is not True:
+        got['message'] = '%s；子任务都闭环了，但本级数据没达标' % (got.get('message') or '')
     return got
 
 
@@ -1020,8 +1548,15 @@ def tick(db: Session, now: datetime | None = None) -> dict:
                                  measured=res.get('measured') or {}, passed=res.get('passed'),
                                  message=(res.get('message') or '')[:500]))
             t.last_check_at = now
-            t.verify_state = ('passed' if res.get('passed') else
-                              ('failed' if res.get('passed') is False else 'unavailable'))
+            measured = res.get('measured') or {}
+            if res.get('has_children'):
+                # 上级：缺条件就是 pending（还在等下級），不是 failed
+                t.verify_state = 'passed' if res.get('passed') else 'pending'
+                if measured.get('children_closed') and not measured.get('data_ok'):
+                    _notify_kids_done(db, t, res, now)
+            else:
+                t.verify_state = ('passed' if res.get('passed') else
+                                  ('failed' if res.get('passed') is False else 'unavailable'))
             if res.get('passed') and (t.verify_rule or {}).get('close_when_met', True):
                 _auto_close(db, t, res, now)
                 acts['closed'] += 1
@@ -1049,10 +1584,11 @@ def tick(db: Session, now: datetime | None = None) -> dict:
     try:
         olds = db.execute(select(DispatchTask).where(
             DispatchTask.status == 'draft', DispatchTask.deleted_flag == 0,
-            DispatchTask.create_time < now - timedelta(days=7))).scalars().all()
+            DispatchTask.create_time < now - timedelta(days=DR.DRAFT_DAYS))).scalars().all()
         for t in olds:
             t.status = 'cancelled'
-            _event(db, t, 'cancel', None, 'draft', 'cancelled', '草稿超 7 天未确认，自动取消')
+            _event(db, t, 'cancel', None, 'draft', 'cancelled',
+                   '草稿超 %d 天未确认，自动取消' % DR.DRAFT_DAYS)
             acts['drafts_cancelled'] += 1
         db.commit()
     except Exception:  # noqa: BLE001
@@ -1078,6 +1614,18 @@ def _urge_daily(db: Session, t: DispatchTask, now: datetime, overdue: bool) -> b
     return sent
 
 
+def _notify_kids_done(db: Session, t: DispatchTask, res: dict, now: datetime):
+    """下级都办完了但本级数据没达标 —— 得告诉承办人，别让他以为完事了。"""
+    for a in _assignees(db, t.id):
+        if a.part != 'owner':
+            continue
+        emp = _emp(a.employee_id) or {'login_name': a.login_name, 'name': a.name}
+        _notice(db, t, 'verify', emp, '【下级已办完，数据还没达标】%s' % t.title,
+                '下级都办完了，但本级实测还没达标：%s' % (res.get('message') or ''),
+                dedupe='task:%d:kids_done:%s:%s' % (t.id, a.login_name,
+                                                    now.strftime('%Y%m%d')))
+
+
 def _auto_close(db: Session, t: DispatchTask, res: dict, now: datetime):
     t.status = 'closed'
     t.closed_at = now
@@ -1092,6 +1640,11 @@ def _auto_close(db: Session, t: DispatchTask, res: dict, now: datetime):
 
 
 def _reassign_disabled(db: Session, t: DispatchTask) -> int:
+    """承办人停用后自动改派：**按他自己那个岗位**换人，不是一律找所长。
+
+    原来这里写死 `_emp_by_role('sz', ...)`：县/市两级的单（承办人是 xgscwb / sgscwb）
+    永远找不到"所长" → 静默不改派，单子就此卡死（2026-10-28 修）。
+    """
     n = 0
     for a in _assignees(db, t.id):
         if a.part != 'owner':
@@ -1099,13 +1652,17 @@ def _reassign_disabled(db: Session, t: DispatchTask) -> int:
         emp = _emp(a.employee_id)
         if emp and not emp['disabled']:
             continue
-        alt = [e for e in _emp_by_role('sz', a.dept_id) if e['employee_id'] != a.employee_id]
+        role = a.role_code or _role_of(a.employee_id)
+        alt = [e for e in _emp_by_role(role, a.dept_id) if e['employee_id'] != a.employee_id] \
+            if role else []
         if not alt:
             continue
         a.part = 'collaborator'
         db.add(DispatchTaskAssignee(task_id=t.id, part='owner', employee_id=alt[0]['employee_id'],
                                     login_name=alt[0]['login_name'], name=alt[0]['name'],
-                                    dept_id=alt[0]['dept_id'], state='pending'))
+                                    dept_id=alt[0]['dept_id'],
+                                    dept_name=(_dept(alt[0]['dept_id']) or {}).get('name'),
+                                    role_code=role, state='pending'))
         _event(db, t, 'transfer', None, t.status, t.status,
                '原承办人已停用，系统转派给 %s' % alt[0]['name'])
         _notice(db, t, 'assign', alt[0], '【转派任务】%s' % t.title, '原承办人已停用',
@@ -1503,7 +2060,9 @@ def _fallback_intent(text: str) -> tuple[bool, str]:
 
 def _parse_due(text: str, today: str):
     """从话里抠时限：3天内 / 一周内 / 月底 / 年底 / 本周。返回 (reply_due, due, 说明)。"""
-    now = datetime.strptime(today, '%Y-%m-%d').replace(hour=18, tzinfo=timezone.utc)
+    # 18:00 指北京时间。原来写 timezone.utc，界面会变成凌晨 2 点
+    now = datetime.strptime(today, '%Y-%m-%d').replace(
+        hour=18, tzinfo=timezone(timedelta(hours=8)))
     m = re.search(r'(\d+)\s*(天|日|周|个?月)\s*(内|以内|之内)?', text or '')
     if m:
         n = int(m.group(1))
@@ -1536,7 +2095,7 @@ def _match_scope(text: str, act: dict) -> dict:
         if (name and name in t) or (short and len(short) >= 2 and short in t):
             return {'scope_type': 'station', 'scope_key': str(s['id']),
                     'scope_name': name, 'station_ids': [int(s['id'])],
-                    'dept_id': int(s['department_id']), 'role': 'sz'}
+                    'dept_id': int(s['department_id']), 'role': DR.LEVEL_ROLE['station']}
     for key, dept_id, role, label in _county_depts():
         if key in t:
             return {'scope_type': 'county', 'scope_key': str(dept_id),
@@ -1544,25 +2103,25 @@ def _match_scope(text: str, act: dict) -> dict:
                     'station_ids': [], 'dept_id': dept_id, 'role': role}
     if '全市' in t:
         return {'scope_type': 'city', 'scope_key': 'city', 'scope_name': '全市',
-                'station_ids': [], 'dept_id': 1, 'role': 'sgscwb'}
+                'station_ids': [], 'dept_id': alert_scope._cfg()['city_dept_id'],
+                'role': DR.LEVEL_ROLE['city']}
     sc = act['scope']
     return {'scope_type': sc.get('scope_type'),
             'scope_key': (str(sc['station_ids'][0]) if sc.get('scope_type') == 'station'
                           else (str(sc.get('dept_id')) if sc.get('scope_type') == 'county' else 'city')),
             'scope_name': sc.get('scope') or '',
             'station_ids': sc.get('station_ids') or [],
-            'dept_id': sc.get('dept_id') or 1,
-            'role': {'station': 'sz', 'county': 'xgscwb', 'city': 'sgscwb'}.get(
-                sc.get('scope_type'), 'sz')}
+            'dept_id': sc.get('dept_id') or alert_scope._cfg()['city_dept_id'],
+            'role': DR.LEVEL_ROLE.get(sc.get('scope_type'), DR.LEVEL_ROLE['station'])}
 
 
 def _draft_candidates(scope: dict) -> list[dict]:
-    dept = scope.get('dept_id') or 1
-    cands = _emp_by_role(scope.get('role') or 'sz', dept)
+    dept = scope.get('dept_id') or alert_scope._cfg()['city_dept_id']
+    cands = _emp_by_role(scope.get('role') or DR.LEVEL_ROLE['station'], dept)
     if cands:
         return cands[:5]
-    for alt in ('sz', 'xgscwb', 'sgscwb'):
-        cands = _emp_by_role(alt, dept) or _emp_by_role(alt, 1)
+    for alt in (DR.LEVEL_ROLE['station'], DR.LEVEL_ROLE['county'], DR.LEVEL_ROLE['city']):
+        cands = _emp_by_role(alt, dept) or _emp_by_role(alt, alert_scope._cfg()['city_dept_id'])
         if cands:
             return cands[:5]
     return []
@@ -1582,15 +2141,18 @@ def _draft_confirm_text(task: DispatchTask, assignee_names: list[str]) -> str:
     return (
         '我理解你要办这件事，已拟好任务草稿：\n'
         '- **事项**：%s\n'
-        '- **责任**：%s\n'
-        '- **承办人**：%s\n'
-        '- **回执时限**：%s；**完成时限**：%s\n'
-        '- **核销方式**：%s\n\n'
+        '- **找谁办**：%s（%s）\n'
+        '- **完成时限**：%s\n'
+        '%s'
+        '- **怎么算完成**：%s\n\n'
         '回复「**确认**」我就下发；要改直接说（换人 / 改时间 / 改要求），或者说「取消」。'
-        % (task.title, task.scope_name or '',
+        % (task.title,
            '、'.join(assignee_names) or '（还没找到人，请指定）',
-           _iso(task.reply_due_at) or '—', _iso(task.due_at) or '—',
-           '自动（数据达标即闭环）' if task.verifier_type == 'auto' else '人工回执')
+           task.scope_name or '', _cn_dt(task.due_at),
+           ('- **要回执**：%s 前交东西\n' % _cn_dt(task.reply_due_at)
+            if int(task.require_reply or 0) else
+            '- **不用回执**：我到点催、按数据判完成\n'),
+           '数据达标自动闭环' if task.verifier_type == 'auto' else '由发起人确认闭环')
     )
 
 
@@ -1677,7 +2239,8 @@ def propose_from_chat(db: Session, account: str, session_id: str, question: str,
                  'station_ids': [st.get('id')] if st else [],
                  'dept_id': st.get('dept_id') if st else (
                      _i(alert.scope_key) if alert.scope_type == 'county' else 1),
-                 'role': alert.assignee_role or 'sz'}
+                 'role': alert.assignee_role or DR.LEVEL_ROLE.get(
+                     alert.scope_type, DR.LEVEL_ROLE['station'])}
         title = (q or alert.title)[:200]
         requirement = q or ('处置预警：%s' % alert.title)
         verify_rule = alert.verify_hint or {}
@@ -1734,6 +2297,8 @@ def propose_from_chat(db: Session, account: str, session_id: str, question: str,
                            'name': c['name'], 'dept_name': (c.get('dept_name') or '')}
                           for c in cands],
             'reply_due_at': _iso(task.reply_due_at), 'due_at': _iso(task.due_at),
+            'reply_due_text': _cn_dt(task.reply_due_at), 'due_text': _cn_dt(task.due_at),
+            'require_reply': int(task.require_reply or 0),
             'verifier_type': task.verifier_type, 'verify_rule': task.verify_rule or {},
             'require_plan': task.require_plan, 'due_note': due_note}
     alert_service.append_chat_message(
@@ -2078,5 +2643,7 @@ def _county_depts() -> list:
             return out
     except Exception:                              # noqa: BLE001
         pass
-    return [('曾都', 10, 'xgscwb', '曾都区供电公司'), ('随县', 11, 'xgscwb', '随县供电公司'),
-            ('高新', 12, 'xgscwb', '高新供电公司'), ('广水', 13, 'xgscwb', '广水供电公司')]
+    # 站点包也读不到就别猜：宁可这条判范围失败（回落到发言人自己的范围），
+    # 也不要拿别的地市/别的县的部门 ID 往库里怼。
+    logger.warning('站点包没有 county_depts，县范围识别关闭')
+    return []

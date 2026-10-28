@@ -100,6 +100,14 @@ async def lifespan(app: FastAPI):
     # 任务流转：内部 tick 循环（催办/升级/自动核销）
     # ⚠️ 单进程部署才开；多 worker 会让每个进程各跑一遍（tick 幂等，但白耗 DB）
     #    设 DISPATCH_TICK_MINUTES=0 关掉，改由外部定时任务调 POST /api/dispatch/tick
+    def _tick_in_pack() -> bool:
+        """心跳时间写在站点包 jobs.yml 里时，就别再起内置循环（否则同一份活跑两遍）。"""
+        try:
+            from app.secretary import scheduler as _sch
+            return _sch.pack_has('dispatch_tick')
+        except Exception:                          # noqa: BLE001
+            return False
+
     _tick = {"stop": None, "task": None}
     try:
         import asyncio
@@ -110,7 +118,7 @@ async def lifespan(app: FastAPI):
         from app.core.database import SessionLocal
         from app.services import dispatch_service
 
-        if _dr.dispatch_on() and _dr.tick_minutes() > 0:
+        if _dr.dispatch_on() and _dr.tick_minutes() > 0 and not _tick_in_pack():
             minutes = _dr.tick_minutes()
             stop = asyncio.Event()
 

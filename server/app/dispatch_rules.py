@@ -174,6 +174,10 @@ DUTY_CHAIN = {
 MASTER_ESCALATION_BLOCK = True
 ADMIN_ROLE = 'admin'
 
+# 范围级别 → 应办角色（2026-10-28 从 dispatch_service._target_role 外置）：
+# 原来这三组是写在业务代码里的字面量，换单位/换岗位码就得改代码。
+LEVEL_ROLE = {'station': 'sz', 'county': 'xgscwb', 'city': 'sgscwb'}
+
 # ══════════════════════════════════════════════════════════════
 #  时限与升级
 # ══════════════════════════════════════════════════════════════
@@ -183,6 +187,12 @@ LEVEL_TARGET_DAYS = {'high': 30, 'mid': 30, 'low': 30}      # 目标时限（天
 LEVEL_GRACE_DAYS = {'high': 1, 'mid': 1, 'low': 2}          # 超期宽限（天）
 URGE_BEFORE_HOURS = 4                                        # 回执前 4 小时提醒
 URGE_MIN_INTERVAL_H = 24                                     # 催办最小间隔
+REOPEN_DAYS = 7                                              # 闭环后多少天内可重开
+DRAFT_DAYS = 7                                               # 草稿多少天没确认自动取消
+
+# 预算执行率达标线（2026-10-28 外置）：预警判据 alerts4._rate_rule 和建议话术
+# dispatch_ai 共用这一个数，别再各写一份 0.6。
+RATE_TARGET = 0.6
 
 # 建议话术里的时限（天）。换单位/换节奏只改这里，别改代码里的句子。
 #   plan  要求下级交方案的期限

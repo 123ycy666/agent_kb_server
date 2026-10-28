@@ -123,9 +123,12 @@ def _mk(sc, role_code, subtype, title, data, verify_hint=None,
     }
 
 
-def _rate_rule(sc, year, target=0.6):
+def _rate_rule(sc, year, target=None):
+    """预算执行率规则；达标线默认取 DR.RATE_TARGET（别在这里写死 0.6）。"""
     return {'kind': 'budget_rate', 'station_ids': list(sc['station_ids']),
-            'year': int(year), 'op': '>=', 'target': float(target), 'close_when_met': True}
+            'year': int(year), 'op': '>=',
+            'target': float(DR.RATE_TARGET if target is None else target),
+            'close_when_met': True}
 
 
 def _node_rule(sc, node):
@@ -147,6 +150,9 @@ def _metric_rule(sc, code, target, op='<=', period_type='yearToDate'):
 
 # ─────────────────────────────────────────────────────────── 预算
 
+_COUNTY_CACHE: dict = {}
+
+
 def _county_map(station_ids) -> dict:
     """供电所 → (县公司 dept_id, 县公司名)。
 
@@ -155,6 +161,12 @@ def _county_map(station_ids) -> dict:
     ids = [int(x) for x in (station_ids or []) if x]
     if not ids:
         return {}
+    # 所→县是静态参照数据，整轮扫描只查一次（每条预警都查一遍会白花好几秒）
+    hit = {i: _COUNTY_CACHE[i] for i in ids if i in _COUNTY_CACHE}
+    miss = [i for i in ids if i not in _COUNTY_CACHE]
+    if not miss:
+        return hit
+    ids = miss
     ph = ','.join(['%s'] * len(ids))
     rows = _q('SELECT p.id AS sid, c.department_id AS cid, c.department_name AS cname '
               'FROM t_power_company p '
@@ -162,11 +174,12 @@ def _county_map(station_ids) -> dict:
               'JOIN t_department c ON c.department_id = '
               '     CASE WHEN COALESCE(d.parent_id,0) > 1 THEN d.parent_id ELSE d.department_id END '
               'WHERE p.id IN (%s)' % ph, ids)
-    out = {}
     for r in rows:
         sid = _i(r.get('sid'))
         if sid:
-            out[sid] = (_i(r.get('cid')), r.get('cname') or '')
+            _COUNTY_CACHE[sid] = (_i(r.get('cid')), r.get('cname') or '')
+    out = {i: _COUNTY_CACHE[i] for i in ids if i in _COUNTY_CACHE}
+    out.update(hit)
     return out
 
 
@@ -242,11 +255,9 @@ def _station_profile(ctx) -> dict:
         out['zero_struct_amt'] = round(sum(_f(x.get('budget_total')) for x in zero), 2)
         out['zero_struct_top'] = str(zero[0].get('work_name') or '')[:40]
 
-    # 指标：先只看本轮 facts 里已经取到的（所级默认不带指标取数）。
-    # 批量取（alerts.station_metrics）已在 alerts 里备好，但因为实测每所多花约 3 秒、
-    # 全量扫描 44s→229s，暂不接；等定位清楚再开（2026-10-27 记录）。
+    # 指标：一次批量取、整轮复用（alerts.station_metrics 内部按年+日期缓存）
     mets: dict = {}
-    for row in (facts.get('metrics') or []):
+    for row in A.station_metrics(ctx['year'], ctx['today']):
         if _norm_company(row.get('scope_name')) != me:
             continue
         code = str(row.get('metric_code') or '')
@@ -273,9 +284,11 @@ def _d_budget_underspend(ctx):
     approved = max(0.0, alloc - left)
     d['approved'] = round(approved, 2)
     d['rate_pct'] = round((approved / alloc * 100.0) if alloc > 0 else 0.0, 2)
-    d['threshold_pct'] = round(R.UNDERSPEND_COEF * 100, 1)
+    # 达标线 = DR.RATE_TARGET（判据、建议话术、核销规则共用一份）；
+    # R.UNDERSPEND_COEF 只负责"算不算花不完"的识别，别拿它当达标线。
+    d['threshold_pct'] = round(DR.RATE_TARGET * 100, 1)
     # 距达标线还差多少：建议里天天要用，必须是数据里的数，不能由模型现算
-    d['need'] = round(max(0.0, alloc * R.UNDERSPEND_COEF - approved), 2)
+    d['need'] = round(max(0.0, alloc * DR.RATE_TARGET - approved), 2)
     # 按身份要看的明细：市里看县排名，县里看所排名，所里只看自己
     try:
         by_station, by_county = _budget_breakdown(ctx)

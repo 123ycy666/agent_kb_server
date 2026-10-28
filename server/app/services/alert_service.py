@@ -132,6 +132,10 @@ def scan(db: Session, accounts=None, cadence: str = 'daily',
         for (role, _st, _sk), g in groups.items():
             sc = g['sc']
             types = set(g.get('types') or [])
+            # ⚠️ 不要为了"所级多维分析"在这里给所有所打开 metrics/quality：
+            # 每个所一次额外取数，全量每日扫描从 31s 涨到 127s（2026-10-27 实测），
+            # 扛不住。所级画像目前只用 core 里已有的审批卡点（够具体、且免费）；
+            # 指标维度要等"一次查询按所需批量取指标"落地后再接。
             need_metrics = any(t.startswith('metric.') for t in types)
             need_quality = 'project.amount_structure' in types
             need_mid = (A.R.forecast_mode() == 'pipeline'
@@ -231,13 +235,28 @@ def _post_filter(db: Session, items: list[dict]) -> list[dict]:
     return out
 
 
+def case_key_of(item) -> str:
+    """事项指纹：`dedupe_key` 去掉角色段。
+
+    同一起问题会按角色各推一行（所长 / 县财务 / 市财务），dedupe_key 带 role 所以是 3 行；
+    但它们在业务上是**同一件事**，`case_key` 相同 → 全系统只允许一棵任务树。
+    """
+    get = item.get if isinstance(item, dict) else (lambda k, d=None: getattr(item, k, d))
+    return '%s|%s|%s|%s|%s' % (
+        get('alert_type') or '', get('subtype') or '',
+        get('scope_type') or '', get('scope_key') or '',
+        get('object_key') or '*')
+
+
 def _upsert(db: Session, item: dict, seen_at: datetime) -> str:
     existing = db.execute(select(AlertItem).where(
         AlertItem.dedupe_key == item['dedupe_key'])).scalar_one_or_none()
+    case_key = case_key_of(item)
     if existing is None:
         db.add(AlertItem(
             alert_type=item['alert_type'], subtype=item['subtype'], level=item['level'],
-            dedupe_key=item['dedupe_key'], scope_type=item['scope_type'],
+            dedupe_key=item['dedupe_key'], case_key=case_key,
+            scope_type=item['scope_type'],
             scope_key=item['scope_key'], scope_name=item['scope_name'],
             object_type=item['object_type'], object_key=item['object_key'],
             title=item['title'], detail=item.get('detail') or '',
@@ -257,6 +276,7 @@ def _upsert(db: Session, item: dict, seen_at: datetime) -> str:
     existing.data = data
     existing.verify_hint = item.get('verify_hint') or existing.verify_hint
     existing.assignee_role = item.get('assignee_role') or existing.assignee_role
+    existing.case_key = case_key or existing.case_key
     existing.last_seen = seen_at
     existing.seen_times = int(existing.seen_times or 0) + 1
     if existing.status in ('resolved', 'closed'):

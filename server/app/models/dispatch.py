@@ -100,6 +100,9 @@ class AlertItem(Base):
     subtype: Mapped[str] = mapped_column(String(32), nullable=False)
     level: Mapped[str] = mapped_column(String(8), nullable=False, server_default=text("'mid'"))
     dedupe_key: Mapped[str] = mapped_column(String(220), nullable=False)
+    # 事项指纹：= dedupe_key 去掉 role 段。同一起业务问题推给多个层级时（所长/县财务/市财务
+    # 各有一行 alert），case_key 相同 → 全系统只允许存在一棵任务树。
+    case_key: Mapped[str | None] = mapped_column(String(220))
 
     scope_type: Mapped[str] = mapped_column(String(16), nullable=False)   # station|county|city
     scope_key: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -142,6 +145,7 @@ class AlertItem(Base):
         ),
         CheckConstraint("level IN ('high','mid','low')", name="ck_alert_level"),
         Index("uk_alert_dedupe", "dedupe_key", unique=True),
+        Index("idx_alert_case", "case_key"),
         Index("idx_alert_status", "status", "level", "last_seen"),
         Index("idx_alert_type", "alert_type", "subtype"),
         Index("idx_alert_scope", "scope_key", "object_key"),
@@ -155,6 +159,13 @@ class DispatchTask(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     task_no: Mapped[str] = mapped_column(String(32), nullable=False)
+    # ── 事项唯一 id ──────────────────────────────────────────────
+    # case_id  对外事项号（C20261021-00001），整棵树（root + 所有子任务）共用；
+    # case_key 事项指纹，来自 alert_item.case_key 或对话推导；
+    #          同一 case_key 只允许一棵"根任务"，第二个人再来建 → 409 CASE_EXISTS，
+    #          只能改任务 / 加补充 / 写说明（见 dispatch_service.comment/supplement）。
+    case_id: Mapped[str | None] = mapped_column(String(32))
+    case_key: Mapped[str | None] = mapped_column(String(220))
     task_type: Mapped[str] = mapped_column(String(16), nullable=False, default="alert")
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     requirement: Mapped[str] = mapped_column(Text, nullable=False)
@@ -182,6 +193,10 @@ class DispatchTask(Base):
     reply_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     require_plan: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    # 要不要回执：1=要在 reply_due_at 前交东西；0=不用交，系统按 due_at 盯数据判完成
+    # （"月底前把钱花完"这种就是 0：不催回执，只盯预算执行率）
+    require_reply: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=1, server_default=text('1'))
 
     verifier_type: Mapped[str] = mapped_column(String(16), nullable=False, default="auto")
     verify_rule: Mapped[dict[str, Any]] = mapped_column(
@@ -211,6 +226,16 @@ class DispatchTask(Base):
         ),
         CheckConstraint("verifier_type IN ('auto','human')", name="ck_task_verifier"),
         Index("uk_task_no", "task_no", unique=True),
+        Index("idx_task_case", "case_key"),
+        # 一个事项只能一棵树：只对"根任务 + 未作废"生效。
+        # 草稿也占位（防止两个人同时拟同一件事的稿）；作废/闭环后释放，允许下一轮再建。
+        Index(
+            "uk_task_case_root", "case_key", unique=True,
+            postgresql_where=text(
+                "parent_task_id IS NULL AND deleted_flag = 0 "
+                "AND status NOT IN ('cancelled','closed')"
+            ),
+        ),
         # ⚠️ 索引名不能叫 idx_task_status：PG 索引名在 schema 内唯一，async_task 上已有同名索引，
         #    `IF NOT EXISTS` 会让这条静默跳过（2026-10-20 实测）。统一叫 idx_dispatch_status_due。
         Index("idx_dispatch_status_due", "status", "reply_due_at"),

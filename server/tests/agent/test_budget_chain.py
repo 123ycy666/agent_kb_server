@@ -167,9 +167,11 @@ def main():
         # 只要卡点、不要指标，逼出"申请调减"那条（它是话术里唯一带达标线的地方）
         simple = json.loads(json.dumps(fake))
         simple['data']['station_profile'].pop('metrics', None)
-        old_coef, old_win = DR.UNDERSPEND_COEF, dict(DR.ADVICE_WINDOWS)
+        # 达标线的真源是 DR.RATE_TARGET（UNDERSPEND_COEF 只管"算不算花不完"，
+        # 两个概念 2026-10-28 分家；这里改的是达标线）
+        old_coef, old_win = DR.RATE_TARGET, dict(DR.ADVICE_WINDOWS)
         try:
-            DR.UNDERSPEND_COEF = 0.75
+            DR.RATE_TARGET = 0.75
             DR.ADVICE_WINDOWS = {'plan': 3, 'turn': 9}
             txt_75 = json.dumps(dispatch_ai._advice(simple), ensure_ascii=False)
             fake_m = dict(fake, assignee_role='master', data=dict(
@@ -178,7 +180,7 @@ def main():
                 stations=3, rate_pct=1.0))
             txt_75m = json.dumps(dispatch_ai._advice(fake_m), ensure_ascii=False)
         finally:
-            DR.UNDERSPEND_COEF, DR.ADVICE_WINDOWS = old_coef, old_win
+            DR.RATE_TARGET, DR.ADVICE_WINDOWS = old_coef, old_win
         check('44.5', '达标线不写死：配置改 75%，建议里就出现 75%',
               '75%' in txt_75 and '75%' in txt_75m, txt_75[:70])
         check('44.6', '时限不写死：配置改 9 天，建议里就出现 9 天',
