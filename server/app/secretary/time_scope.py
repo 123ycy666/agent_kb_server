@@ -21,6 +21,27 @@ import re
 
 from app.secretary import tools_db
 
+
+def _as_date(v):
+    """`today` 允许 date / datetime / 'YYYY-MM-DD' 字符串（上游接口传的就是字符串）。
+
+    2026-10-28 补：口径基准改成「系统日历当月」时把 `today.year` 提到了函数开头，
+    于是传字符串的调用方（`agent.ask(today='2026-10-26')`、老测试）当场 AttributeError。
+    边界统一在这里转，别让每个调用点各写一份。
+    """
+    if v is None:
+        return datetime.date.today()
+    if isinstance(v, datetime.datetime):
+        return v.date()
+    if isinstance(v, datetime.date):
+        return v
+    s = str(v).strip().replace('/', '-')
+    try:
+        return datetime.date.fromisoformat(s[:10])
+    except ValueError:
+        return datetime.date.today()
+
+
 # ---------------------------------------------------------------- 中文数字
 _CN_NUM = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7,
            '八': 8, '九': 9, '十': 10, '十一': 11, '十二': 12, '元': 1, '正': 1}
@@ -221,7 +242,7 @@ def resolve(question, today=None, prev=None):
       **绝不参与口径计算**。
     """
     q = str(question or '')
-    today = today or datetime.date.today()
+    today = _as_date(today)
     cur_y, cur_m = int(today.year), int(today.month)
     now_key = '%04d%02d' % (cur_y, cur_m)
     biz_ym = _latest_ym()          # 业务已结算最新月：只写提示，不改口径
@@ -591,7 +612,7 @@ def describe(question, fixed=None, prev=None, today=None, force_place=None):
         else:
             place = '全市'
             place_default = True
-    _today = today or datetime.date.today()
+    _today = _as_date(today)
     cur_y, cur_m = int(_today.year), int(_today.month)
     now_key = '%04d%02d' % (cur_y, cur_m)
     biz_ym = _latest_ym()          # 只用于说明「数据出没出」，不参与任何口径计算

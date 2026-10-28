@@ -76,10 +76,13 @@ try:
 
     with psycopg.connect(pgdb.DSN, connect_timeout=8) as c:
         cur = c.cursor()
-        cur.execute("""SELECT chat_session_id FROM t_chat_message
-                        WHERE deleted_flag=0 AND sender_type=2
-                        GROUP BY chat_session_id HAVING count(*) >= 2
+        cur.execute("""SELECT m.chat_session_id FROM t_chat_message m
+                        JOIN t_chat_query_trace q ON q.message_id = m.id AND q.deleted_flag = 0
+                        WHERE m.deleted_flag=0 AND m.sender_type=2
+                        GROUP BY m.chat_session_id HAVING count(*) >= 2
                         ORDER BY random() LIMIT 2""")
+        # 必须 join trace：load_context 只认「有 trace 关联」的轮次，
+        # 只按 t_chat_message 抽样会抽到没有 trace 的会话 → 偶发 0 轮（2026-10-28 修的 flake）。
         sids = [r[0] for r in cur.fetchall()]
 
     if len(sids) < 2:
