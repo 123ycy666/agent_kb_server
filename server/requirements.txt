@@ -42,3 +42,7 @@ xlrd>=2.0.1
 
 # 站点包（config/sites/*.yml）解析，2026-10-21 P0 起为必需
 PyYAML>=6.0
+
+# 站点包 jobs.yml 的定时调度（APScheduler，MIT）。2026-10-28 补声明：
+# 代码里一直 import，但依赖没写进 requirements → 线上镜像缺包，定时任务空转。
+apscheduler>=3.10,<4

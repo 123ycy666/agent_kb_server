@@ -18,8 +18,10 @@ COPY web/dist/ /web/dist/
 # 包内定时任务空转（扫描就只能继续靠宿主机 crontab，2026-10-28 部署时发现）。
 COPY config/ /config/
 
-# 旧镜像缺这两个：pymysql（统一用户表 MySQL 只读）、argon2（HR 密码校验）
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ pymysql argon2-cffi
+# 旧镜像缺这几个：pymysql（统一用户表 MySQL 只读）、argon2（HR 密码校验）、
+# apscheduler（站点包 jobs.yml 的定时调度，2026-10-28 部署时发现缺失 → 定时任务空转）
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
+        pymysql argon2-cffi apscheduler
 
 EXPOSE 8200
 
