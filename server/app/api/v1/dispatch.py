@@ -474,6 +474,19 @@ def tick(request: Request, db: Session = Depends(get_db)):
                             detail={'code': 'TICK_FAILED', 'message': '%s: %s' % (type(exc).__name__, exc)})
 
 
+@router_dispatch.get('/jobs', summary='站点包定时任务：在不在跑、下次什么时候跑（内部令牌）')
+def jobs(request: Request):
+    """给运维看：调度器起没起、每条活的下次运行时间、最近 10 次执行结果。"""
+    _internal(request)
+    from app.secretary import scheduler
+
+    try:
+        return scheduler.status()
+    except Exception as exc:  # noqa: BLE001
+        return {'running': False, 'jobs': [], 'recent': [],
+                'error': '%s: %s' % (type(exc).__name__, str(exc)[:200])}
+
+
 @router_dispatch.get('/stats', summary='统计：状态/类别/闭环率/平均处置时长/升级率')
 def stats(actor: CurrentActor = Depends(get_current_actor), db: Session = Depends(get_db)):
     _guard()

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -147,8 +148,32 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("dispatch tick 循环启动失败（不影响服务）：%s", exc)
 
+    # 站点包 jobs.yml 驱动定时活（扫描 4 条 + 心跳 1 条）。
+    # 2026-10-28 补：原来只读包、没人 start() —— 而上方内置 tick 循环又因"包里有 dispatch_tick"
+    # 主动让位，结果线上周期 tick 直接停摆（部署后发现）。多 worker 部署时设 SITE_JOBS=0，
+    # 只让一个进程跑（APScheduler 是进程内调度器）。
+    _sch = {"on": False}
+    try:
+        if (os.environ.get("SITE_JOBS") or "1").strip() not in ("0", "false", "no"):
+            from app.secretary import scheduler as _scheduler
+
+            _scheduler.start()
+            st = _scheduler.status()
+            logger.info("站点包定时任务 | running=%s | %s", st.get("running"),
+                        ", ".join("%s→%s" % (j.get("id"), j.get("next")) for j in st.get("jobs") or []))
+            _sch["on"] = True
+    except Exception as exc:  # noqa: BLE001 - 定时活起不来不许拖垮服务
+        logger.warning("站点包定时任务启动失败（不影响服务）：%s", exc)
+
     logger.info("API 文档： http://127.0.0.1:8200/docs")
     yield
+    if _sch["on"]:
+        try:
+            from app.secretary import scheduler as _scheduler
+
+            _scheduler.stop()
+        except Exception:  # noqa: BLE001
+            pass
     if _tick["stop"] is not None:
         _tick["stop"].set()
     if _tick["task"] is not None:

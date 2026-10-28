@@ -13,6 +13,11 @@ COPY server/ /app/
 # 前端构建产物：main.py 在 /app/app/main.py → parents[2] = / → 必须放到 /web/dist
 COPY web/dist/ /web/dist/
 
+# 站点包：site_pack.sites_root() = Path(server/app/secretary/site_pack.py).parents[3]/'config'/'sites'
+# 在容器里 = /config/sites。不放进去 → jobs.yml / prompts / rules 全读不到，
+# 包内定时任务空转（扫描就只能继续靠宿主机 crontab，2026-10-28 部署时发现）。
+COPY config/ /config/
+
 # 旧镜像缺这两个：pymysql（统一用户表 MySQL 只读）、argon2（HR 密码校验）
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ pymysql argon2-cffi
 

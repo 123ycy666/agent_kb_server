@@ -33,13 +33,25 @@ def chk(label: str, cond: bool, extra: str = "") -> None:
 def main() -> int:
     print("F5-1：定时任务（APScheduler）")
 
-    # ── 1 随州包：1 启用 + 1 关闭 ───────────────────────────────
+    # ── 1 随州包：6 条启用 + 1 条关闭 ───────────────────────────────
     built = S.build()
-    chk("随州：注册 1 条（selfcheck_daily）",
-        [j['id'] for j in built['added']] == ['selfcheck_daily'], str(built['added']))
+    want = {'selfcheck_daily', 'dispatch_tick', 'dispatch_scan_daily',
+            'dispatch_scan_weekly', 'dispatch_scan_monthly', 'dispatch_scan_yearly'}
+    chk("随州：6 条定时活都注册上",
+        {j['id'] for j in built['added']} == want, str(built['added']))
     chk("随州：alerts_daily 因 enabled=false 被跳过",
         any(x['id'] == 'alerts_daily' and 'enabled' in x['why'] for x in built['skipped']),
         str(built['skipped']))
+
+    # ── 1.1 应用启动时真的要起调度器（2026-10-28 发现：jobs.yml 读得到却没人 start，
+    #      内置 tick 循环又因"包里有 dispatch_tick"让位 → 线上周期 tick 直接停摆）──
+    import inspect
+
+    import app.main as M
+    src = inspect.getsource(M)
+    chk("app.main 启动时会起调度器（scheduler.start）",
+        'scheduler' in src and 'start()' in src and '.stop()' in src,
+        'main.py 里没有 scheduler 的 start/stop')
 
     # ── 2/3/4 假站点包：白名单 + 非法 cron ──────────────────────
     fake = SERVER / '.tmp' / 'sched_demo'
@@ -95,6 +107,10 @@ def main() -> int:
     chk("重复 start() 不重复起", S.start() is sch)
     chk("status() 有 running/jobs", S.status().get('running') is True and
         isinstance(S.status().get('jobs'), list), str(S.status())[:80])
+    st = S.status()
+    chk("start() 后 6 条活都有下次运行时间",
+        len(st.get('jobs') or []) == 6 and all(j.get('next') for j in st['jobs']),
+        str(st.get('jobs'))[:160])
     S.stop()
     chk("stop() 后状态为未运行", S.status().get('running') is False)
 
