@@ -283,6 +283,12 @@ AREA_FUZZY_MIN = 0.78
 # 「公家棚3号」的用户说的就是 3 号，不能拿「龚家棚新2#台区」来当候选。
 DIGIT_RUN = re.compile(r"\d+")
 
+# 时间词区间（「10月」「2026年」「5日」「3号」）。滑窗找裸地名时，**不许**切进这些区间：
+# 实测「2026年1-10月两水所工单有多少单」会滑出「月两」，同音/前缀撞上台区「月亮台区」，
+# 整句被改成「…10月亮台区水所工单…」——问的是两水所，查的却是月亮台区（2026-10-28 线上）。
+# 只护「数字 + 时间单位」这一种形态：「月亮台区」这种真名（前面没数字）不受影响。
+DATE_SPAN = re.compile(r"\d{1,4}\s*[年月日号]")
+
 # 名称归一里「相似度」这条路的门槛，比 AREA_FUZZY_MIN 严。
 # 0.78 在校错场景够用（候选会全部列给下游反问），但归一要给**唯一答案**，
 # 必须更保守：实测「电力局」会被 0.824 的「电信局专变」命中，这是明显误改。
@@ -1686,6 +1692,12 @@ class Corrector:
         # （同族的旧案：「结合｜意见」切出「结合意」→ 解河；
         #   「平均停｜电时｜长」切出「电时」→ 电视台专变。）
         inside_word = [False] * (n + 1)
+        # 时间词区间标记（见 DATE_SPAN 注释）：起点不许压进日期里，整段片段也不许跨进去。
+        in_date = [False] * (n + 1)
+        for m in DATE_SPAN.finditer(text):
+            for k in range(m.start(), m.end()):
+                in_date[k] = True
+
         if self.split_max_len >= 2:
             for s in range(n):
                 if not HAN.match(text[s]):
@@ -1703,6 +1715,8 @@ class Corrector:
             # 只认汉字的话，「9颗松」整段都进不了滑窗，后面再准的判据也用不上。
             if not (HAN.match(text[i]) or text[i].isdigit()):
                 continue
+            if in_date[i]:
+                continue              # 起点落在「10月」「2026年」这类时间词里 —— 那是日期不是地名
             if inside_word[i]:
                 continue              # 起点落在已知词内部 —— 切坏了，不是名字
             for L in range(min(6, n - i), 1, -1):

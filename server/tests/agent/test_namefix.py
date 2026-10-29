@@ -46,6 +46,21 @@ check('7 普通问句不动', '分下来多少' in o['text'], o['text'])
 p = name_fix.fix('环潭今年分了多少还剩多少？')
 check('8 今年分了多少 不被改', '份了多少' not in p['text'], p['text'])
 
+# 9. 时间词边界：滑窗不许从「10月」中间起头切出「月两」→「月亮台区」
+#    （2026-10-28 线上：问两水所，被改成「10月亮台区水所」，SQL 查成月亮台区）
+for q in ('2026年1-10月两水所工单有多少单', '10月两水所工单',
+          '2026年1-9月两水所工单', '5日两水所工单'):
+    r = name_fix.fix(q)
+    check('9 时间词不被当地名（%s）' % q[:10],
+          '亮台区' not in r['text'] and '月亮' not in r['text'], r['text'])
+
+r = name_fix.fix('2026年1-10月两水所工单有多少单')
+check('9.1 时间词之后照旧归一', '两水' in r['text'], r['text'])
+
+# 10. 真名里带「月」的不受影响（前面没数字就不算时间词）
+r = name_fix.fix('月亮台区本月线损')
+check('10 月亮台区不被误伤', '月亮台区' in r['text'], r['text'])
+
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'output', 'test_results', 'namefix_test.json')
 os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump(RESULTS, open(out, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
