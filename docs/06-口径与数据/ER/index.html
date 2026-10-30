@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>dlj_data 业务库 E-R 图</title><style>
+    :root{--bg:#fbfcfe;--ink:#1a202c;--dim:#718096;--line:#e2e8f0}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);
+         font:15px/1.7 'Microsoft YaHei','Segoe UI',sans-serif}
+    header{padding:28px 40px 18px;border-bottom:1px solid var(--line);background:#fff}
+    h1{margin:0 0 6px;font-size:22px}
+    header p{margin:0;color:var(--dim);font-size:13px}
+    nav{position:sticky;top:0;background:#fffffff2;backdrop-filter:blur(6px);
+        border-bottom:1px solid var(--line);padding:10px 40px;z-index:9}
+    nav a{margin-right:18px;color:#2b6cb0;text-decoration:none;font-size:13px}
+    nav a:hover{text-decoration:underline}
+    main{padding:24px 40px 80px;max-width:2000px}
+    section{margin-bottom:52px}
+    h2{font-size:18px;margin:0 0 6px;padding-top:8px}
+    .desc{color:var(--dim);font-size:13.5px;margin:0 0 14px;max-width:1100px}
+    .fig{border:1px solid var(--line);border-radius:10px;background:#fff;overflow:auto;
+         box-shadow:0 1px 3px #0000000a}
+    .fig img{display:block;width:100%;height:auto}
+    table{border-collapse:collapse;width:100%;font-size:13px;margin:10px 0 4px;
+          background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+    th,td{border-bottom:1px solid var(--line);padding:8px 12px;text-align:left;vertical-align:top}
+    th{background:#f7fafc;font-weight:600;color:#2d3748;white-space:nowrap}
+    code{background:#f1f5f9;padding:1px 5px;border-radius:4px;font-family:Consolas,monospace;
+         font-size:12.5px}
+    .kv{display:flex;gap:28px;flex-wrap:wrap;margin:6px 0 18px}
+    .kv div{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 16px;min-width:150px}
+    .kv b{display:block;font-size:20px;color:#2b6cb0}
+    .kv span{color:var(--dim);font-size:12.5px}
+    footer{padding:20px 40px;color:var(--dim);font-size:12.5px;border-top:1px solid var(--line)}
+    </style></head>
+<body>
+<header>
+  <h1>dlj_data 业务库 E-R 图（全局 + 4 张局部）</h1>
+  <p>2026-10-20 只读实测生成 · 行数是 SELECT COUNT(*) 精确值 · 矢量图在 er_*.svg，复现：<code>python build_er.py</code></p>
+</header>
+<nav><a href="#er_global">图 0</a><a href="#er_org">图 1</a><a href="#er_budget">图 2</a><a href="#er_workorder">图 3</a><a href="#er_grid">图 4</a><a href="#rel">关系依据</a><a href="#pit">已知坑</a></nav>
+<main>
+  <div class="kv">
+    <div><b>138</b><span>张表（文档记 133，已过期）</span></div>
+    <div><b>9</b><span>个业务域</span></div>
+    <div><b>1 / 7</b><span>角色里配了数据范围的</span></div>
+    <div><b>3 种</b><span>业务表里「所」的存法</span></div>
+    <div><b>0 行</b><span>t_power_push_line_loss / station_month_summary</span></div>
+  </div>
+  <section>
+    <h2>怎么读这些图</h2>
+    <p class="desc">
+      实线 = 字段注释写明「关联 表.id」或 <code>ai_table_relation</code> 登记过；
+      虚线 = 只有命名一致、注释没写（按命名推测，用前核对数据）；
+      红虚线 = 文本范围字段（只能按名字对，不是 JOIN）；
+      红框 = 该表/字段有已知问题。○ 是「1」端，⊰ 是「多」端。
+    </p>
+  </section>
+  <section id="er_global"><h2>图 0 · 全局域地图</h2><p class="desc">138 张表按业务域分成 9 块。读法是「先看块、再看块内代表表」——<b>看数字就知道哪块有真数据、哪块是空壳</b>。</p><div class="fig"><img src="er_global.svg" alt="图 0 · 全局域地图"></div></section><section id="er_org"><h2>图 1 · 局部 A：组织 → 角色 → 权限 → 数据主体</h2><p class="desc">「本所角色只能看本所」要用到的全部原料都在这张图里：员工挂哪个部门、部门下有哪些所、角色是谁、范围配了几行。红框那张 <code>t_role_data_scope</code> 就是全系统唯一的「数据范围配置」，实测只有 1 行。</p><div class="fig"><img src="er_org.svg" alt="图 1 · 局部 A：组织 → 角色 → 权限 → 数据主体"></div></section><section id="er_budget"><h2>图 2 · 局部 B：预算 → 评分 → 排名</h2><p class="desc">预警里 <code>budget</code>（预算花不完/超支）和 <code>review</code>（投入产出低）两类都在这条链上。核心陷阱：<code>county_company_id</code> 指县公司表，<code>company_id</code> / <code>power_station_id</code> 指供电所表——<b>同名不同义</b>。</p><div class="fig"><img src="er_budget.svg" alt="图 2 · 局部 B：预算 → 评分 → 排名"></div></section><section id="er_workorder"><h2>图 3 · 局部 C：工单 → 流程状态 → 审批 → 费用</h2><p class="desc">预警里 <code>project</code>（审批停留、已批未开工、施工停滞）在这条链上。红虚线那三条是<b>工程上的真坑</b>：<code>t_power_work_order</code> 的 77 列里 <code>*_id</code> 全是 <code>varchar</code>，与 <code>bigint</code> 主键联表必须 <code>CAST</code> + <code>COLLATE</code>。</p><div class="fig"><img src="er_workorder.svg" alt="图 3 · 局部 C：工单 → 流程状态 → 审批 → 费用"></div></section><section id="er_grid"><h2>图 4 · 局部 D：所 → 台区 → 推送明细 → 指标</h2><p class="desc">线损 / 可靠性 / 售电量这条链。这张图最能说明「按所过滤」为什么不是配置问题：有的表有 <code>power_station_id</code>（能 JOIN），有的只有 <code>scope_name</code> / <code>station_name</code> 文本（只能按名字对，而部门表叫「新城供电所」、档案写「新城供电站」）。</p><div class="fig"><img src="er_grid.svg" alt="图 4 · 局部 D：所 → 台区 → 推送明细 → 指标"></div></section>
+  <section id="rel">
+    <h2>关系依据清单（每条连线的出处）</h2>
+    <p class="desc">标「字段注释」= 建表时就写明了关联；标「按命名推测」= 我没找到依据，你用时必须先验证。</p>
+    <table><thead><tr><th>关系</th><th>含义</th><th>依据</th><th>画法</th></tr></thead>
+    <tbody><tr><td><code>t_department.parent_id → t_department.department_id</code></td><td>自关联（组织树）</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_employee.department_id → t_department</code></td><td>员工归属部门</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_department.manager_id → t_employee.employee_id</code></td><td>部门负责人</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_role_employee.role_id / employee_id → t_role / t_employee</code></td><td>角色-员工</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_role_data_scope.role_id → t_role</code></td><td>角色范围（只 1 行）</td><td>字段注释</td><td>实线（红）</td></tr><tr><td><code>t_role_menu.role_id / menu_id → t_role / t_menu</code></td><td>角色-菜单/按钮</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_supply_company.department_id → t_department</code></td><td>县公司挂部门</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_company.department_id → t_department</code></td><td>供电所挂部门</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_company.parent_id → ?</code></td><td>注释放明「暂无关联」</td><td>注释否定</td><td>不画</td></tr><tr><td><code>t_power_line.power_id → t_power_company.id</code></td><td>线路的所</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_area.power_id → t_power_company.id</code></td><td>台区的所</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_area.line_id → t_power_line.id</code></td><td>台区的线</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_work_order.power_company_id → t_power_company.id</code></td><td>工单的所</td><td>ai_table_relation + 命名</td><td>虚线（varchar）</td></tr><tr><td><code>t_power_work_order.power_line_id → t_power_line.id</code></td><td>工单的线</td><td>ai_table_relation</td><td>虚线（varchar）</td></tr><tr><td><code>t_power_work_order.power_area_id → t_power_area.id</code></td><td>工单的台区</td><td>ai_table_relation</td><td>虚线（varchar）</td></tr><tr><td><code>t_power_work_order_status.work_order_id → 工单</code></td><td>流程轨迹</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_work_order_audit_task.work_order_id → 工单</code></td><td>审批任务</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_work_order_audit_task.assignee_id → t_employee</code></td><td>办理人</td><td>命名（未画线）</td><td>按命名推测</td></tr><tr><td><code>t_power_work_cost.work_order_id / record_id → 工单/记录</code></td><td>费用归属</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_company_budget_result.allocation_id → budget_allocation</code></td><td>预算结果←配置</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_company_budget_result.county_company_id → t_power_supply_company</code></td><td>县</td><td>ai_table_relation（同构表）</td><td>实线</td></tr><tr><td><code>t_power_company_budget_result.power_station_id → t_power_company</code></td><td>所</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_company_budget_profile.company_id → t_power_company</code></td><td>画像的所</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_station_score_detail.budget_result_id → budget_result</code></td><td>评分←预算结果</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_station_score_detail.metric_key → scoring_standard.metric_key</code></td><td>指标字典</td><td>命名（文本，无 FK）</td><td>虚线</td></tr><tr><td><code>t_power_push_outage / trip / sales_volume / line_loss.power_station_id → t_power_company</code></td><td>推送→所</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_push_*.area_id → t_power_area.id</code></td><td>推送→台区</td><td>字段注释</td><td>实线</td></tr><tr><td><code>t_power_ai_metric_snapshot.scope_name → 供电所/县名</code></td><td>文本范围，无 id</td><td>无依据（只能按名字对）</td><td>红虚线</td></tr><tr><td><code>t_power_push_station_month_summary.station_name → 供电所名</code></td><td>文本范围，无 id</td><td>无依据</td><td>红虚线</td></tr><tr><td><code>t_power_ai_area_metric_snapshot.*_id → 县/所/线/台区</code></td><td>有 id 能过滤</td><td>字段注释</td><td>实线</td></tr></tbody></table>
+  </section>
+  <section id="pit">
+    <h2>6 个已知坑（都有实测证据）</h2>
+    <table><thead><tr><th>坑</th><th>说明</th><th>证据</th></tr></thead>
+    <tbody><tr><td>`t_role_data_scope` 只有 1 行</td><td>全系统「数据范围」配置只给所长（role_id=1）配了一条，`data_scope_type=1 / view_type=2` 且**没有任何字典说明取值含义**（`t_dict` 里查不到）。</td><td>`SELECT * FROM t_role_data_scope` → 1 行</td></tr><tr><td>工单表的 id 是 varchar</td><td>`t_power_work_order` 的 `power_company_id` / `power_line_id` / `power_area_id` / `applicant_id` 全是 `varchar(50)`，与 `bigint` 主键联表会直接报错。</td><td>实测 `LEFT JOIN` 报 1267：`Illegal mix of collations (utf8mb4_0900_ai_ci vs utf8mb4_general_ci)`</td></tr><tr><td>同名字段不同义</td><td>`company_id` = 供电所 id（`t_power_company`）；`county_company_id` = 县公司 id（`t_power_supply_company`）；两者都出现在预算相关表里，取值都从 1 开始。</td><td>`budget_profile.company_id=3` 是厉山供电所；`budget_result.county_company_id=3` 是某个县公司</td></tr><tr><td>AI 指标表没有 id 维度</td><td>`t_power_ai_metric_snapshot` / `_comparison` 只有 `scope_type` + `scope_key` + `scope_name` 文本，没有 `station_id`，无法 JOIN 供电所表。</td><td>`scope_name` 取值：随州市 / 曾都区供电公司 / 文峰供电所 …</td></tr><tr><td>两张「汇总表」是空的</td><td>`t_power_push_station_month_summary` 和 `t_power_push_line_loss` 都是 0 行，但文档/口径里被当成主力数据源。</td><td>`SELECT COUNT(*)` → 0</td></tr><tr><td>文档行数不可信</td><td>`docs/06-口径与数据/口径/数据地图.md` 记的是 133 张表、`t_role_data_scope` 0 行、`t_role_employee` 124 行——都是 `information_schema.table_rows` 的 InnoDB **估算值**。</td><td>实测 138 张表 / 1 行 / 139 行</td></tr></tbody></table>
+    <h2 style="margin-top:34px">行数核对（图上数字的抽样）</h2>
+    <table><thead><tr><th>表</th><th>COUNT(*)</th></tr></thead><tbody><tr><td><code>t_power_company</code></td><td>47</td></tr><tr><td><code>t_power_area</code></td><td>24892</td></tr><tr><td><code>t_power_work_order</code></td><td>6533</td></tr><tr><td><code>t_role_data_scope</code></td><td>1</td></tr><tr><td><code>t_employee</code></td><td>127</td></tr></tbody></table>
+  </section>
+</main>
+<footer>生成脚本：<code>docs/06-口径与数据/ER/build_er.py</code> · 本页无外部依赖，断网可看</footer>
+</body></html>

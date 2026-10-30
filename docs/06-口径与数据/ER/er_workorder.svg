@@ -1,0 +1,293 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2350" height="868" viewBox="0 0 2350 868">
+<rect width="100%" height="100%" fill="#fbfcfe"/>
+<text x="20" y="27" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="17" font-weight="700" fill="#1a202c">图 3 · 局部 C：工单 → 流程状态 → 审批 → 费用（预警的 project 一类在这条链上）</text>
+<text x="20" y="47" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="11.5" fill="#718096">红虚线 = 字段是 varchar（缩写 vc），与 bigint 主键联表要 CAST + COLLATE，否则 MySQL 报 1267。</text>
+<path d="M650.0 194.4 L565.0 194.4 L565.0 181.1 L480.0 181.1" fill="none" stroke="#c53030" stroke-width="1.3" stroke-dasharray="6 4"/>
+<circle cx="650.0" cy="194.4" r="2.6" fill="#fff" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="181.1" x2="480.0" y2="186.1" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="181.1" x2="480.0" y2="181.1" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="181.1" x2="480.0" y2="176.1" stroke="#c53030" stroke-width="1.3"/>
+<path d="M650.0 279.1 L565.0 279.1 L565.0 331.4 L480.0 331.4" fill="none" stroke="#c53030" stroke-width="1.3" stroke-dasharray="6 4"/>
+<circle cx="650.0" cy="279.1" r="2.6" fill="#fff" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="331.4" x2="480.0" y2="336.4" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="331.4" x2="480.0" y2="331.4" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="331.4" x2="480.0" y2="326.4" stroke="#c53030" stroke-width="1.3"/>
+<path d="M716.6 319.0 L565.0 319.0 L565.0 560.0 L372.7 560.0" fill="none" stroke="#c53030" stroke-width="1.3" stroke-dasharray="6 4"/>
+<circle cx="716.6" cy="319.0" r="2.6" fill="#fff" stroke="#c53030" stroke-width="1.3"/>
+<line x1="381.7" y1="560.0" x2="372.7" y2="565.0" stroke="#c53030" stroke-width="1.3"/>
+<line x1="381.7" y1="560.0" x2="372.7" y2="560.0" stroke="#c53030" stroke-width="1.3"/>
+<line x1="381.7" y1="560.0" x2="372.7" y2="555.0" stroke="#c53030" stroke-width="1.3"/>
+<path d="M1260.0 205.4 L1175.0 205.4 L1175.0 208.1 L1090.0 208.1" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="1260.0" cy="205.4" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1099.0" y1="208.1" x2="1090.0" y2="213.1" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1099.0" y1="208.1" x2="1090.0" y2="208.1" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1099.0" y1="208.1" x2="1090.0" y2="203.1" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M1480.0 300.0 L1480.0 400.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="1480.0" cy="300.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1480.0" y1="391.0" x2="1485.0" y2="400.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1480.0" y1="391.0" x2="1480.0" y2="400.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1480.0" y1="391.0" x2="1475.0" y2="400.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M1299.9 400.0 L1175.0 400.0 L1175.0 308.0 L1090.0 308.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="1299.9" cy="400.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1099.0" y1="308.0" x2="1090.0" y2="313.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1099.0" y1="308.0" x2="1090.0" y2="308.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1099.0" y1="308.0" x2="1090.0" y2="303.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M870.0 420.0 L870.0 319.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="870.0" cy="420.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="328.0" x2="865.0" y2="319.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="328.0" x2="870.0" y2="319.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="328.0" x2="875.0" y2="319.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M870.0 640.0 L870.0 319.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="870.0" cy="640.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="328.0" x2="865.0" y2="319.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="328.0" x2="870.0" y2="319.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="328.0" x2="875.0" y2="319.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M870.0 640.0 L870.0 540.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="870.0" cy="640.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="549.0" x2="865.0" y2="540.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="549.0" x2="870.0" y2="540.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="549.0" x2="875.0" y2="540.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M260.0 320.0 L260.0 224.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="260.0" cy="320.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="233.0" x2="255.0" y2="224.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="233.0" x2="260.0" y2="224.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="233.0" x2="265.0" y2="224.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M260.0 560.0 L260.0 478.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="260.0" cy="560.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="487.0" x2="255.0" y2="478.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="487.0" x2="260.0" y2="478.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="487.0" x2="265.0" y2="478.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M260.0 560.0 L260.0 224.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="260.0" cy="560.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="233.0" x2="255.0" y2="224.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="233.0" x2="260.0" y2="224.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="233.0" x2="265.0" y2="224.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M1700.0 198.6 L1785.0 198.6 L1785.0 195.9 L1870.0 195.9" fill="none" stroke="#4a5568" stroke-width="1.3" stroke-dasharray="6 4"/>
+<circle cx="1700.0" cy="198.6" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1861.0" y1="195.9" x2="1870.0" y2="190.9" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1861.0" y1="195.9" x2="1870.0" y2="195.9" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1861.0" y1="195.9" x2="1870.0" y2="200.9" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M2037.2 104.0 L2019.6 76.0 L2142.8 76.0 L2160.4 104.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<g><rect x="40" y="104" width="440" height="120" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M40 114 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="51" y="125" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">供电所</text>
+<text x="51" y="142" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_company</text>
+<text x="51" y="162" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="162" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="97.0" y="162" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所ID</text>
+<text x="469" y="162" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="181" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">name</text>
+<text x="118.0" y="181" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">名称</text>
+<text x="469" y="181" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(250)</text>
+<text x="51" y="200" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">47 行</text>
+</g>
+<g><rect x="40" y="320" width="440" height="158" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M40 330 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="51" y="341" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">线路</text>
+<text x="51" y="358" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_line</text>
+<text x="51" y="378" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="378" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="97.0" y="378" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">线路ID</text>
+<text x="469" y="378" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="397" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">line_code</text>
+<text x="140.0" y="397" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">线路编号</text>
+<text x="469" y="397" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(200)</text>
+<text x="51" y="416" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="416" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">power_id</text>
+<text x="139.0" y="416" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">所属供电所ID</text>
+<text x="469" y="416" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="435" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="435" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">substation_id</text>
+<text x="162.0" y="435" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">变电站ID</text>
+<text x="469" y="435" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="454" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">670 行</text>
+</g>
+<g><rect x="40" y="560" width="440" height="158" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M40 570 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="51" y="581" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">台区</text>
+<text x="51" y="598" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_area</text>
+<text x="51" y="618" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="618" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="97.0" y="618" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区ID</text>
+<text x="469" y="618" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="637" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">area_code</text>
+<text x="146.0" y="637" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区编号</text>
+<text x="469" y="637" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="51" y="656" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="656" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">line_id</text>
+<text x="122.0" y="656" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">所属线路ID</text>
+<text x="469" y="656" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="675" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="675" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">power_id</text>
+<text x="139.0" y="675" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">所属供电所ID</text>
+<text x="469" y="675" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="694" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">24892 行</text>
+</g>
+<g><rect x="650" y="104" width="440" height="215" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M650 114 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="661" y="125" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">工单 / 项目储备</text>
+<text x="661" y="142" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_work_order</text>
+<text x="661" y="162" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="162" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="162" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">工单ID</text>
+<text x="1079" y="162" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="686" y="181" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">source_id</text>
+<text x="751.0" y="181" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">原系统工单ID</text>
+<text x="1079" y="181" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="661" y="200" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="686" y="200" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">power_company_id</text>
+<text x="807.0" y="200" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电公司ID</text>
+<text x="1079" y="200" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="661" y="219" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="686" y="219" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">power_line_id</text>
+<text x="774.0" y="219" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">电力线路ID</text>
+<text x="1079" y="219" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="661" y="238" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="686" y="238" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">power_area_id</text>
+<text x="780.0" y="238" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区ID</text>
+<text x="1079" y="238" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="686" y="257" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">applicant_id</text>
+<text x="765.0" y="257" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">申请人ID</text>
+<text x="1079" y="257" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="661" y="276" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="686" y="276" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">flow_instance_id</text>
+<text x="788.0" y="276" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">流程实例ID</text>
+<text x="1079" y="276" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="295" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">6533 行；⚠ 77 列里 *_id 全是 varchar</text>
+</g>
+<g><rect x="1260" y="104" width="440" height="196" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M1260 114 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="1271" y="125" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">状态流转（流程轨迹）</text>
+<text x="1271" y="142" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_work_order_status</text>
+<text x="1271" y="162" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1296" y="162" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="1317.0" y="162" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1689" y="162" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1271" y="181" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="1296" y="181" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">work_order_id</text>
+<text x="1389.0" y="181" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">工单ID</text>
+<text x="1689" y="181" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1296" y="200" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">node_code</text>
+<text x="1370.0" y="200" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">节点编码</text>
+<text x="1689" y="200" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="1296" y="219" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">work_status</text>
+<text x="1374.0" y="219" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">工作状态</text>
+<text x="1689" y="219" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">tinyint</text>
+<text x="1271" y="238" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="1296" y="238" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">audit_task_id</text>
+<text x="1380.0" y="238" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">审批任务ID</text>
+<text x="1689" y="238" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1296" y="257" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">approval_round</text>
+<text x="1398.0" y="257" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">审批轮次</text>
+<text x="1689" y="257" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">int</text>
+<text x="1271" y="276" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">34459 行，最大的一张轨迹表</text>
+</g>
+<g><rect x="1870" y="104" width="440" height="177" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M1870 114 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="1881" y="125" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">流程节点定义</text>
+<text x="1881" y="142" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_work_order_flow_node</text>
+<text x="1881" y="162" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1906" y="162" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="1927.0" y="162" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="2299" y="162" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1906" y="181" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">node_code</text>
+<text x="1980.0" y="181" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">节点编码</text>
+<text x="2299" y="181" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="1906" y="200" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">node_name</text>
+<text x="1983.0" y="200" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">节点名称</text>
+<text x="2299" y="200" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="1906" y="219" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">node_order</text>
+<text x="1984.0" y="219" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">节点顺序</text>
+<text x="2299" y="219" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">int</text>
+<text x="1906" y="238" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">role_code</text>
+<text x="1973.0" y="238" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">审批角色编码</text>
+<text x="2299" y="238" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="1881" y="257" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">7 行；role_code 对 t_role.role_code</text>
+</g>
+<g><rect x="1260" y="400" width="440" height="158" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M1260 410 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="1271" y="421" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">审批任务</text>
+<text x="1271" y="438" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_work_order_audit_task</text>
+<text x="1271" y="458" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1296" y="458" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="1317.0" y="458" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1689" y="458" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1271" y="477" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="1296" y="477" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">work_order_id</text>
+<text x="1389.0" y="477" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">工单ID</text>
+<text x="1689" y="477" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1296" y="496" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">node_code</text>
+<text x="1370.0" y="496" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">节点编码</text>
+<text x="1689" y="496" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="1271" y="515" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="1296" y="515" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">assignee_id</text>
+<text x="1373.0" y="515" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">办理人ID</text>
+<text x="1689" y="515" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1271" y="534" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">324 行</text>
+</g>
+<g><rect x="650" y="420" width="440" height="120" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M650 430 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="661" y="441" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">设备缺陷治理记录</text>
+<text x="661" y="458" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_work_order_record</text>
+<text x="661" y="478" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="478" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="478" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1079" y="478" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="497" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="497" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">work_order_id</text>
+<text x="779.0" y="497" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">工单ID</text>
+<text x="1079" y="497" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="516" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">4221 行</text>
+</g>
+<g><rect x="650" y="640" width="440" height="158" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M650 650 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="661" y="661" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">工单预算费用</text>
+<text x="661" y="678" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_work_cost</text>
+<text x="661" y="698" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="698" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="698" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1079" y="698" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="717" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="717" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">work_order_id</text>
+<text x="779.0" y="717" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">工单ID</text>
+<text x="1079" y="717" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="736" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="736" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">work_order_record_id</text>
+<text x="823.0" y="736" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">项目明细ID</text>
+<text x="1079" y="736" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="755" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="755" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">cost_item_id</text>
+<text x="766.0" y="755" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">预算项ID</text>
+<text x="1079" y="755" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="774" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">18542 行</text>
+</g>
+<rect x="503.0" y="174.8" width="124.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="186.2" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">power_company_id vc</text>
+<rect x="512.0" y="292.2" width="106.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="303.8" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">power_line_id vc</text>
+<rect x="512.0" y="426.5" width="106.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="438.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">power_area_id vc</text>
+<rect x="1131.0" y="193.8" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1175.0" y="205.2" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">work_order_id</text>
+<rect x="1436.0" y="335.0" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1480.0" y="346.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">audit_task_id</text>
+<rect x="1131.0" y="341.0" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1175.0" y="352.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">work_order_id</text>
+<rect x="826.0" y="354.5" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="870.0" y="366.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">work_order_id</text>
+<rect x="826.0" y="464.5" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="870.0" y="476.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">work_order_id</text>
+<rect x="838.0" y="575.0" width="64.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="870.0" y="586.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">record_id</text>
+<rect x="231.0" y="257.0" width="58.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="260.0" y="268.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">power_id</text>
+<rect x="234.0" y="504.0" width="52.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="260.0" y="515.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">line_id</text>
+<rect x="231.0" y="377.0" width="58.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="260.0" y="388.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">power_id</text>
+<rect x="1753.0" y="184.2" width="64.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1785.0" y="195.8" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">node_code</text>
+<rect x="1944.2" y="63.0" width="118.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="2003.2" y="74.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">role_code → t_role</text>
+<text x="20" y="852" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#718096">—— 实线=注释/ai_table_relation 写明   ---- 虚线=仅命名一致需复核   ○ =1 端   ⊰ =多端   红框=已知问题</text>
+</svg>

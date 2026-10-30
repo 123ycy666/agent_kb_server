@@ -1,0 +1,284 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2350" height="907" viewBox="0 0 2350 907">
+<rect width="100%" height="100%" fill="#fbfcfe"/>
+<text x="20" y="27" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="17" font-weight="700" fill="#1a202c">图 1 · 局部 A：组织 → 角色 → 权限 → 数据主体（「谁能看哪些所」的全部原料）</text>
+<text x="20" y="47" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="11.5" fill="#718096">四个环节：员工在哪个部门、部门下有哪些所、角色是谁、范围配了什么。</text>
+<path d="M207.2 104.0 L189.6 76.0 L312.8 76.0 L330.4 104.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<path d="M650.0 189.1 L565.0 189.1 L565.0 186.4 L480.0 186.4" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="650.0" cy="189.1" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="186.4" x2="480.0" y2="191.4" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="186.4" x2="480.0" y2="186.4" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="186.4" x2="480.0" y2="181.4" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M480.0 186.4 L565.0 186.4 L565.0 189.1 L650.0 189.1" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="480.0" cy="186.4" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="641.0" y1="189.1" x2="650.0" y2="184.1" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="641.0" y1="189.1" x2="650.0" y2="189.1" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="641.0" y1="189.1" x2="650.0" y2="194.1" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M1035.6 360.0 L1175.0 360.0 L1175.0 243.0 L1314.4 243.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="1035.6" cy="360.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1305.4" y1="243.0" x2="1314.4" y2="238.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1305.4" y1="243.0" x2="1314.4" y2="243.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1305.4" y1="243.0" x2="1314.4" y2="248.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M870.0 360.0 L870.0 281.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="870.0" cy="360.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="290.0" x2="865.0" y2="281.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="290.0" x2="870.0" y2="281.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="870.0" y1="290.0" x2="875.0" y2="281.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M1480.0 360.0 L1480.0 243.0" fill="none" stroke="#c53030" stroke-width="1.3" />
+<circle cx="1480.0" cy="360.0" r="2.6" fill="#fff" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1480.0" y1="252.0" x2="1475.0" y2="243.0" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1480.0" y1="252.0" x2="1480.0" y2="243.0" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1480.0" y1="252.0" x2="1485.0" y2="243.0" stroke="#c53030" stroke-width="1.3"/>
+<path d="M1924.4 360.0 L1785.0 360.0 L1785.0 243.0 L1645.6 243.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="1924.4" cy="360.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1654.6" y1="243.0" x2="1645.6" y2="248.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1654.6" y1="243.0" x2="1645.6" y2="243.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="1654.6" y1="243.0" x2="1645.6" y2="238.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M2090.0 360.0 L2090.0 300.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="2090.0" cy="360.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="2090.0" y1="309.0" x2="2085.0" y2="300.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="2090.0" y1="309.0" x2="2090.0" y2="300.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="2090.0" y1="309.0" x2="2095.0" y2="300.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M2037.2 104.0 L2019.6 76.0 L2142.8 76.0 L2160.4 104.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<path d="M260.0 360.0 L260.0 262.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="260.0" cy="360.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="271.0" x2="255.0" y2="262.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="271.0" x2="260.0" y2="262.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="271.0" x2="265.0" y2="262.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M260.0 660.0 L260.0 262.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="260.0" cy="660.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="271.0" x2="255.0" y2="262.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="271.0" x2="260.0" y2="262.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="271.0" x2="265.0" y2="262.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M650.0 736.4 L565.0 736.4 L565.0 741.6 L480.0 741.6" fill="none" stroke="#4a5568" stroke-width="1.3" stroke-dasharray="6 4"/>
+<circle cx="650.0" cy="736.4" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="741.6" x2="480.0" y2="746.6" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="741.6" x2="480.0" y2="741.6" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="741.6" x2="480.0" y2="736.6" stroke="#4a5568" stroke-width="1.3"/>
+<g><rect x="40" y="104" width="440" height="158" rx="7" fill="#fff" stroke="#2b6cb0" stroke-width="1.4"/>
+<path d="M40 114 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#eaf2fd"/>
+<text x="51" y="125" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2b6cb0">部门（组织树）</text>
+<text x="51" y="142" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_department</text>
+<text x="51" y="162" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="162" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">department_id</text>
+<text x="170.0" y="162" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">部门ID</text>
+<text x="469" y="162" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="181" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">department_name</text>
+<text x="191.0" y="181" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">部门名称</text>
+<text x="469" y="181" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="51" y="200" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="200" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">parent_id</text>
+<text x="140.0" y="200" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">父级部门ID</text>
+<text x="469" y="200" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="219" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="219" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">manager_id</text>
+<text x="154.0" y="219" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">部门负责人</text>
+<text x="469" y="219" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="238" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2b6cb0" opacity="0.92">52 行：1=市公司，10-13=县公司，14+=所</text>
+</g>
+<g><rect x="650" y="104" width="440" height="177" rx="7" fill="#fff" stroke="#2b6cb0" stroke-width="1.4"/>
+<path d="M650 114 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#eaf2fd"/>
+<text x="661" y="125" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2b6cb0">员工（登录源=HR）</text>
+<text x="661" y="142" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_employee</text>
+<text x="661" y="162" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="162" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">employee_id</text>
+<text x="769.0" y="162" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">员工ID</text>
+<text x="1079" y="162" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="686" y="181" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">login_name</text>
+<text x="762.0" y="181" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">登录账号</text>
+<text x="1079" y="181" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(30)</text>
+<text x="686" y="200" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">actual_name</text>
+<text x="767.0" y="200" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">员工姓名</text>
+<text x="1079" y="200" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(30)</text>
+<text x="661" y="219" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="219" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">department_id</text>
+<text x="780.0" y="219" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">部门ID</text>
+<text x="1079" y="219" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="686" y="238" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">administrator_flag</text>
+<text x="801.0" y="238" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">是否超管</text>
+<text x="1079" y="238" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">tinyint</text>
+<text x="661" y="257" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2b6cb0" opacity="0.92">127 行；administrator_flag=1 只 2 人</text>
+</g>
+<g><rect x="1260" y="104" width="440" height="139" rx="7" fill="#fff" stroke="#2b6cb0" stroke-width="1.4"/>
+<path d="M1260 114 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#eaf2fd"/>
+<text x="1271" y="125" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2b6cb0">角色</text>
+<text x="1271" y="142" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_role</text>
+<text x="1271" y="162" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1296" y="162" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">role_id</text>
+<text x="1345.0" y="162" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">角色ID</text>
+<text x="1689" y="162" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1296" y="181" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">role_code</text>
+<text x="1363.0" y="181" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">角色编码</text>
+<text x="1689" y="181" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(500)</text>
+<text x="1296" y="200" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">role_name</text>
+<text x="1366.0" y="200" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">角色名称</text>
+<text x="1689" y="200" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(20)</text>
+<text x="1271" y="219" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2b6cb0" opacity="0.92">7 个：sz/cto/yxb/xgscwb/sgscwb/master/codea</text>
+</g>
+<g><rect x="1870" y="104" width="440" height="196" rx="7" fill="#fff" stroke="#4a5568" stroke-width="1.4"/>
+<path d="M1870 114 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#f2f4f7"/>
+<text x="1881" y="125" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#4a5568">菜单/按钮（功能权限）</text>
+<text x="1881" y="142" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_menu</text>
+<text x="1881" y="162" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1906" y="162" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">menu_id</text>
+<text x="1964.0" y="162" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">菜单ID</text>
+<text x="2299" y="162" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1906" y="181" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">menu_name</text>
+<text x="1985.0" y="181" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">菜单名称</text>
+<text x="2299" y="181" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(200)</text>
+<text x="1906" y="200" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">menu_type</text>
+<text x="1978.0" y="200" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">类型</text>
+<text x="2299" y="200" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">int</text>
+<text x="1881" y="219" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="1906" y="219" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">parent_id</text>
+<text x="1970.0" y="219" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">父菜单ID</text>
+<text x="2299" y="219" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1906" y="238" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">api_perms</text>
+<text x="1976.0" y="238" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">后端权限串</text>
+<text x="2299" y="238" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(5000)</text>
+<text x="1906" y="257" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">web_perms</text>
+<text x="1982.0" y="257" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">前端权限串</text>
+<text x="2299" y="257" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(5000)</text>
+<text x="1881" y="276" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4a5568" opacity="0.92">167 行：98 个按钮带 api_perms</text>
+</g>
+<g><rect x="40" y="360" width="440" height="139" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M40 370 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="51" y="381" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">县级供电公司</text>
+<text x="51" y="398" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_supply_company</text>
+<text x="51" y="418" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="418" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="97.0" y="418" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">县公司ID</text>
+<text x="469" y="418" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="437" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">name</text>
+<text x="118.0" y="437" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">名称</text>
+<text x="469" y="437" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(250)</text>
+<text x="51" y="456" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="456" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">department_id</text>
+<text x="170.0" y="456" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">部门ID</text>
+<text x="469" y="456" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="475" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">4 行（曾都/随县/广水/高新）</text>
+</g>
+<g><rect x="650" y="360" width="440" height="139" rx="7" fill="#fff" stroke="#2b6cb0" stroke-width="1.4"/>
+<path d="M650 370 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#eaf2fd"/>
+<text x="661" y="381" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2b6cb0">角色-员工</text>
+<text x="661" y="398" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_role_employee</text>
+<text x="661" y="418" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="418" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="418" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1079" y="418" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="437" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="437" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">role_id</text>
+<text x="735.0" y="437" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">角色ID</text>
+<text x="1079" y="437" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="456" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="456" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">employee_id</text>
+<text x="769.0" y="456" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">员工ID</text>
+<text x="1079" y="456" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="475" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2b6cb0" opacity="0.92">139 行；一人可挂多角色</text>
+</g>
+<g><rect x="1260" y="360" width="440" height="158" rx="7" fill="#fff" stroke="#c53030" stroke-width="2"/>
+<path d="M1260 370 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#fdeaea"/>
+<text x="1271" y="381" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#c53030">角色的数据范围</text>
+<text x="1271" y="398" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_role_data_scope</text>
+<text x="1271" y="418" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1296" y="418" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="1317.0" y="418" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1689" y="418" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1271" y="437" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="1296" y="437" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">role_id</text>
+<text x="1345.0" y="437" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">角色ID</text>
+<text x="1689" y="437" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1271" y="456" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="1296" y="456" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">data_scope_type</text>
+<text x="1402.0" y="456" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">数据范围类型</text>
+<text x="1689" y="456" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">int</text>
+<text x="1271" y="475" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="1296" y="475" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">view_type</text>
+<text x="1361.0" y="475" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">可见范围类型</text>
+<text x="1689" y="475" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">int</text>
+<text x="1271" y="494" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#c53030" opacity="0.92">⚠ 只有 1 行（role_id=1 所长），取值无字典说明</text>
+</g>
+<g><rect x="1870" y="360" width="440" height="139" rx="7" fill="#fff" stroke="#4a5568" stroke-width="1.4"/>
+<path d="M1870 370 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#f2f4f7"/>
+<text x="1881" y="381" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#4a5568">角色-菜单</text>
+<text x="1881" y="398" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_role_menu</text>
+<text x="1881" y="418" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1906" y="418" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">role_menu_id</text>
+<text x="1992.0" y="418" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="2299" y="418" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1881" y="437" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="1906" y="437" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">role_id</text>
+<text x="1955.0" y="437" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">角色ID</text>
+<text x="2299" y="437" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1881" y="456" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="1906" y="456" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">menu_id</text>
+<text x="1964.0" y="456" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">菜单ID</text>
+<text x="2299" y="456" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1881" y="475" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4a5568" opacity="0.92">85 行：每角色 8~24 个</text>
+</g>
+<g><rect x="40" y="660" width="440" height="177" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M40 670 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="51" y="681" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">供电所（47 个数据主体）</text>
+<text x="51" y="698" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_company</text>
+<text x="51" y="718" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="718" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="97.0" y="718" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所ID</text>
+<text x="469" y="718" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="737" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">name</text>
+<text x="118.0" y="737" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">名称</text>
+<text x="469" y="737" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(250)</text>
+<text x="76" y="756" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">code</text>
+<text x="115.0" y="756" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">编号</text>
+<text x="469" y="756" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(50)</text>
+<text x="51" y="775" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="775" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">department_id</text>
+<text x="170.0" y="775" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">部门ID</text>
+<text x="469" y="775" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="794" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="76" y="794" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">parent_id</text>
+<text x="140.0" y="794" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">上级局(未关联)</text>
+<text x="469" y="794" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="813" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">47 行；parent_id 注释「暂无关联」</text>
+</g>
+<g><rect x="650" y="660" width="440" height="139" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M650 670 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="661" y="681" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">变电站</text>
+<text x="661" y="698" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_substation</text>
+<text x="661" y="718" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="718" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="718" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">变电站ID</text>
+<text x="1079" y="718" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="686" y="737" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">name</text>
+<text x="728.0" y="737" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">名称</text>
+<text x="1079" y="737" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(200)</text>
+<text x="661" y="756" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="686" y="756" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">company_id</text>
+<text x="765.0" y="756" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">所属公司(?)</text>
+<text x="1079" y="756" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="775" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">11 行；company_id 指所还是县公司，注释没写</text>
+</g>
+<rect x="129.2" y="63.0" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="173.2" y="74.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">parent_id 自关联</text>
+<rect x="494.0" y="174.8" width="142.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="186.2" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">employee.department_id</text>
+<rect x="497.0" y="174.8" width="136.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="186.2" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">department.manager_id</text>
+<rect x="1149.0" y="288.5" width="52.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1175.0" y="300.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">role_id</text>
+<rect x="832.0" y="305.5" width="76.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="870.0" y="317.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">employee_id</text>
+<rect x="1454.0" y="286.5" width="52.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1480.0" y="298.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">role_id</text>
+<rect x="1759.0" y="288.5" width="52.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1785.0" y="300.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">role_id</text>
+<rect x="2064.0" y="315.0" width="52.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="2090.0" y="326.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">menu_id</text>
+<rect x="1944.2" y="63.0" width="118.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="2003.2" y="74.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">menu.parent_id 自关联</text>
+<rect x="216.0" y="296.0" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="260.0" y="307.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">department_id</text>
+<rect x="216.0" y="446.0" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="260.0" y="457.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">department_id</text>
+<rect x="524.0" y="726.0" width="82.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="737.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">company_id ?</text>
+<text x="20" y="891" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#718096">—— 实线=注释/ai_table_relation 写明   ---- 虚线=仅命名一致需复核   ○ =1 端   ⊰ =多端   红框=已知问题</text>
+</svg>

@@ -219,14 +219,31 @@ def metrics():
     return [] if _scope() else _ensure()['metrics']
 
 
+def table_list_menu():
+    """**常驻**用的表清单：只给「表名 ｜ 中文名 ｜ 一句话」。
+
+    为什么不再把字段全塞进提示词（2026-10-30 实测）：
+      `table_menu()` 26 张表 = 22,606 字符，占 data 模式 system 的 72%；
+      而同一批问题"只给清单"时，模型选表、选字段、写 WHERE 条件**全对**
+      （A/B 见 output/test_results/2026-10-29-个人库与步骤日志/ab-table-catalog.txt）。
+      字段明细改由工具 `describe_table` 按需取。
+    """
+    out = []
+    for t in table_list():
+        desc = (t['business_desc'] or '').strip().replace('\n', ' ')
+        if len(desc) > 50:
+            desc = desc[:50] + '…'
+        out.append('- %s ｜ %s ｜ %s' % (t['table_name'], t['table_cn_name'] or '', desc))
+    return '\n'.join(out)
+
+
 def table_menu():
-    """表目录 + 字段目录 + 指标口径，全部照搬他们表里的内容。"""
+    """表目录 + 字段目录 + 指标口径（**按需**用：`describe_table` 工具与排障）。"""
     data = _ensure()
     out = []
     for t in table_list():
-        n = data.get('counts', {}).get(t['table_name'])
-        line = '- %s ｜ %s ｜ 当前 %s 行 ｜ %s' % (t['table_name'], t['table_cn_name'] or '',
-                                             '空' if n == 0 else (n if n is not None else '?'), t['business_desc'])
+        line = '- %s ｜ %s ｜ %s' % (t['table_name'], t['table_cn_name'] or '',
+                                     t['business_desc'])
         if t['note']:
             line += ' ｜ 注意：' + t['note']
         cs = data['cols'].get(t['table_name']) or {}

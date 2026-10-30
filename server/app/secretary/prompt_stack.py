@@ -31,7 +31,7 @@ L0_REDLINES = (
 CONFLICT_NOTE = ('【装配说明】以下内容按优先级排列：冲突时以序号小的为准 —— '
                  'L0 红线 > L1 身份 > L2 模式 > L3 业务口径 > L6 个人偏好 > L4 会话人设 > L5 技能。')
 
-ORDER = ('L0', 'L1', 'L2', 'L3', 'L6', 'L4', 'L5')
+ORDER = ('L0', 'S1', 'L1', 'L2', 'L3', 'L6', 'L4', 'S4', 'L5')
 MODES_WITH_BUSINESS = ('data', 'doc')
 
 BUSINESS_KEYS = (('business_rules', 'L3 业务规则'),
@@ -48,11 +48,18 @@ def _block(title: str, body: str) -> str:
 
 
 def build(pack: dict, *, mode: str = 'data', persona: str | None = None,
-          prefs: dict | None = None, skill: str | None = None) -> dict:
+          prefs: dict | None = None, skill: str | None = None,
+          priority: str | None = None, answer_format: str | None = None) -> dict:
     """按模式拼出最终 system 提示词。
 
     返回 {'system': str, 'layers': [{'id','title','chars','source'}]}
     layers 供日志与验收用（G6：general 请求里不许出现 L3）。
+
+    ★ 2026-10-30 新增两段（都是**从 user 消息搬进 system**的"行为纪律"）：
+      S1 谁说了算 —— V2 装配曾把 legacy 的 `RULES_PRIORITY` 丢掉，导致
+        「本轮统计范围」和 system 里【时间处理】撞车时没有裁判；
+      S4 作答格式 —— 汇报口吻/交卷检查原先塞在用户消息里，每轮都算用户输入，
+        本质是纪律，应当和红线同位。
     """
     layers: list[dict] = []
     parts: list[str] = []
@@ -65,6 +72,8 @@ def build(pack: dict, *, mode: str = 'data', persona: str | None = None,
         parts.append(_block(title, t))
 
     add('L0', 'L0 诚信与安全红线', L0_REDLINES, 'code')
+    if priority:
+        add('S1', 'S1 谁说了算（冲突时按此顺序）', priority, 'code')
 
     prompts = (pack or {}).get('prompts') or {}
     add('L1', 'L1 身份', prompts.get('identity', ''), 'pack:prompts/identity.md')
@@ -85,6 +94,9 @@ def build(pack: dict, *, mode: str = 'data', persona: str | None = None,
 
     if persona:
         add('L4', 'L4 本会话人设（员工自己设置）', persona, 'session')
+
+    if answer_format:
+        add('S4', 'S4 作答格式（汇报口吻 + 交卷检查）', answer_format, 'code')
 
     if skill:
         add('L5', 'L5 技能说明', skill, 'pack:skills')

@@ -32,38 +32,49 @@ def write_docx(path: Path, title: str, sections: list[tuple[str, str]],
 
     sections：[(小节标题, 正文)]，正文里换行即分段。
     tables  ：[(表标题, 表头, 行)]，表标题为空就不写标题。
+
+    ★ 版式默认值**运行时**从站点包读（`doc_defaults.yml`），不再在 import 时改写模块常量：
+      import 期改写等于"部署文件改代码"，改了要重启，而且测不出差异。
     """
     import docx
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
     from docx.shared import Pt
 
+    d = _dd("docx")
+    body_font = d.get("body_font_cn") or DOC_FONT
+    body_fallback = d.get("body_font_fallback") or DOC_FONT_FALLBACK
+    title_font = d.get("title_font_cn") or TITLE_FONT
+    body_pt = float(d.get("body_pt") or BODY_PT)
+    title_pt = float(d.get("title_pt") or TITLE_PT)
+    line_pt = float(d.get("line_spacing_pt") or LINE_SPACING_PT)
+
     doc = docx.Document()
 
     # 默认样式：中文字体必须单独设 eastAsia，只设 font.name 中文不生效（老坑）
     style = doc.styles["Normal"]
-    style.font.name = DOC_FONT_FALLBACK
-    style.font.size = Pt(BODY_PT)
-    style.element.rPr.rFonts.set(qn("w:eastAsia"), DOC_FONT)
+    style.font.name = body_fallback
+    style.font.size = Pt(body_pt)
+    style.element.rPr.rFonts.set(qn("w:eastAsia"), body_font)
 
     t = doc.add_paragraph()
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = t.add_run(title)
     run.bold = True
-    run.font.size = Pt(TITLE_PT)
-    run.font.name = TITLE_FONT
-    run._element.rPr.rFonts.set(qn("w:eastAsia"), TITLE_FONT)
+    run.font.size = Pt(title_pt)
+    run.font.name = title_font
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), title_font)
 
     for head, body in sections:
         if head:
             h = doc.add_paragraph()
             hr = h.add_run(head)
             hr.bold = True
-            hr.font.size = Pt(BODY_PT)
+            hr.font.size = Pt(body_pt)
         for para in [p for p in (body or "").split("\n") if p.strip()]:
             p = doc.add_paragraph(para.strip())
-            p.paragraph_format.first_line_indent = Pt(BODY_PT * 2)   # 首行缩进 2 字
-            p.paragraph_format.line_spacing = Pt(LINE_SPACING_PT)
+            p.paragraph_format.first_line_indent = Pt(body_pt * 2)   # 首行缩进 2 字
+            p.paragraph_format.line_spacing = Pt(line_pt)
 
     for cap, header, rows in (tables or []):
         if cap:
@@ -102,12 +113,16 @@ def write_xlsx(path: Path, sheets: list[tuple[str, list[str], list[list]]]) -> P
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
+    x = _dd("xlsx")
+    border_color = str(x.get("border_color") or XLSX_BORDER_COLOR)
+    head_color = str(x.get("header_fill") or XLSX_HEAD_FILL)
+
     wb = Workbook()
     wb.remove(wb.active)
 
-    thin = Side(style="thin", color=XLSX_BORDER_COLOR)
+    thin = Side(style="thin", color=border_color)
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    head_fill = PatternFill("solid", fgColor=XLSX_HEAD_FILL)
+    head_fill = PatternFill("solid", fgColor=head_color)
 
     for name, header, rows in sheets:
         ws = wb.create_sheet(title=(name or "数据")[:28])
@@ -137,7 +152,7 @@ def write_xlsx(path: Path, sheets: list[tuple[str, list[str], list[list]]]) -> P
     return path
 
 
-# ── Site pack override (P3, 2026-10-21): _platform/doc_defaults.yml ─────
+# ── 站点包覆盖（运行时读，不在 import 期改常量）────────────────────
 def site_pack_dd() -> dict:
     try:
         from app.secretary import site_pack
@@ -146,28 +161,13 @@ def site_pack_dd() -> dict:
         return {}
 
 
-def _apply_pack_doc_defaults() -> None:
+def _dd(part: str) -> dict:
+    """取某一类（docx/xlsx）的默认值：代码常量 ← 站点包覆盖。
+
+    ⚠️ 必须在**调用时**读：站点包是按目录 mtime 缓存的，改完 yml 下一次调用就生效；
+       原来在 import 期把值写进模块全局 ⇒ 改完必须重启，而且没法测。
+    """
     try:
-        from app.secretary import site_pack
-        dx = ((site_pack.load(strict=False) or {}).get("doc_defaults") or {}).get("docx") or {}
-    except Exception:                              # noqa: BLE001
-        return
-    mapping = {"body_font_cn": "DOC_FONT", "body_font_fallback": "DOC_FONT_FALLBACK",
-               "title_font_cn": "TITLE_FONT", "body_pt": "BODY_PT",
-               "title_pt": "TITLE_PT", "line_spacing_pt": "LINE_SPACING_PT"}
-    for key, gname in mapping.items():
-        val = dx.get(key)
-        if val is None or gname not in globals():
-            continue
-        globals()[gname] = val
-    dr = (site_pack_dd() or {})
-    xx = dr.get('xlsx') or {}
-    xmap = {'header_fill': 'XLSX_HEAD_FILL', 'border_color': 'XLSX_BORDER_COLOR'}
-    for key, gname in xmap.items():
-        val = xx.get(key)
-        if val is None or gname not in globals():
-            continue
-        globals()[gname] = str(val)
-
-
-_apply_pack_doc_defaults()
+        return dict((site_pack_dd() or {}).get(part) or {})
+    except Exception:                          # noqa: BLE001
+        return {}

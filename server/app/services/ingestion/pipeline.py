@@ -37,6 +37,17 @@ from app.services.tag_governance import normalize_tags, sync_tag_vocabulary
 
 logger = logging.getLogger(__name__)
 
+# ── 文档类型判定（2026-10-30）────────────────────────────────
+# rule = 规则/口径：每轮注入给模型（不进向量检索）
+# doc  = 资料：走检索，命中后标出处
+# 判定按**文件名**做，前端不用多传字段（少一个前后端约定就少一处不一致）。
+_RULE_NAME_HINTS = ('规则', '口径', '标准', '要求', '规范', '制度', '流程', '办法')
+
+
+def _doc_type_of(filename: str) -> str:
+    name = str(filename or '')
+    return 'rule' if any(h in name for h in _RULE_NAME_HINTS) else 'doc'
+
 
 def _safe_unlink(path: Path) -> None:
     """尽力删除落盘文件，**绝不抛异常**。
@@ -262,6 +273,8 @@ def ingest_document(
         chunk_count=len(drafts),
         # ⚠️ 不显式 public 一律 private —— 不存在「默认公开」
         visibility="public" if is_public else "private",
+        # 2026-10-30：按文件名判"规则 / 资料"，决定后续是注入还是检索（前端不用多传字段）
+        doc_type=_doc_type_of(safe_name),
         tags=tags_list,
         owner_id=actor.user_id,
         uploaded_by_app=None,

@@ -294,8 +294,9 @@ def main() -> int:
         importlib.reload(PR)
         importlib.reload(DG)
         chk('P3-5 换包即换预设问题（1 条）', len(PR.PRESETS) == 1, str(len(PR.PRESETS)))
-        chk('P3-5 换包即换公文默认格式', DG.BODY_PT == 14 and DG.DOC_FONT == 'DemoFont',
-            '%s/%s' % (DG.DOC_FONT, DG.BODY_PT))
+        chk('P3-5 换包即换公文默认格式',
+            float(DG._dd('docx').get('body_pt') or 0) == 14
+            and DG._dd('docx').get('body_font_cn') == 'DemoFont', str(DG._dd('docx')))
     finally:
         if old_e5 is None:
             os.environ.pop('SITE_PACK_DIR', None)
@@ -319,20 +320,27 @@ def main() -> int:
     chk('P3-6 report default_station from pack', RP._default_station() == '环潭供电所',
         RP._default_station())
     chk('P3-6 report identity from pack', '办公智能助手' in RP.BASE_SYSTEM)
-    chk('P3-6 xlsx colors from pack', DG.XLSX_HEAD_FILL == 'DDEBF7', DG.XLSX_HEAD_FILL)
+    chk('P3-6 xlsx colors from pack', DG._dd('xlsx').get('header_fill') == 'DDEBF7',
+        str(DG._dd('xlsx')))
     old_e6 = os.environ.get('SITE_PACK_DIR'); old_s6 = os.environ.get('SITE')
     os.environ['SITE_PACK_DIR'] = str(fake); os.environ['SITE'] = 'demo'
     try:
-        importlib.reload(DG)
-        chk('P3-6 换包即换 xlsx 表头色', DG.XLSX_HEAD_FILL == 'AAAFFF', DG.XLSX_HEAD_FILL)
-        chk('P3-6 换包即换边框色', DG.XLSX_BORDER_COLOR == '111111', DG.XLSX_BORDER_COLOR)
+        # 2026-10-30：版式默认值改成**运行时**从站点包读（`_dd()`），
+        # 不再在 import 期改写模块常量 —— 所以这里验的是 _dd()，并顺带钉死
+        # "常量不许被 import 改掉"（否则就等于部署文件偷偷改代码）。
+        chk('P3-6 换包即换 xlsx 表头色', DG._dd('xlsx').get('header_fill') == 'AAAFFF',
+            str(DG._dd('xlsx')))
+        chk('P3-6 换包即换边框色', DG._dd('xlsx').get('border_color') == '111111',
+            str(DG._dd('xlsx')))
+        chk('P3-6 import 不再改写代码常量', DG.XLSX_HEAD_FILL == 'DDEBF7', DG.XLSX_HEAD_FILL)
     finally:
         if old_e6 is None: os.environ.pop('SITE_PACK_DIR', None)
         else: os.environ['SITE_PACK_DIR'] = old_e6
         if old_s6 is None: os.environ.pop('SITE', None)
         else: os.environ['SITE'] = old_s6
         importlib.reload(DG)
-    chk('P3-6 恢复后 xlsx 表头色回到 DDEBF7', DG.XLSX_HEAD_FILL == 'DDEBF7', DG.XLSX_HEAD_FILL)
+    chk('P3-6 恢复后 xlsx 表头色回到 DDEBF7', DG._dd('xlsx').get('header_fill') == 'DDEBF7',
+        str(DG._dd('xlsx')))
 
     from app.secretary import time_scope as TSR
     T_STRIP = tuple(TSR._STRIP_HEAD)

@@ -55,17 +55,24 @@ def judge_mode(question: str, has_files: bool = False) -> str:
 
 
 def system(mode: str, legacy, today=None, persona: str | None = None,
-           prefs: dict | None = None) -> str:
+           prefs: dict | None = None, priority: str | None = None,
+           answer_format: str | None = None, personal_rules: str | None = None) -> str:
     """该模式的 system 提示词。
 
     legacy 是 agent._system（旧装配），用于回退——签名 legacy(today)。
+    priority / answer_format / personal_rules：分别对应 S1「谁说了算」、
+    S4「作答格式」、S7「我的规则」，由调用方（agent.ask）传入，避免这里反向依赖 agent。
     """
     p = pack()
     if not enabled() or not p or not p.get('prompts'):
         return legacy(today)
     try:
         from app.secretary import prompt_stack, semantic
-        head = prompt_stack.build(p, mode=mode, persona=persona, prefs=prefs)['system']
+        head = prompt_stack.build(p, mode=mode, persona=persona, prefs=prefs,
+                                  priority=priority,
+                                  answer_format=answer_format)['system']
+        if personal_rules:
+            head += '\n\n' + personal_rules
         head += ('\n\n今天的日期是 %s。所有「停留天数 / 截至今天」一律按这一天算，'
                  '不要拿数据里的时间当今天。' % (today or time.strftime('%Y-%m-%d')))
         # 通用模式**不塞**业务码表与数据表目录：那是查数专用上下文，
@@ -78,8 +85,12 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
             except Exception:                      # noqa: BLE001
                 pass
             try:
+                # ★ 2026-10-30：常驻只给「表名 + 中文名 + 一句话」（约 1.5K）。
+                #   字段明细走 describe_table 工具按需取（原 table_menu 26 张表 = 22.6K，
+                #   占 system 的 72%；A/B 实测只给清单时选表全对）。
                 head += ('\n\n【可用数据表（只能查这些，字典外的表一律不可用）】\n'
-                         + semantic.table_menu())
+                         '字段明细请用 describe_table(表名) 现取，不要凭印象写字段。\n'
+                         + semantic.table_list_menu())
             except Exception:                      # noqa: BLE001
                 pass
         return head

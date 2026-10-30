@@ -82,6 +82,15 @@ class Document(Base, TimestampMixin):
         String(16), nullable=False, default="private", server_default="private"
     )
 
+    # ── 文档类型（2026-10-30）──────────────────────────────────
+    # rule = 规则/口径（每轮注入给模型，不参与向量检索）
+    # doc  = 资料（走检索，按相关度召回）
+    # 判定由服务端按文件名做（`services/ingestion/pipeline.py` 里的 `_doc_type_of`），
+    # 前端不需要多传字段。
+    doc_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="doc", server_default="doc"
+    )
+
     # ── 标签（标签名数组）────────────────────────────────────
     # ⚠️ server_default 必须用 text() 包裹，且字面量带单引号：
     #    PostgreSQL 的 ARRAY 空数组字面量是 '{}'；

@@ -1,0 +1,294 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1740" height="1049" viewBox="0 0 1740 1049">
+<rect width="100%" height="100%" fill="#fbfcfe"/>
+<text x="20" y="27" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="17" font-weight="700" fill="#1a202c">图 4 · 局部 D：所 → 台区 → 推送明细 → 指标（线损/可靠性/售电量在这条链上）</text>
+<text x="20" y="47" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="11.5" fill="#718096">能 JOIN 的（实线）与只能按名字对上的（红虚线）混在一起——这就是「按所过滤」真正的难度。</text>
+<path d="M650.0 145.6 L565.0 145.6 L565.0 142.9 L480.0 142.9" fill="none" stroke="#c53030" stroke-width="1.3" stroke-dasharray="6 4"/>
+<circle cx="650.0" cy="145.6" r="2.6" fill="#fff" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="142.9" x2="480.0" y2="147.9" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="142.9" x2="480.0" y2="142.9" stroke="#c53030" stroke-width="1.3"/>
+<line x1="489.0" y1="142.9" x2="480.0" y2="137.9" stroke="#c53030" stroke-width="1.3"/>
+<path d="M668.8 300.0 L565.0 300.0 L565.0 209.0 L437.0 209.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="668.8" cy="300.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="446.0" y1="209.0" x2="437.0" y2="214.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="446.0" y1="209.0" x2="437.0" y2="209.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="446.0" y1="209.0" x2="437.0" y2="204.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M755.1 480.0 L587.0 480.0 L587.0 209.0 L361.1 209.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="755.1" cy="480.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="370.1" y1="209.0" x2="361.1" y2="214.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="370.1" y1="209.0" x2="361.1" y2="209.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="370.1" y1="209.0" x2="361.1" y2="204.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M789.6 660.0 L609.0 660.0 L609.0 209.0 L330.7 209.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="789.6" cy="660.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="339.7" y1="209.0" x2="330.7" y2="214.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="339.7" y1="209.0" x2="330.7" y2="209.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="339.7" y1="209.0" x2="330.7" y2="204.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M814.9 840.0 L631.0 840.0 L631.0 209.0 L315.1 209.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="814.9" cy="840.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="324.1" y1="209.0" x2="315.1" y2="214.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="324.1" y1="209.0" x2="315.1" y2="209.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="324.1" y1="209.0" x2="315.1" y2="204.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M650.0 396.9 L565.0 396.9 L565.0 410.6 L480.0 410.6" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="650.0" cy="396.9" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="410.6" x2="480.0" y2="415.6" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="410.6" x2="480.0" y2="410.6" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="489.0" y1="410.6" x2="480.0" y2="405.6" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M714.8 660.0 L595.0 660.0 L595.0 517.0 L433.9 517.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="714.8" cy="660.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="442.9" y1="517.0" x2="433.9" y2="522.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="442.9" y1="517.0" x2="433.9" y2="517.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="442.9" y1="517.0" x2="433.9" y2="512.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M260.0 340.0 L260.0 209.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="260.0" cy="340.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="218.0" x2="255.0" y2="209.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="218.0" x2="260.0" y2="209.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="218.0" x2="265.0" y2="209.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M260.0 620.0 L260.0 517.0" fill="none" stroke="#4a5568" stroke-width="1.3" />
+<circle cx="260.0" cy="620.0" r="2.6" fill="#fff" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="526.0" x2="255.0" y2="517.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="526.0" x2="260.0" y2="517.0" stroke="#4a5568" stroke-width="1.3"/>
+<line x1="260.0" y1="526.0" x2="265.0" y2="517.0" stroke="#4a5568" stroke-width="1.3"/>
+<path d="M1270.5 300.0 L1135.0 300.0 L1135.0 228.0 L1079.5 228.0" fill="none" stroke="#c53030" stroke-width="1.3" stroke-dasharray="6 4"/>
+<circle cx="1270.5" cy="300.0" r="2.6" fill="#fff" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1088.5" y1="228.0" x2="1079.5" y2="233.0" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1088.5" y1="228.0" x2="1079.5" y2="228.0" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1088.5" y1="228.0" x2="1079.5" y2="223.0" stroke="#c53030" stroke-width="1.3"/>
+<path d="M1260.0 149.0 L1135.0 149.0 L1135.0 149.0 L1090.0 149.0" fill="none" stroke="#c53030" stroke-width="1.3" stroke-dasharray="6 4"/>
+<circle cx="1260.0" cy="149.0" r="2.6" fill="#fff" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1099.0" y1="149.0" x2="1090.0" y2="154.0" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1099.0" y1="149.0" x2="1090.0" y2="149.0" stroke="#c53030" stroke-width="1.3"/>
+<line x1="1099.0" y1="149.0" x2="1090.0" y2="144.0" stroke="#c53030" stroke-width="1.3"/>
+<g><rect x="40" y="70" width="440" height="139" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M40 80 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="51" y="91" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">供电所</text>
+<text x="51" y="108" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_company</text>
+<text x="51" y="128" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="128" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="97.0" y="128" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所ID</text>
+<text x="469" y="128" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="147" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">name</text>
+<text x="118.0" y="147" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">名称</text>
+<text x="469" y="147" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(250)</text>
+<text x="51" y="166" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="166" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">department_id</text>
+<text x="170.0" y="166" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">部门ID</text>
+<text x="469" y="166" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="185" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">47 行</text>
+</g>
+<g><rect x="40" y="340" width="440" height="177" rx="7" fill="#fff" stroke="#2f855a" stroke-width="1.4"/>
+<path d="M40 350 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#e9f7ef"/>
+<text x="51" y="361" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#2f855a">台区</text>
+<text x="51" y="378" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_area</text>
+<text x="51" y="398" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="398" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="97.0" y="398" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区ID</text>
+<text x="469" y="398" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="417" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">area_code</text>
+<text x="146.0" y="417" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区编号</text>
+<text x="469" y="417" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="51" y="436" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="436" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">power_id</text>
+<text x="139.0" y="436" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">所属供电所ID</text>
+<text x="469" y="436" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="455" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="455" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">line_id</text>
+<text x="122.0" y="455" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">所属线路ID</text>
+<text x="469" y="455" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="76" y="474" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">loss_rate</text>
+<text x="137.0" y="474" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区线损率</text>
+<text x="469" y="474" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">decimal(10,6)</text>
+<text x="51" y="493" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#2f855a" opacity="0.92">24892 行；power_id 指所</text>
+</g>
+<g><rect x="40" y="620" width="440" height="177" rx="7" fill="#fff" stroke="#6b46c1" stroke-width="1.4"/>
+<path d="M40 630 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#f3eefc"/>
+<text x="51" y="641" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#6b46c1">AI 台区指标快照</text>
+<text x="51" y="658" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_ai_area_metric_snapshot</text>
+<text x="51" y="678" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="76" y="678" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="97.0" y="678" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="469" y="678" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="697" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="697" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">company_id</text>
+<text x="155.0" y="697" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">县公司ID</text>
+<text x="469" y="697" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="716" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="716" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">power_station_id</text>
+<text x="183.0" y="716" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所ID</text>
+<text x="469" y="716" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="735" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="735" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">line_id</text>
+<text x="122.0" y="735" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主线路ID</text>
+<text x="469" y="735" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="754" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="76" y="754" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">area_id</text>
+<text x="128.0" y="754" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区ID</text>
+<text x="469" y="754" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="51" y="773" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#6b46c1" opacity="0.92">159101 行；有 id 能过滤（与供电所也同源，未画线）</text>
+</g>
+<g><rect x="650" y="70" width="440" height="158" rx="7" fill="#fff" stroke="#c53030" stroke-width="2"/>
+<path d="M650 80 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#fdeaea"/>
+<text x="661" y="91" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#c53030">AI 六指标快照</text>
+<text x="661" y="108" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_ai_metric_snapshot</text>
+<text x="661" y="128" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="128" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="128" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1079" y="128" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="147" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="686" y="147" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">scope_type</text>
+<text x="761.0" y="147" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">范围类型</text>
+<text x="1079" y="147" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(20)</text>
+<text x="661" y="166" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="686" y="166" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">scope_key</text>
+<text x="756.0" y="166" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">范围键</text>
+<text x="1079" y="166" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(128)</text>
+<text x="661" y="185" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="686" y="185" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">scope_name</text>
+<text x="768.0" y="185" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">范围名称</text>
+<text x="1079" y="185" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(128)</text>
+<text x="661" y="204" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#c53030" opacity="0.92">⚠ 只有文本范围，没有 station_id</text>
+</g>
+<g><rect x="650" y="300" width="440" height="158" rx="7" fill="#fff" stroke="#b7791f" stroke-width="1.4"/>
+<path d="M650 310 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#fdf5e6"/>
+<text x="661" y="321" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#b7791f">停电用户（推送）</text>
+<text x="661" y="338" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_push_outage</text>
+<text x="661" y="358" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="358" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="358" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1079" y="358" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="377" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="377" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">power_station_id</text>
+<text x="793.0" y="377" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所ID</text>
+<text x="1079" y="377" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="396" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="396" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">area_id</text>
+<text x="738.0" y="396" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区ID</text>
+<text x="1079" y="396" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="686" y="415" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">resource_id</text>
+<text x="763.0" y="415" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">设备资源编号</text>
+<text x="1079" y="415" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="661" y="434" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#b7791f" opacity="0.92">171870 行</text>
+</g>
+<g><rect x="650" y="480" width="440" height="158" rx="7" fill="#fff" stroke="#b7791f" stroke-width="1.4"/>
+<path d="M650 490 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#fdf5e6"/>
+<text x="661" y="501" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#b7791f">跳闸事件（推送）</text>
+<text x="661" y="518" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_push_trip</text>
+<text x="661" y="538" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="538" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="538" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1079" y="538" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="557" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="557" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">power_station_id</text>
+<text x="793.0" y="557" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所ID</text>
+<text x="1079" y="557" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="576" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="576" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">area_id</text>
+<text x="738.0" y="576" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区ID</text>
+<text x="1079" y="576" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="686" y="595" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">resource_id</text>
+<text x="763.0" y="595" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">设备资源编号</text>
+<text x="1079" y="595" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="661" y="614" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#b7791f" opacity="0.92">109905 行</text>
+</g>
+<g><rect x="650" y="660" width="440" height="158" rx="7" fill="#fff" stroke="#b7791f" stroke-width="1.4"/>
+<path d="M650 670 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#fdf5e6"/>
+<text x="661" y="681" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#b7791f">台区售电量（推送）</text>
+<text x="661" y="698" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_push_sales_volume</text>
+<text x="661" y="718" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="718" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="718" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1079" y="718" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="737" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="737" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">power_station_id</text>
+<text x="793.0" y="737" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所ID</text>
+<text x="1079" y="737" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="756" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="756" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">area_id</text>
+<text x="738.0" y="756" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区ID</text>
+<text x="1079" y="756" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="686" y="775" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">resource_id</text>
+<text x="763.0" y="775" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">设备资源编号</text>
+<text x="1079" y="775" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="661" y="794" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#b7791f" opacity="0.92">252861 行</text>
+</g>
+<g><rect x="650" y="840" width="440" height="139" rx="7" fill="#fff" stroke="#c53030" stroke-width="2"/>
+<path d="M650 850 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#fdeaea"/>
+<text x="661" y="861" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#c53030">台区线损（推送）</text>
+<text x="661" y="878" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_push_line_loss</text>
+<text x="661" y="898" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="686" y="898" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="707.0" y="898" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1079" y="898" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="917" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="917" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">power_station_id</text>
+<text x="793.0" y="917" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所ID</text>
+<text x="1079" y="917" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="936" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#3182ce">FK</text>
+<text x="686" y="936" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">area_id</text>
+<text x="738.0" y="936" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">台区ID</text>
+<text x="1079" y="936" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="661" y="955" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#c53030" opacity="0.92">⚠ 0 行 —— 线上这个口径是空的</text>
+</g>
+<g><rect x="1260" y="70" width="440" height="158" rx="7" fill="#fff" stroke="#b7791f" stroke-width="1.4"/>
+<path d="M1260 80 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#fdf5e6"/>
+<text x="1271" y="91" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#b7791f">区县月汇总（推送）</text>
+<text x="1271" y="108" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_push_district_month_summary</text>
+<text x="1271" y="128" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1296" y="128" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="1317.0" y="128" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1689" y="128" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1296" y="147" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">stat_month</text>
+<text x="1369.0" y="147" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">统计月yyyyMM</text>
+<text x="1689" y="147" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">char(6)</text>
+<text x="1296" y="166" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">summary_type</text>
+<text x="1389.0" y="166" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">汇总口径</text>
+<text x="1689" y="166" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(20)</text>
+<text x="1271" y="185" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="1296" y="185" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">district_name</text>
+<text x="1382.0" y="185" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">区县名(文本)</text>
+<text x="1689" y="185" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="1271" y="204" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#b7791f" opacity="0.92">48 行；只有区县名，对不上供电所 id</text>
+</g>
+<g><rect x="1260" y="300" width="440" height="158" rx="7" fill="#fff" stroke="#c53030" stroke-width="2"/>
+<path d="M1260 310 a7,7 0 0 1 7,-7 h426 a7,7 0 0 1 7,7 v44 h-440 z" fill="#fdeaea"/>
+<text x="1271" y="321" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="13.5" font-weight="700" fill="#c53030">供电所月汇总（推送）</text>
+<text x="1271" y="338" font-family="'Consolas','Courier New',monospace" font-size="10" fill="#5a6472">t_power_push_station_month_summary</text>
+<text x="1271" y="358" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#b7791f">PK</text>
+<text x="1296" y="358" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">id</text>
+<text x="1317.0" y="358" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">主键</text>
+<text x="1689" y="358" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">bigint</text>
+<text x="1296" y="377" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#1a202c">stat_month</text>
+<text x="1369.0" y="377" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">统计月yyyyMM</text>
+<text x="1689" y="377" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">char(6)</text>
+<text x="1271" y="396" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="1296" y="396" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">station_name</text>
+<text x="1382.0" y="396" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">供电所名(文本)</text>
+<text x="1689" y="396" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(200)</text>
+<text x="1271" y="415" font-family="'Consolas','Courier New',monospace" font-size="9" fill="#c53030">!!</text>
+<text x="1296" y="415" font-family="'Consolas','Courier New',monospace" font-size="12" fill="#c53030">resource_id</text>
+<text x="1373.0" y="415" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#4b5563">中台所标识</text>
+<text x="1689" y="415" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#718096">varchar(100)</text>
+<text x="1271" y="434" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#c53030" opacity="0.92">⚠ 0 行；按所名 + 中台 resource_id 对</text>
+</g>
+<rect x="521.0" y="131.2" width="88.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="142.8" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">scope_name 文本</text>
+<rect x="530.0" y="241.5" width="70.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="253.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">station_id</text>
+<rect x="552.0" y="331.5" width="70.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="587.0" y="343.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">station_id</text>
+<rect x="574.0" y="421.5" width="70.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="609.0" y="433.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">station_id</text>
+<rect x="596.0" y="511.5" width="70.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="631.0" y="523.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">station_id</text>
+<rect x="539.0" y="390.8" width="52.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="565.0" y="402.2" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">area_id</text>
+<rect x="569.0" y="575.5" width="52.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="595.0" y="587.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">area_id</text>
+<rect x="231.0" y="259.5" width="58.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="260.0" y="271.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">power_id</text>
+<rect x="234.0" y="553.5" width="52.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="260.0" y="565.0" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">area_id</text>
+<rect x="1106.0" y="251.0" width="58.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1135.0" y="262.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">都是按名字对范围</text>
+<rect x="1106.0" y="136.0" width="58.0" height="15" rx="3" fill="#fff" opacity="0.95"/>
+<text x="1135.0" y="147.5" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="9.5" fill="#4a5568">都是按名字对范围</text>
+<text x="20" y="1033" font-family="'Microsoft YaHei','Segoe UI',sans-serif" font-size="10.5" fill="#718096">—— 实线=注释/ai_table_relation 写明   ---- 虚线=仅命名一致需复核   ○ =1 端   ⊰ =多端   红框=已知问题</text>
+</svg>

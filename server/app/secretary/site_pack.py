@@ -25,8 +25,12 @@ PLACEHOLDER = '【待导入】'
 PLATFORM_NAME = '_platform'
 
 # 产品基线必填（少了就不成产品）
-REQUIRED_PLATFORM = ('redlines.md', 'identity_base.md',
-                     'mode_general.md', 'mode_data.md', 'mode_doc.md', 'mode_office.md')
+#
+# ⚠️ 2026-10-30：`redlines.md` 与 `identity_base.md` 已删。
+#    它们一直被列为"必填"、每次装载都读进 `pack['platform']`，但**全代码没有任何地方读那个键**
+#    （真正的红线在 `prompt_stack.L0_REDLINES`，真正的身份在站点 `prompts/identity.md`）。
+#    "必填"不等于"被用"—— 留着只会让人以为改了它有作用。
+REQUIRED_PLATFORM = ('mode_general.md', 'mode_data.md', 'mode_doc.md', 'mode_office.md')
 # 站点必填
 REQUIRED_SITE = ('site.yml', 'prompts/identity.md')
 # 只在 data/doc 模式注入的业务口径（缺了要报，但不阻塞 general）
@@ -226,7 +230,7 @@ def _load(root: Path, name: str, strict: bool) -> dict:
     rules = _load_dir('rules')
     lexicon = _load_dir('lexicon')
 
-    result = {'site': name, 'vars': v, 'config': cfg, 'platform': platform,
+    result = {'site': name, 'vars': v, 'config': cfg,
               'prompts': prompts, 'modes': modes, 'doc_defaults': doc_defaults,
               'missing': missing, 'placeholders': placeholders,
               'business_prompts_missing': business_missing,

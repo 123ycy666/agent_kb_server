@@ -61,6 +61,23 @@ TOOLS = [
                        '不描述结果）。**数据查够后就不要再写了，只回一句「数据已查全」** —— '
                        '最终汇报会另外让你写；自己在这轮写汇报会白烧十几秒，而且系统不用那段文字。',
         'parameters': {'type': 'object', 'properties': {'sql': {'type': 'string'}}, 'required': ['sql']}}},
+    # ★ 2026-10-30：字段明细与规则条目改成"按需取"，不再全塞进 system。
+    {'type': 'function', 'function': {
+        'name': 'describe_table',
+        'description': '取一张表的字段清单（字段名/中文名/说明）。system 里只有表名清单，'
+                       '**写 SQL 前不确定字段名就先调它**；同一张表一次问全，不要反复查。',
+        'parameters': {'type': 'object', 'properties': {
+            'table': {'type': 'string', 'description': '表名，如 t_power_work_order'}},
+            'required': ['table']}}},
+    {'type': 'function', 'function': {
+        'name': 'get_rule',
+        'description': '按主题取公司规则原文（判据/口径/阈值）。**要做判断（是否异常/逾期/超阈/'
+                       '合理、该先办哪个）之前必须先调它**；取不到就说明「没有这条规则」，'
+                       '不许自己编标准，也不许拿别的主题的标准套。',
+        'parameters': {'type': 'object', 'properties': {
+            'topic': {'type': 'string',
+                      'description': '主题名，取自 system 里的「规则目录」，如「八、审批停留」'}},
+            'required': ['topic']}}},
     # ★ 收尾信号（2026-10-09 加）：查数轮强制 tool_choice=required，模型不能写散文，
     #   于是用一个空工具表示"到此为止"。数据查够就调它，之后由系统另行要一次正文。
     {'type': 'function', 'function': {
@@ -571,6 +588,12 @@ def execute(name, args):
         return tools_kb.kb_search(args.get('query', ''), int(args.get('top_k') or 3))
     if name == 'find_column':
         return tools_db.find_column(args.get('keyword', ''))
+    if name == 'describe_table':
+        # 2026-10-30：字段明细从"常驻提示词"改成"按需取"（system 里只留表清单）。
+        return describe_table(args.get('table', ''))
+    if name == 'get_rule':
+        # 2026-10-30：规则不再靠向量检索《判据规则》，改成按主题/别名精确取。
+        return get_rule(args.get('topic', ''), args.get('key', ''))
     if name == 'run_sql':
         r = tools_db.run_sql(args.get('sql', ''))
         # 0 行 = 空集。模型拿到空结果会忍不住摘掉时间/状态条件再查一遍凑数
@@ -618,8 +641,8 @@ COMMON = (
     '· 问办法（"怎么办""先干哪个""钱往哪投"）→ 给动作：谁、做什么、多少、什么时候；'
     '每条都要有对象和量，写不出对象就别写（"要跟上""要守住"这类空话不算动作）。\n'
     '· 问预测（"能达标吗""年底到多少""投完会怎样"）→ 给区间和参照，标注"推算"。\n'
-    '· 没问到的层不要写；问的是哪一方面（情况 / 预算 / 指标 / 审批 / 项目）就按《' + config.RULE_DOC
-    + '》第十九节里那一类的标准项答全，并给一句结论 —— **清单之外的维度不要加**。\n'
+    '· 没问到的层不要写；问的是哪一方面（情况 / 预算 / 指标 / 审批 / 项目）就先用 get_rule '
+    '取对应主题的标准项答全，并给一句结论 —— **清单之外的维度不要加**。\n'
     '· 问某一方面（预算 / 指标 / 审批 / 项目）就只答这一方面，**不要把别的维度塞进来**；\n'
     '  也不要替他总结原因、趋势或意义 —— 除非他问。\n'
     '\n【精炼】\n'
@@ -649,35 +672,43 @@ CHECK = (
 
 
 
+# ── 按需工具：表字段明细 / 规则条目（2026-10-30）──────────────────────
+# 为什么做成工具而不是常驻提示词：表目录 26 张表 = 22.6K 字符（占 system 72%），
+# 规则靠 0.18 分的向量检索命中。改成"目录常驻 + 按需精确取"后，system 从 3.1 万字
+# 降到 1 万以内，且规则命中从"看运气"变成"有确定答案"。
+def describe_table(table):
+    """取一张表的字段明细（只允许业务字典里的表）。"""
+    name = semantic.table_name(table or '')
+    if not name:
+        return {'error': '缺少表名'}
+    cols = semantic.table_cols(name)
+    if not cols:
+        return {'error': '表不在业务字典里：%s' % name,
+                'available': sorted(semantic.allowed_tables())[:30]}
+    lines = []
+    for c in cols.values():
+        item = c['column_name']
+        if c['column_cn_name']:
+            item += '（%s）' % c['column_cn_name']
+        desc = (c['business_desc'] or '').strip()
+        if desc and desc != c['column_cn_name']:
+            item += '：' + desc[:120]
+        lines.append('- ' + item)
+    return {'table': name, 'fields': len(cols), 'text': '\n'.join(lines)}
+
+
+def get_rule(topic='', key=''):
+    """按主题取规则条目（规则文档 = 知识库里 doc_type='rule' 的文档）。"""
+    from app.secretary import rule_doc
+    return rule_doc.get(topic, key)
+
+
 def rule_slices(query, top_k=None, limit=700):
-    """检索**唯一规则文档**的切片（全系统只有一篇，见 config.RULE_DOC）。
+    """**已停用**（2026-10-30）：规则不再用向量检索。
 
-    返回 (切片, 最高分, 检索是否成功)。
-    第三态是给调用方区分「检索到但不相关」和「检索本身失败」：
-    后者不能当成"这题跟业务无关"而丢掉业务口径（内网/代理环境常见）。
-
-    ★ 只认这一篇：以前是"拿问题去知识库检索判据"，会把相邻技能的标准当成本题的标准
-      （实测把「项目执行进度异常」的标准套到「审批积压」上）。限定成一篇之后，
-      这个错法从根上不可能再发生；技能文档也不再进知识库跟它抢名额。
+    保留这个函数只是为了不让老调用方 ImportError；新代码请用 `rule_doc.get()`。
     """
-    q = (query or '').strip()
-    if not q:
-        return [], 0.0, True
-    want = top_k or config.RULE_TOP_K
-    # 只认一篇 → 必须多取候选再过滤（kb_search 返回前会先截到 top_k 条）
-    try:
-        r = tools_kb.kb_search(q, top_k=max(want * 3, 9), limit=limit)
-    except Exception:                               # noqa: BLE001
-        return [], 0.0, False
-    out = []
-    for n in (r.get('nodes') or []):
-        if config.RULE_DOC not in (n.get('doc_name') or ''):
-            continue
-        out.append(n)
-        if len(out) >= want:
-            break
-    best = max([float(n.get('score') or 0) for n in out], default=0.0)
-    return out, best, True
+    return [], 0.0, True
 
 
 # 兜底：字典/提示词读不到时才用（正常情况下系统提示全部来自数据库）
@@ -713,22 +744,14 @@ RULES_PRIORITY = (
 
 
 def _system(today=None):
-    """系统提示 = 他们在 ai_prompt 里维护的提示词（config.PROMPTS 指定的 key）
-    + 业务字典的表目录。**提示词不在代码里写死**。
+    """**兜底**系统提示：只在站点包装载失败时用。
 
-    最前面会加一段**规则优先级声明**（见 `RULES_PRIORITY`，可用
-    `SECRETARY_RULES_PRIORITY=0` 关掉）—— 因为 system 里的通用规则和 user 段的
-    【统计范围】会撞车，而原文任何地方都没声明谁优先。
+    2026-10-30：删掉旧的 `ai_data.ai_prompt` 读取通道。
+    那张表和站点包 md 是同一个东西的两份来源，线上又被 V2 装配完全绕过
+    （表里改了不生效）—— 留着只会让人以为改了它有作用。现在提示词正文
+    只有一处来源：站点包文件；这里只剩"身份 + 日期 + 码表 + 表目录"。
     """
-    parts = []
-    try:
-        pool = semantic.prompts()
-        for k in (config.PROMPTS or []):
-            if pool.get(k):
-                parts.append('===== ' + k + ' =====\n' + pool[k])
-    except Exception:
-        pass
-    head = '\n\n'.join(parts).strip() or _FALLBACK
+    head = _FALLBACK
     if config.RULES_PRIORITY:
         head = RULES_PRIORITY + '\n' + head
     try:
@@ -1130,23 +1153,27 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             '本轮必须按下面【统计范围】重新查数。'
             '② 本轮的统计口径已在上面的【统计范围】里定好，**不要**因为历史而改变它。'
             '③ 不要在回答里复述或提及这段历史。' % (len(hist_detail), '\n'.join(hl)))
-    # ⓪·6 检索**唯一规则文档**：本轮问句 + 上一轮的原始问句一起查。
-    #      「是哪些项目？」这类跟在提醒后面的追问，光看问句没有线索，拼上上一轮才有
-    #      （实测：只拿问句检索会跑偏，拼上上一轮标题后正确规则回到第一）。
-    #      命中的切片随后当本次的判断标准与回答方向。
+    # ⓪·6 规则：**目录常驻 + 按需精确取**（2026-10-30 改）
+    #     原来是"拿问题去向量检索《判据规则》切片，只留 4 片"，线上实测那 4 片的相似度
+    #     只有 0.17~0.19 —— 是不是该用的那条规则全看运气，而且还会把相邻题的标准套错。
+    #     现在：system 里常驻「规则目录」（主题+一句话），要判定时模型自己 get_rule(主题)。
     rule_hits, rule_best, rule_ok, rule_query = [], 0.0, True, question
+    rule_menu_text = ''
     if config.RULES_ON:
-        if history:
-            _prev_q = (history[-1].get('raw_question') or '').strip()
-            if _prev_q:
-                rule_query = question + ' ' + _prev_q
         _t_rule = time.time()
-        rule_hits, rule_best, rule_ok = rule_slices(rule_query)
-        trace.append({'seq': len(trace) + 1, 'kind': 'rules', 'tool': 'rule_search',
+        try:
+            from app.secretary import rule_doc as _rule_doc
+            rule_menu_text = _rule_doc.menu()
+            rule_topics = _rule_doc.topics()
+        except Exception as _exc:                  # noqa: BLE001 - 规则读不到不影响问答
+            print('[agent] 规则目录读取失败（按无规则继续）：%s: %s'
+                  % (type(_exc).__name__, str(_exc)[:120]), flush=True)
+            rule_topics = []
+        trace.append({'seq': len(trace) + 1, 'kind': 'rules', 'tool': 'rule_menu',
                       'ms': int((time.time() - _t_rule) * 1000),
-                      'args': {'query': rule_query, 'doc': config.RULE_DOC},
-                      'result': {'hits': len(rule_hits), 'best_score': round(rule_best, 4),
-                                 'titles': [(n.get('title') or '')[:60] for n in rule_hits]}})
+                      'args': {'source': 'document.doc_type=rule'},
+                      'result': {'topics': len(rule_topics),
+                                 'titles': [x['topic'][:60] for x in rule_topics[:8]]}})
 
     # 统计范围必须明确交给模型：六项指标是按「范围 + 期间」预计算的，
     # 不给这一句，它就得自己猜该取 month 还是 yearToDate、该取哪个月。
@@ -1162,25 +1189,19 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 旧的分流判据是「检索到规则就算分析题」，而规则只有一篇、业务问题几乎必命中，
     # 结果每题都灌一遍"必答项逐项写、必须给建议和成效"，问什么都被扩成小报告。
     _is_analysis = _wants_analysis(question)
-    user_content += '\n\n' + COMMON
-    user_content += CHECK
-    if rule_hits and (rule_ok is False or rule_best >= 0.45):
-        parts = []
-        for _n in rule_hits:
-            _t = (_n.get('title') or '').strip()
-            _c = (_n.get('content') or '').strip()
-            parts.append(('【' + _t + '】\n' if _t else '') + _c)
-        user_content += ('\n\n【本次的规则】（从《%s》检索到的**候选**切片。'
-                         '若本题要下判断 / 比大小 / 找原因 / 看趋势（分析题），'
-                         '**必须先用 kb_search 把你要用的那一节原文取全再作答**；'
-                         '只问一个数或一份清单（查数题）直接答。'
-                         '标准只认《%s》，里面没写的不许自己编。）\n'
-                         % (config.RULE_DOC, config.RULE_DOC) + '\n---\n'.join(parts))
+    # ★ 2026-10-30：COMMON/CHECK 从**用户消息**搬进 **system**（见下方 agent_v2.system 调用）。
+    #   它们是"每次都适用的纪律"，性质与红线相同；塞在用户消息里等于每轮都当用户输入，
+    #   而且和 system 里的通用规则分成两处、谁也不管谁。
+    # ★ 规则不再预注入切片：目录在 system 里，要判定就让模型 get_rule 取那一条。
+    if rule_menu_text:
+        user_content += ('\n\n' + rule_menu_text +
+                         '\n要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
+                         '**先用 get_rule(主题) 取规则目录里对应的那一条**；'
+                         '取不到就只报事实，并写明「系统里没有这条判定标准」。'
+                         '不许拿别的主题的标准套到本题上，也不许自己编标准。')
     else:
-        user_content += ('\n\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
-                         '**先用 kb_search 查《%s》**；查到了就按它判，查不到就只报事实并说明'
-                         '「系统里没有这类判定标准」。**不许拿别的标准套到本题上，也不许自己编标准。**'
-                         % config.RULE_DOC)
+        user_content += ('\n\n【判断标准从哪来】要做判断之前先 get_rule(主题)；'
+                         '取不到就只报事实并说明「系统里没有这类判定标准」，不许自己编标准。')
     if profile:
         user_content += ('\n\n【提问人身份与数据范围】（判断标准与关注重点按它来，不要因此扩大问题范围）：\n' + profile)
     # ⓪·7 用户上传的文件（2026-10-19 加）：这是本轮回答的**事实来源**。
@@ -1220,9 +1241,26 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             _prefs = _prefs_mod.get(user_id) or None
         except Exception:
             _prefs = None
+    # 个人规则（本人资料库里 doc_type='rule' 的文档）：每轮注入，限量 1500 字
+    _pkb = {'text': '', 'files': [], 'chars': 0, 'overflow': ''}
+    if user_id:
+        try:
+            from app.secretary import personal_kb as _pkb_mod
+            _pkb = _pkb_mod.personal_rules(user_id) or _pkb
+        except Exception as _exc:                  # noqa: BLE001 - 个人规则读不到不影响问答
+            print('[agent] 个人规则读取失败（忽略）：%s: %s'
+                  % (type(_exc).__name__, str(_exc)[:120]), flush=True)
     messages = [{'role': 'system',
-                 'content': agent_v2.system(_mode, _system, today,
-                                            persona=_persona, prefs=_prefs)},
+                 'content': agent_v2.system(
+                     _mode, _system, today,
+                     persona=_persona, prefs=_prefs,
+                     # S1「谁说了算」：V2 装配曾把这段丢掉，导致【统计范围】与
+                     # system 里【时间处理】撞车时没有裁判。用同一份常量，不另写一份。
+                     priority=(RULES_PRIORITY if config.RULES_PRIORITY else ''),
+                     # S4 作答格式：汇报口吻 + 交卷检查（原在 user 消息里）
+                     answer_format=(COMMON + CHECK),
+                     # S7 我的规则（个人库 type=rule）
+                     personal_rules=(_pkb.get('text') or ''))},
                 {'role': 'user', 'content': user_content}]
     answer = ''
     nudged = False
@@ -1446,7 +1484,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     result = {
         'input_question': raw_question,
         'today': today or time.strftime('%Y-%m-%d'),
-        'rules_loaded': len(rule_hits),      # 本次命中了几条《规则》，0 = 没检索到
+        'rules_loaded': len(rule_topics),    # 规则目录里有几个主题（0 = 没配规则文档）
+        # 个人层可观测（2026-10-30）：本人规则注入了没、注入了多少、超限没
+        'personal': {'rules': list(_pkb.get('files') or []),
+                     'rules_chars': int(_pkb.get('chars') or 0),
+                     'overflow': _pkb.get('overflow') or ''},
         'fixed_question': question,
         'name_fix_used': fixed['used'],
         'scope': {

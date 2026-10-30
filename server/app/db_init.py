@@ -65,8 +65,27 @@ EXTRA_DDL: list[tuple[str, str]] = [
         "document.superseded_by 的索引（删除时按继任者反查）",
         "CREATE INDEX IF NOT EXISTS idx_doc_superseded_by ON document (superseded_by)",
     ),
-    # ── 冲突隔离细化到切片 ──────────────────────────────────
-    # ⚠️ 为什么加：冲突挂起原先落在**文档级**（doc.has_conflict 一票否决整篇），
+    # ── 文档类型：规则 / 资料（2026-10-30）──────────────────
+    # ⚠️ 为什么加：规则和资料混在同一个库里，没有类型就没法区别对待 ——
+    #    规则要每轮注入（`get_rule`），资料要走检索（`kb_search`）。
+    #    判定在入库时按文件名做，存量数据一律按 doc 兼容。
+    (
+        "document.doc_type 列（rule=规则/口径，doc=资料）",
+        "ALTER TABLE document ADD COLUMN IF NOT EXISTS doc_type varchar(16) "
+        "NOT NULL DEFAULT 'doc'",
+    ),
+    (
+        "document.doc_type 的索引（按类型取规则文档）",
+        "CREATE INDEX IF NOT EXISTS idx_doc_type ON document (doc_type)",
+    ),
+    # 存量数据回填：文件名像"规则/口径/标准"的文档升级为 rule（幂等，只动 doc）
+    # 与入库时的判定口径完全一致，避免"老文档永远进不了规则通道"。
+    (
+        "存量文档按文件名回填 doc_type=rule",
+        "UPDATE document SET doc_type = 'rule' WHERE doc_type = 'doc' "
+        "AND filename ~ '(规则|口径|标准|要求|规范|制度|流程|办法)'",
+    ),
+    # ── 冲突隔离细化到切片 ──────────────────────────────────    # ⚠️ 为什么加：冲突挂起原先落在**文档级**（doc.has_conflict 一票否决整篇），
     #    一个切片冲突就让整份文档从检索里消失。改为标记冲突切片后，
     #    需要区分「被新版取代」与「被冲突隔离」两种下架原因，否则复活时会误判。
     (
