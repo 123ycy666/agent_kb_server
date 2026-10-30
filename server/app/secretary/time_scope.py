@@ -680,8 +680,8 @@ def describe(question, fixed=None, prev=None, today=None, force_place=None):
 # ── Site pack override (P3, 2026-10-21): lexicon/business_terms.yml ─────
 def _apply_pack_lexicon() -> None:
     try:
-        from app.secretary import site_pack
-        lx = ((site_pack.load(strict=False) or {}).get("lexicon") or {}).get("business_terms") or {}
+        from app.secretary import lexicon_defaults
+        lx = (lexicon_defaults.BUSINESS_TERMS or {}).get("business_terms") or {}
     except Exception:                              # noqa: BLE001
         return
     patterns = {"station_hint": "_STATION_HINT", "biz_words": "_BIZ"}
@@ -701,8 +701,8 @@ _apply_pack_lexicon()
 # ── 站点可配：剥名字前缀（P3, 2026-10-21）──────────────────────────────
 def _apply_pack_strip_head() -> None:
     try:
-        from app.secretary import site_pack
-        lx = ((site_pack.load(strict=False) or {}).get('lexicon') or {}).get('business_terms') or {}
+        from app.secretary import lexicon_defaults
+        lx = (lexicon_defaults.BUSINESS_TERMS or {}).get('business_terms') or {}
         pat = lx.get('strip_head')
         if pat and '_STRIP_HEAD' in globals():
             globals()['_STRIP_HEAD'] = tuple(pat)

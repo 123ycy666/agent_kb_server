@@ -30,7 +30,7 @@ def chk(label: str, cond: bool, extra: str = "") -> None:
 
 def main() -> int:
     print("F4-2/F4-3：个人知识库 + 个人偏好（真 PG）")
-    from app.secretary import personal_kb as K, prefs as P, agent, agent_v2, site_pack as SP
+    from app.secretary import personal_kb as K, prefs as P, agent, agent_v2, prompts_data
 
     # ── 1/2/3 个人库 ───────────────────────────────────────────
     try:
@@ -57,7 +57,7 @@ def main() -> int:
         chk("整体替换（旧键消失）", P.get(401) == {'body_pt': 18}, str(P.get(401)))
 
         # ── 6 三级覆盖 ────────────────────────────────────────
-        base = SP.load(strict=False).get('doc_defaults')
+        base = prompts_data.DOC_DEFAULTS
         f1 = P.merge_fmt(base, 401)
         f2 = P.merge_fmt(base, 401, {'body_pt': 22})
         chk("个人覆盖站点默认（18）", f1.get('body_pt') == 18, str(f1.get('body_pt')))

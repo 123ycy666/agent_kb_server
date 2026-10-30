@@ -38,14 +38,6 @@ def model_id() -> str:
     env = (os.environ.get('SECRETARY_VISION_MODEL') or '').strip()
     if env:
         return env
-    try:
-        from app.secretary import site_pack
-        cfg = (site_pack.load(strict=False) or {}).get('config') or {}
-        name = (cfg.get('vision') or {}).get('model')
-        if name:
-            return str(name)
-    except Exception:                              # noqa: BLE001
-        pass
     return DEFAULT_MODEL
 
 

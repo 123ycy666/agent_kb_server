@@ -84,17 +84,13 @@ def pack_has(fn_name: str) -> bool:
 
 
 def _pack_jobs() -> list[dict]:
-    """读站点包 jobs.yml；读不到就返回空（不阻塞启动）。"""
+    """定时任务清单（原站点包 jobs.yml，2026-10-30 内联进 `project.JOBS`）。"""
     try:
-        from app.secretary import site_pack
-        p = (site_pack.sites_root() / (os.environ.get('SITE') or 'suizhou') / 'jobs.yml')
-        if not p.is_file():
-            return []
-        data = yaml.safe_load(p.read_text(encoding='utf-8')) or {}
-        jobs = data.get('jobs') or []
+        from app.secretary import project
+        jobs = (project.JOBS or {}).get('jobs') or []
         return [j for j in jobs if isinstance(j, dict)]
     except Exception as exc:                       # noqa: BLE001
-        print('[scheduler] 读 jobs.yml 失败：%s' % exc)
+        print('[scheduler] 读定时任务失败：%s' % exc)
         return []
 
 

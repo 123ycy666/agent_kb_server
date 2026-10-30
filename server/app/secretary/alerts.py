@@ -630,8 +630,8 @@ def daily(account, today=None, when=None, limit=10):
 # 原来写死 ('随州市', '全市')。换单位时范围名不同（如"仙桃市"/"全市"），改包不改代码。
 def _city_names() -> tuple:
     try:
-        from app.secretary import site_pack
-        dep = ((site_pack.load(strict=False) or {}).get('scopes') or {}).get('department') or {}
+        from app.secretary import project
+        dep = project.department()
         names = dep.get('city_names')
         if names:
             return tuple(names)

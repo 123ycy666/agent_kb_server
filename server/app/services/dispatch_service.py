@@ -2629,8 +2629,8 @@ __all__ = ['DispatchError', 'recommend', 'preview', 'create', 'accept', 'decline
 # 真源在 config/sites/<SITE>/scopes.yml 的 department.county_depts；换单位必须改这里。
 def _county_depts() -> list:
     try:
-        from app.secretary import site_pack
-        dep = ((site_pack.load(strict=False) or {}).get('scopes') or {}).get('department') or {}
+        from app.secretary import project
+        dep = project.department()
         rows = dep.get('county_depts') or []
         out = []
         for r in rows:

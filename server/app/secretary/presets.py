@@ -52,18 +52,13 @@ def current() -> dict:
     ⚠️ 原来是在 import 时把站点包内容写进模块常量 —— 那是"部署文件改代码"：
        改完要重启，测试也测不出差异（2026-10-30 统一改成运行时读）。
     """
-    items, groups = PRESETS, GROUPS
     try:
-        from app.secretary import site_pack
-        cfg = ((site_pack.load(strict=False) or {}).get('presets') or {}).get('presets') or {}
+        from app.secretary import prompts_data
+        groups = [tuple(x) if isinstance(x, list) else x
+                  for x in (prompts_data.PRESET_GROUPS or GROUPS)] or GROUPS
+        items = list(prompts_data.PRESET_ITEMS or PRESETS) or PRESETS
     except Exception:                              # noqa: BLE001
-        cfg = {}
-    g = cfg.get('GROUPS')
-    if g:
-        groups = [tuple(x) if isinstance(x, list) else x for x in g]
-    it = cfg.get('PRESETS')
-    if it:
-        items = list(it)
+        groups, items = GROUPS, PRESETS
     return {'groups': groups, 'items': items}
 
 

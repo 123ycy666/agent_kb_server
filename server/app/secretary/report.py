@@ -24,8 +24,8 @@ RULE_DOC = os.path.join(SKILL_DIR, '判据规则.md')
 def _l1_identity() -> str:
     """身份串优先用站点包 L1（P3, 2026-10-21）；拿不到才用旧的一句话。"""
     try:
-        from app.secretary import site_pack
-        txt = ((site_pack.load(strict=False) or {}).get('prompts') or {}).get('identity') or ''
+        from app.secretary import prompts_data
+        txt = prompts_data.IDENTITY or ''
         lines = [ln for ln in txt.strip().splitlines() if not ln.lstrip().startswith('#')]
         clean = '\n'.join(lines).strip()
         if clean:
@@ -38,11 +38,9 @@ def _l1_identity() -> str:
 def _default_station() -> str:
     """报告默认供电所：读站点包 report.default_station（P3）；没有才用旧默认。"""
     try:
-        from app.secretary import site_pack
-        rep = ((site_pack.load(strict=False) or {}).get('config') or {}).get('report') or {}
-        name = rep.get('default_station')
-        if name:
-            return str(name)
+        from app.secretary import project
+        if project.DEFAULT_STATION:
+            return str(project.DEFAULT_STATION)
     except Exception:                              # noqa: BLE001
         pass
     return '环潭供电所'

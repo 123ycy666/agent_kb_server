@@ -1,4 +1,4 @@
-"""生成成果文件：docx / xlsx。
+﻿"""生成成果文件：docx / xlsx。
 
 原则：**格式是数据，不是代码**。
 - docx 用一套"公文默认样式"（三号仿宋_GB2312、28 磅行距、首行缩进 2 字），
@@ -153,10 +153,11 @@ def write_xlsx(path: Path, sheets: list[tuple[str, list[str], list[list]]]) -> P
 
 
 # ── 站点包覆盖（运行时读，不在 import 期改常量）────────────────────
-def site_pack_dd() -> dict:
+def doc_defaults() -> dict:
+    """文档版式默认值（原站点包 doc_defaults.yml，2026-10-30 内联进 prompts_data）。"""
     try:
-        from app.secretary import site_pack
-        return (site_pack.load(strict=False) or {}).get('doc_defaults') or {}
+        from app.secretary import prompts_data
+        return dict(prompts_data.DOC_DEFAULTS or {})
     except Exception:                          # noqa: BLE001
         return {}
 
@@ -168,6 +169,6 @@ def _dd(part: str) -> dict:
        原来在 import 期把值写进模块全局 ⇒ 改完必须重启，而且没法测。
     """
     try:
-        return dict((site_pack_dd() or {}).get(part) or {})
+        return dict((doc_defaults() or {}).get(part) or {})
     except Exception:                          # noqa: BLE001
         return {}

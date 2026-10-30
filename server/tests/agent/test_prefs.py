@@ -21,7 +21,7 @@ from pathlib import Path
 SERVER = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SERVER))
 
-from app.secretary import prefs as P, site_pack as SP  # noqa: E402
+from app.secretary import prefs as P, prompts_data  # noqa: E402
 
 _checks: list[tuple[str, bool, str]] = []
 
@@ -32,7 +32,7 @@ def chk(label: str, cond: bool, extra: str = "") -> None:
 
 def main() -> int:
     print("F4-3：个人偏好（文风/格式）")
-    base = SP.load(strict=False).get('doc_defaults')
+    base = prompts_data.DOC_DEFAULTS
 
     # ── 1 白名单 ───────────────────────────────────────────────
     chk("不认识的键报错", _raises(lambda: P.normalize({'hack': 1})))

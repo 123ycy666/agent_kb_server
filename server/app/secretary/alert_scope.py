@@ -27,11 +27,11 @@ _CFG: dict = {}
 
 
 def _cfg() -> dict:
-    """读站点包里的 department 配置；读不到就用默认值（行为与改前一致）。"""
+    """读项目事实里的 department 配置；读不到就用默认值（行为与改前一致）。"""
     if 'v' not in _CFG:
         try:
-            from app.secretary import site_pack
-            dep = ((site_pack.load(strict=False) or {}).get('scopes') or {}).get('department') or {}
+            from app.secretary import project
+            dep = project.department()
             _CFG['v'] = {
                 'city_dept_id': int(dep.get('city_dept_id') or _DEFAULTS['city_dept_id']),
                 'city_label': dep.get('city_label') or '',

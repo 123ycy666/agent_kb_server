@@ -668,8 +668,8 @@ __all__ = ['detect', 'DETECTORS', '_norm_company']
 # 原来写死 ('国网', '国网湖北', '湖北省')。前缀表随单位变（外省没有"湖北"）。
 def _org_prefixes() -> tuple:
     try:
-        from app.secretary import site_pack
-        lx = ((site_pack.load(strict=False) or {}).get('lexicon') or {}).get('business_terms') or {}
+        from app.secretary import lexicon_defaults
+        lx = (lexicon_defaults.BUSINESS_TERMS or {}).get('business_terms') or {}
         pre = lx.get('org_prefixes')
         if pre:
             return tuple(pre)

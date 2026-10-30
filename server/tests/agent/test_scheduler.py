@@ -53,29 +53,26 @@ def main() -> int:
         'scheduler' in src and 'start()' in src and '.stop()' in src,
         'main.py 里没有 scheduler 的 start/stop')
 
-    # ── 2/3/4 假站点包：白名单 + 非法 cron ──────────────────────
-    fake = SERVER / '.tmp' / 'sched_demo'
-    if fake.exists():
-        shutil.rmtree(fake, ignore_errors=True)
-    (fake / 'demo').mkdir(parents=True)
-    (fake / 'demo' / 'jobs.yml').write_text(
-        'jobs:\n'
-        '  - {id: ok1, fn: noop, cron: "*/5 * * * *", enabled: true}\n'
-        '  - {id: bad_fn, fn: rm_rf, cron: "0 9 * * *", enabled: true}\n'
-        '  - {id: bad_cron, fn: noop, cron: "not a cron", enabled: true}\n'
-        '  - {id: incomplete, fn: noop, enabled: true}\n', encoding='utf-8')
-
-    old_env, old_site = os.environ.get('SITE_PACK_DIR'), os.environ.get('SITE')
-    os.environ['SITE_PACK_DIR'] = str(fake)
-    os.environ['SITE'] = 'demo'
+    # ── 2/3/4 假任务清单：白名单 + 非法 cron ────────────────────
+    # 2026-10-30：站点包已删除，任务清单改成代码常量 `project.JOBS`；
+    # 这里临时替换那个常量来验证"白名单 / cron / 字段校验"。
+    from app.secretary import project as PR
+    fake_jobs = {'jobs': [
+        {'id': 'ok1', 'fn': 'noop', 'cron': '*/5 * * * *', 'enabled': True},
+        {'id': 'bad_fn', 'fn': 'rm_rf', 'cron': '0 9 * * *', 'enabled': True},
+        {'id': 'bad_cron', 'fn': 'noop', 'cron': 'not a cron', 'enabled': True},
+        {'id': 'incomplete', 'fn': 'noop', 'enabled': True},
+    ]}
+    old_jobs = PR.JOBS
+    PR.JOBS = fake_jobs
     try:
         b2 = S.build()
-        chk("假包：只注册白名单里的 ok1", [j['id'] for j in b2['added']] == ['ok1'],
+        chk("假清单：只注册白名单里的 ok1", [j['id'] for j in b2['added']] == ['ok1'],
             str(b2['added']))
         whys = {x['id']: x['why'] for x in b2['skipped']}
-        chk("假包：不存在的 fn 被拒", 'bad_fn' in whys and '白名单' in whys['bad_fn'], str(whys))
-        chk("假包：非法 cron 被拒", 'bad_cron' in whys, str(whys.get('bad_cron', '')))
-        chk("假包：字段不全被拒", 'incomplete' in whys, str(whys.get('incomplete', '')))
+        chk("假清单：不存在的 fn 被拒", 'bad_fn' in whys and '白名单' in whys['bad_fn'], str(whys))
+        chk("假清单：非法 cron 被拒", 'bad_cron' in whys, str(whys.get('bad_cron', '')))
+        chk("假清单：字段不全被拒", 'incomplete' in whys, str(whys.get('incomplete', '')))
 
         # 触发器时间
         sch = b2['scheduler']
@@ -92,14 +89,7 @@ def main() -> int:
         chk("活被调用且记录进 RUNS", len(S.RUNS) == 1 and S.RUNS[0].get('result') == 'noop',
             str(S.RUNS))
     finally:
-        if old_env is None:
-            os.environ.pop('SITE_PACK_DIR', None)
-        else:
-            os.environ['SITE_PACK_DIR'] = old_env
-        if old_site is None:
-            os.environ.pop('SITE', None)
-        else:
-            os.environ['SITE'] = old_site
+        PR.JOBS = old_jobs
 
     # ── 6 启停幂等 ─────────────────────────────────────────────
     sch = S.start()

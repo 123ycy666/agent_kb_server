@@ -1562,11 +1562,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     return result
 
 
-# ── Site pack override (P3, 2026-10-21): lexicon/business_terms.yml ─────
+# ── 业务词表补充（原站点包 lexicon，2026-10-30 内联进代码）────────────
 def _apply_pack_lexicon() -> None:
     try:
-        from app.secretary import site_pack
-        lx = ((site_pack.load(strict=False) or {}).get("lexicon") or {}).get("business_terms") or {}
+        from app.secretary import lexicon_defaults
+        lx = (lexicon_defaults.BUSINESS_TERMS or {}).get('business_terms') or {}
     except Exception:                              # noqa: BLE001
         return
     patterns = {"station_hint": "_STATION_HINT", "biz_words": "_BIZ"}
@@ -1583,20 +1583,16 @@ def _apply_pack_lexicon() -> None:
 _apply_pack_lexicon()
 
 
-# ── Identity from site pack (P3, 2026-10-21) ────────────────────────────
-# _FALLBACK 原是硬编码一行"你是随州供电公司的项目管理秘书"；现在优先用站点包的 L1 身份，
-# 拿不到才用旧的（保证任何环境下都有一句身份）。
+# ── 兜底身份（2026-10-30：正文内联进 prompts_data.IDENTITY）────────────
 try:
-    from app.secretary import site_pack as _sp_identity
-    _PACK_IDENTITY = ((_sp_identity.load(strict=False) or {}).get("prompts") or {}).get("identity")
-    if _PACK_IDENTITY and _PACK_IDENTITY.strip():
-        _lines = [ln for ln in _PACK_IDENTITY.strip().splitlines()
-                  if not ln.lstrip().startswith('#')]
-        _clean = '\n'.join(_lines).strip()
-        if _clean:
-            _FALLBACK = _clean
+    from app.secretary import prompts_data as _pd_identity
+    _lines = [ln for ln in (_pd_identity.IDENTITY or '').strip().splitlines()
+              if not ln.lstrip().startswith('#')]
+    _clean = '\n'.join(_lines).strip()
+    if _clean:
+        _FALLBACK = _clean
 except Exception:                                  # noqa: BLE001
-    _PACK_IDENTITY = None
+    pass
 
 # ── 口径兜底工具（2026-10-21）────────────────────────────────────────
 # 高频指标的 SQL 不让模型现编（实测同一问题会漂：22.79% vs 0.00%）。

@@ -2,26 +2,32 @@
 """V2 装配入口：判模式、按模式装提示词、按模式决定给不给工具。
 
 为什么单独一个文件（2026-10-21）
-------------------------------
+-----------------------------
 `agent.py` 有 1500 行、主循环与守卫都在里面，直接往里插逻辑风险高。
 所以 V2 的**决策**都放这里，`agent.py` 只留三处一行的调用：
     judge_mode()  → 这一问走哪个模式
-    system()      → 该模式的 system 提示词（七层装配）
+    system()      → 该模式的 system 提示词（分层装配）
     use_tools()   → 这一轮给不给工具
 
 三条回退保险（任何一条成立就按旧行为跑）
 --------------------------------------
 1. `SECRETARY_AGENT_V2=0`
-2. 站点包装载失败 / 包不完整
+2. 装配异常 → 回落 `agent._system`
 3. 判模式抛异常 → 落 data
 
-自检：py -X utf8 server/tests/agent/test_prompt_stack.py
+★ 2026-10-30：站点包已删除。提示词正文内联在 `prompts_data.py`，
+  规则不再静态注入（只给「目录」+ `get_rule` 按需）。
+
+自检：py -X utf8 server/tests/agent/test_rule_stack.py
 """
 from __future__ import annotations
 
 import os
 import re
 import time
+
+from app.secretary import prompts_data
+from app.secretary import project
 
 _CACHE: dict = {}
 
@@ -31,14 +37,17 @@ def enabled() -> bool:
 
 
 def pack() -> dict:
-    """站点包（缓存一次；读不到返回空 dict）。"""
+    """兼容旧调用方的"装配素材"视图（**不再是站点包**，内容全在代码里）。"""
     if 'p' not in _CACHE:
-        try:
-            from app.secretary import site_pack
-            _CACHE['p'] = site_pack.load(strict=False)
-        except Exception as exc:                   # noqa: BLE001
-            print('[agent_v2] 站点包装载失败，回落旧装配：%s' % exc)
-            _CACHE['p'] = {}
+        _CACHE['p'] = {
+            'site': project.SITE,
+            'vars': {'SITE_NAME': project.SITE_NAME, 'SITE_FULL': project.SITE_FULL,
+                     'SITE_CODE': project.SITE_CODE},
+            'prompts': {'identity': prompts_data.IDENTITY,
+                        'answer_data': prompts_data.ANSWER_DATA},
+            'modes': dict(prompts_data.MODE_TEXTS),
+            'doc_defaults': dict(prompts_data.DOC_DEFAULTS),
+        }
     return _CACHE['p']
 
 
@@ -61,26 +70,24 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
 
     legacy 是 agent._system（旧装配），用于回退——签名 legacy(today)。
     priority / answer_format / personal_rules：分别对应 S1「谁说了算」、
-    S4「作答格式」、S7「我的规则」，由调用方（agent.ask）传入，避免这里反向依赖 agent。
+    S4「作答格式」、S7「我的规则」，由调用方（agent.ask）传入。
     """
-    p = pack()
-    if not enabled() or not p or not p.get('prompts'):
+    if not enabled():
         return legacy(today)
     try:
         from app.secretary import prompt_stack, semantic, rule_doc
-        # 规则文档（知识库 type=rule）一旦存在，就不再静态注入站点包的 L3：
-        # 同一套规则只能有一个出处（2026-10-30）。没有规则文档时退回静态 L3，
-        # 保证"还没导入规则"的环境行为和以前一致。
+        # 规则目录（知识库 type=rule 文档的章节标题）：模型据此 get_rule 精确取。
         rules_menu = ''
         try:
             rules_menu = rule_doc.menu()
         except Exception:                          # noqa: BLE001 - 读不到按无规则
             rules_menu = ''
-        head = prompt_stack.build(p, mode=mode, persona=persona, prefs=prefs,
-                                  priority=priority,
-                                  answer_format=answer_format,
-                                  rules_menu=rules_menu or None,
-                                  skip_business=bool(rules_menu))['system']
+        head = prompt_stack.build(
+            mode=mode, identity=prompts_data.IDENTITY, modes=prompts_data.MODE_TEXTS,
+            priority=priority,
+            answer_format=((answer_format or '') + '\n\n' + prompts_data.ANSWER_DATA).strip(),
+            rules_menu=rules_menu or None,
+            persona=persona, prefs=prefs)['system']
         if personal_rules:
             head += '\n\n' + personal_rules
         head += ('\n\n今天的日期是 %s。所有「停留天数 / 截至今天」一律按这一天算，'
@@ -95,9 +102,6 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
             except Exception:                      # noqa: BLE001
                 pass
             try:
-                # ★ 2026-10-30：常驻只给「表名 + 中文名 + 一句话」（约 1.5K）。
-                #   字段明细走 describe_table 工具按需取（原 table_menu 26 张表 = 22.6K，
-                #   占 system 的 72%；A/B 实测只给清单时选表全对）。
                 head += ('\n\n【可用数据表（只能查这些，字典外的表一律不可用）】\n'
                          '字段明细请用 describe_table(表名) 现取，不要凭印象写字段。\n'
                          + semantic.table_list_menu())
@@ -105,7 +109,7 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
                 pass
         return head
     except Exception as exc:                       # noqa: BLE001
-        print('[agent_v2] V2 装配失败，回落旧装配：%s' % exc)
+        print('[agent_v2] 装配失败，回落旧装配：%s' % exc)
         return legacy(today)
 
 
@@ -148,4 +152,3 @@ def prefetch_metric(question: str, mode: str = 'data') -> str:
     if md:
         _CACHE[key] = (time.time(), md)
     return md
-

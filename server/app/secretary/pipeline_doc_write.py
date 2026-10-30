@@ -115,9 +115,9 @@ def run(file_id: str, user_id: int, options: dict | None = None,
     say(40, '按公文版式重排')
     sections = sections_from_blocks(title, blocks)
 
-    from app.secretary import site_pack
+    from app.secretary import prompts_data
     from app.secretary import prefs as _prefs
-    dx = _prefs.merge_fmt(site_pack.load(strict=False).get('doc_defaults'),
+    dx = _prefs.merge_fmt(prompts_data.DOC_DEFAULTS,
                           user_id, opts.get('fmt') or {})
     fmt = {'body_font_cn': dx.get('body_font_cn') or '仿宋_GB2312',
            'body_pt': dx.get('body_pt') or 16,

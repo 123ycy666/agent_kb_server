@@ -132,15 +132,15 @@ def year_of(today=None):
         return str(time.localtime().tm_year)
 
 
-# ── Site pack override (P3, 2026-10-21) ─────────────────────────────────
-# 业务表（判据/阈值/角色码/节点）的真源在 config/sites/<SITE>/rules/*.yml。
-# 本文件只保留兜底默认值；包里有同名 UPPERCASE 键就覆盖，没有就沿用默认。
+# ── 规则默认值（原站点包 rules/alerts.yml，2026-10-30 内联进代码）────────
+# 业务表（判据/阈值/角色码/节点）的真源是 `rules_defaults.ALERTS`；
+# 本文件保留同名兜底，同名 UPPERCASE 键用代码里的那份覆盖。
 def _apply_pack_rules(key: str) -> None:
     try:
-        from app.secretary import site_pack
-        ov = ((site_pack.load(strict=False) or {}).get("rules") or {}).get(key) or {}
+        from app.secretary import rules_defaults
+        ov = rules_defaults.get(key) or {}
     except Exception as exc:                       # noqa: BLE001
-        print("[rules] pack load failed, keep defaults:", exc)
+        print("[rules] 读默认值失败，沿用内置：", exc)
         return
     for k, v in (ov or {}).items():
         if not k.isupper() or k not in globals():
