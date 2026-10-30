@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """一次性导出：把线上 `ai_data.ai_prompt` 的 5 道提示词写成站点包里的 md 文件。
 
 为什么要这个脚本（2026-10-21）
 ------------------------------
 站点包是规则真源，但随州的业务口径正文现在还在库里。内网连得上库的机器跑一次
-本脚本，把正文落到 `config/sites/<SITE>/prompts/*.md`，之后就以文件为准（可 diff、可 review）。
+本脚本，把正文落到 `server/app/secretary/sites/<SITE>/prompts/*.md`，之后就以文件为准（可 diff、可 review）。
 
 用法
 ----

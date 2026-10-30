@@ -51,8 +51,10 @@ def sites_root() -> Path:
     env = (os.environ.get('SITE_PACK_DIR') or '').strip()
     if env:
         return Path(env)
-    # server/app/secretary/site_pack.py → 仓库根
-    return Path(__file__).resolve().parents[3] / 'config' / 'sites'
+    # 2026-10-30：站点包随**代码**走（server/app/secretary/sites），不再放在仓库根的 config/。
+    # 理由：它装的是"产品提示词 + 本项目事实"，跟代码同版本才对；放在 config/ 时
+    # 镜像要额外 COPY /config，漏了就是"读不到但也不报错"（2026-10-28 踩过）。
+    return Path(__file__).resolve().parent / 'sites'
 
 
 def list_sites() -> list[str]:

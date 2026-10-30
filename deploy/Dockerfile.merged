@@ -13,10 +13,9 @@ COPY server/ /app/
 # 前端构建产物：main.py 在 /app/app/main.py → parents[2] = / → 必须放到 /web/dist
 COPY web/dist/ /web/dist/
 
-# 站点包：site_pack.sites_root() = Path(server/app/secretary/site_pack.py).parents[3]/'config'/'sites'
-# 在容器里 = /config/sites。不放进去 → jobs.yml / prompts / rules 全读不到，
-# 包内定时任务空转（扫描就只能继续靠宿主机 crontab，2026-10-28 部署时发现）。
-COPY config/ /config/
+# 站点包已随代码走（server/app/secretary/sites/ 已在上一行 COPY server/ 里），
+# 2026-10-30 起不再从仓库根 COPY config/ —— 原来漏 COPY 就是"读不到但也不报错"
+# （2026-10-28 部署时踩过：包内定时任务空转）。
 
 # 旧镜像缺这几个：pymysql（统一用户表 MySQL 只读）、argon2（HR 密码校验）、
 # apscheduler（站点包 jobs.yml 的定时调度，2026-10-28 部署时发现缺失 → 定时任务空转）

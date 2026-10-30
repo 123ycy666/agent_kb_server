@@ -49,7 +49,8 @@ def _block(title: str, body: str) -> str:
 
 def build(pack: dict, *, mode: str = 'data', persona: str | None = None,
           prefs: dict | None = None, skill: str | None = None,
-          priority: str | None = None, answer_format: str | None = None) -> dict:
+          priority: str | None = None, answer_format: str | None = None,
+          rules_menu: str | None = None, skip_business: bool = False) -> dict:
     """按模式拼出最终 system 提示词。
 
     返回 {'system': str, 'layers': [{'id','title','chars','source'}]}
@@ -81,12 +82,17 @@ def build(pack: dict, *, mode: str = 'data', persona: str | None = None,
     mtext = ((pack or {}).get('modes') or {}).get(mode, '')
     add('L2', 'L2 模式做法（%s）' % mode, mtext, 'pack:_platform/mode_%s.md' % mode)
 
-    if mode in MODES_WITH_BUSINESS:
+    if mode in MODES_WITH_BUSINESS and not skip_business:
         # 顺序与"注不注入哪几段"由站点包声明（prompts.l3）；这里只做兜底
         keys = list((pack or {}).get('l3_order') or [k for k, _ in BUSINESS_KEYS])
         for key in keys:
             add('L3', TITLES.get(key, 'L3 %s' % key),
                 prompts.get(key, ''), 'pack:prompts/%s.md' % key)
+
+    # S6：规则目录（来自知识库 type=rule 文档的章节标题）
+    # ★ 规则文档一旦存在，就不再静态注入 L3 —— 否则同一套规则会有两份来源。
+    if rules_menu:
+        add('S6', 'S6 规则目录（按主题精确查）', rules_menu, 'kb:doc_type=rule')
 
     if prefs:
         lines = ['%s：%s' % (k, val) for k, val in prefs.items() if str(val).strip()]

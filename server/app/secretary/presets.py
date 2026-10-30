@@ -46,24 +46,28 @@ PRESETS: list[dict] = [
 GROUPS = ['缺陷工单', '项目预算', '线损指标']
 
 
-def payload() -> dict:
-    """给前端的结构（附带分组顺序，前端不用自己猜）。"""
-    return {'total': len(PRESETS), 'groups': GROUPS, 'items': PRESETS}
+def current() -> dict:
+    """当前生效的预设：代码默认 ← 站点包覆盖（**运行时**读）。
 
-
-# ── Site pack override (P3, 2026-10-21): config/sites/<SITE>/presets.yml ──
-def _apply_pack_presets() -> None:
+    ⚠️ 原来是在 import 时把站点包内容写进模块常量 —— 那是"部署文件改代码"：
+       改完要重启，测试也测不出差异（2026-10-30 统一改成运行时读）。
+    """
+    items, groups = PRESETS, GROUPS
     try:
         from app.secretary import site_pack
-        cfg = ((site_pack.load(strict=False) or {}).get("presets") or {}).get("presets") or {}
+        cfg = ((site_pack.load(strict=False) or {}).get('presets') or {}).get('presets') or {}
     except Exception:                              # noqa: BLE001
-        return
-    groups = cfg.get("GROUPS")
-    if groups:
-        globals()["GROUPS"] = [tuple(g) if isinstance(g, list) else g for g in groups]
-    items = cfg.get("PRESETS")
-    if items:
-        globals()["PRESETS"] = list(items)
+        cfg = {}
+    g = cfg.get('GROUPS')
+    if g:
+        groups = [tuple(x) if isinstance(x, list) else x for x in g]
+    it = cfg.get('PRESETS')
+    if it:
+        items = list(it)
+    return {'groups': groups, 'items': items}
 
 
-_apply_pack_presets()
+def payload() -> dict:
+    """给前端的结构（附带分组顺序，前端不用自己猜）。"""
+    cur = current()
+    return {'total': len(cur['items']), 'groups': cur['groups'], 'items': cur['items']}

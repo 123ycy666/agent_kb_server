@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """P0 验收：站点包装载 + 七层提示词装配（纯文件，不连库、不打模型）。
 
 钉死的七条
@@ -39,7 +39,7 @@ def _fake_sites(base: Path) -> Path:
     root = base / 'sites'
     if root.exists():
         shutil.rmtree(root, ignore_errors=True)
-    shutil.copytree(ROOT / 'config' / 'sites' / '_platform', root / '_platform')
+    shutil.copytree(ROOT / 'server' / 'app' / 'secretary' / 'sites' / '_platform', root / '_platform')
     for name, title in (('demo', '演示供电中心'), ('broken', '残缺中心')):
         d = root / name / 'prompts'
         d.mkdir(parents=True)
@@ -283,7 +283,7 @@ def main() -> int:
     # -- 14 P3-5: presets + doc defaults come from pack --
     import app.secretary.presets as PR
     import app.secretary.docgen as DG
-    chk('P3-5 预设问题 12 条（来自包）', len(PR.PRESETS) == 12, str(len(PR.PRESETS)))
+    chk('P3-5 预设问题 12 条（来自包）', len(PR.current()['items']) == 12, str(len(PR.current()['items'])))
     chk('P3-5 公文默认字体/字号（来自包）', DG.DOC_FONT == '仿宋_GB2312' and DG.BODY_PT == 16,
         '%s/%s' % (DG.DOC_FONT, DG.BODY_PT))
     old_e5 = os.environ.get('SITE_PACK_DIR')
@@ -293,7 +293,7 @@ def main() -> int:
     try:
         importlib.reload(PR)
         importlib.reload(DG)
-        chk('P3-5 换包即换预设问题（1 条）', len(PR.PRESETS) == 1, str(len(PR.PRESETS)))
+        chk('P3-5 换包即换预设问题（1 条）', len(PR.current()['items']) == 1, str(len(PR.current()['items'])))
         chk('P3-5 换包即换公文默认格式',
             float(DG._dd('docx').get('body_pt') or 0) == 14
             and DG._dd('docx').get('body_font_cn') == 'DemoFont', str(DG._dd('docx')))
@@ -308,7 +308,7 @@ def main() -> int:
             os.environ['SITE'] = old_s5
         importlib.reload(PR)
         importlib.reload(DG)
-    chk('P3-5 恢复后预设回到 12 条', len(PR.PRESETS) == 12, str(len(PR.PRESETS)))
+    chk('P3-5 恢复后预设回到 12 条', len(PR.current()['items']) == 12, str(len(PR.current()['items'])))
 
     # -- 15 P3-6: city names / org prefixes / report defaults / xlsx colors from pack --
     import app.secretary.alerts as AL

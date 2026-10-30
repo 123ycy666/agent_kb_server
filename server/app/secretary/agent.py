@@ -1158,12 +1158,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #     只有 0.17~0.19 —— 是不是该用的那条规则全看运气，而且还会把相邻题的标准套错。
     #     现在：system 里常驻「规则目录」（主题+一句话），要判定时模型自己 get_rule(主题)。
     rule_hits, rule_best, rule_ok, rule_query = [], 0.0, True, question
-    rule_menu_text = ''
+    rule_topics = []
     if config.RULES_ON:
         _t_rule = time.time()
         try:
             from app.secretary import rule_doc as _rule_doc
-            rule_menu_text = _rule_doc.menu()
             rule_topics = _rule_doc.topics()
         except Exception as _exc:                  # noqa: BLE001 - 规则读不到不影响问答
             print('[agent] 规则目录读取失败（按无规则继续）：%s: %s'
@@ -1192,16 +1191,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # ★ 2026-10-30：COMMON/CHECK 从**用户消息**搬进 **system**（见下方 agent_v2.system 调用）。
     #   它们是"每次都适用的纪律"，性质与红线相同；塞在用户消息里等于每轮都当用户输入，
     #   而且和 system 里的通用规则分成两处、谁也不管谁。
-    # ★ 规则不再预注入切片：目录在 system 里，要判定就让模型 get_rule 取那一条。
-    if rule_menu_text:
-        user_content += ('\n\n' + rule_menu_text +
-                         '\n要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
-                         '**先用 get_rule(主题) 取规则目录里对应的那一条**；'
-                         '取不到就只报事实，并写明「系统里没有这条判定标准」。'
-                         '不许拿别的主题的标准套到本题上，也不许自己编标准。')
-    else:
-        user_content += ('\n\n【判断标准从哪来】要做判断之前先 get_rule(主题)；'
-                         '取不到就只报事实并说明「系统里没有这类判定标准」，不许自己编标准。')
+    # ★ 规则不再预注入切片：目录在 system（S6），要判定就让模型 get_rule 取那一条。
+    user_content += ('\n\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
+                     '**先用 get_rule(主题) 取 system 里「规则目录」对应的那一条**；'
+                     '取不到就只报事实，并写明「系统里没有这条判定标准」。'
+                     '不许拿别的主题的标准套到本题上，也不许自己编标准。')
     if profile:
         user_content += ('\n\n【提问人身份与数据范围】（判断标准与关注重点按它来，不要因此扩大问题范围）：\n' + profile)
     # ⓪·7 用户上传的文件（2026-10-19 加）：这是本轮回答的**事实来源**。

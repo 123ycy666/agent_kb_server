@@ -67,10 +67,20 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
     if not enabled() or not p or not p.get('prompts'):
         return legacy(today)
     try:
-        from app.secretary import prompt_stack, semantic
+        from app.secretary import prompt_stack, semantic, rule_doc
+        # 规则文档（知识库 type=rule）一旦存在，就不再静态注入站点包的 L3：
+        # 同一套规则只能有一个出处（2026-10-30）。没有规则文档时退回静态 L3，
+        # 保证"还没导入规则"的环境行为和以前一致。
+        rules_menu = ''
+        try:
+            rules_menu = rule_doc.menu()
+        except Exception:                          # noqa: BLE001 - 读不到按无规则
+            rules_menu = ''
         head = prompt_stack.build(p, mode=mode, persona=persona, prefs=prefs,
                                   priority=priority,
-                                  answer_format=answer_format)['system']
+                                  answer_format=answer_format,
+                                  rules_menu=rules_menu or None,
+                                  skip_business=bool(rules_menu))['system']
         if personal_rules:
             head += '\n\n' + personal_rules
         head += ('\n\n今天的日期是 %s。所有「停留天数 / 截至今天」一律按这一天算，'

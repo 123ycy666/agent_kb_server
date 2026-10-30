@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """四类预警与任务流转的**配置层**（改口径、改职责、改时限只改这里）。
 
 纪律：
@@ -427,7 +427,7 @@ def advice_on_point(role_code: str | None, text: str) -> bool:
 
 
 # ── Site pack override (P3, 2026-10-21) ─────────────────────────────────
-# 业务表（判据/阈值/角色码/节点）的真源在 config/sites/<SITE>/rules/*.yml。
+# 业务表（判据/阈值/角色码/节点）的真源在 server/app/secretary/sites/<SITE>/rules/*.yml。
 # 本文件只保留兜底默认值；包里有同名 UPPERCASE 键就覆盖，没有就沿用默认。
 def _apply_pack_rules(key: str) -> None:
     try:
