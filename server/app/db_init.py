@@ -87,10 +87,18 @@ EXTRA_DDL: list[tuple[str, str]] = [
     ),
     # 反向纠正：早期把「制度/流程/办法」类长文档误判成 rule（实测《财务报销管理制度.pdf》
     # 按"第 N 页"切片，规则目录里出现「第 1 页 表格」这种主题，2026-10-30 线上发现）。
+    # ⚠️ 只纠这几个词，且跳过导入脚本生成的规则文档（它们的文件名是英文
+    #    business_rules.md 之类，不能按"文件名没写规则"就翻转 —— 那次误伤正是这么来的）。
     (
         "纠正误判为 rule 的制度类长文档",
         "UPDATE document SET doc_type = 'doc' WHERE doc_type = 'rule' "
-        "AND filename !~ '(规则|口径|规范|标准|要求)'",
+        "AND filename ~ '(制度|流程|办法)' AND content_hash NOT LIKE 'ruleimport-%'",
+    ),
+    # 导入脚本文档一律是 rule（英文文件名不含中文关键词，靠这条保证不被误判）
+    (
+        "导入脚本产生的规则文档标为 rule",
+        "UPDATE document SET doc_type = 'rule' WHERE doc_type = 'doc' "
+        "AND content_hash LIKE 'ruleimport-%'",
     ),
     # ── 冲突隔离细化到切片 ──────────────────────────────────    # ⚠️ 为什么加：冲突挂起原先落在**文档级**（doc.has_conflict 一票否决整篇），
     #    一个切片冲突就让整份文档从检索里消失。改为标记冲突切片后，

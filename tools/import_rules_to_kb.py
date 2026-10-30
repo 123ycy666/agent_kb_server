@@ -152,6 +152,9 @@ def main() -> int:
             for p in files:
                 text = p.read_text(encoding='utf-8')
                 title = DOC_TITLES.get(p.stem, p.stem)
+                # 用中文文件名入库：既好在知识库页面里认，也让"按文件名判 rule"这条
+                # 口径天然成立（business_rules.md 这种英文名会被判成资料）。
+                filename = title + '.md'
                 secs = split_sections(text, title)
                 print('  - %-24s 章节 %d 个' % (p.name, len(secs)))
                 if not args.apply:
@@ -162,7 +165,7 @@ def main() -> int:
                 cur.execute(
                     "SELECT id, version_no FROM document WHERE kb_id=%s AND filename=%s "
                     "AND doc_type='rule' AND is_active ORDER BY version_no DESC LIMIT 1",
-                    (args.kb_id, p.name))
+                    (args.kb_id, filename))
                 row = cur.fetchone()
                 if row:
                     old_id = int(row['id'])
@@ -179,8 +182,8 @@ def main() -> int:
                     "file_size, storage_path, content_hash, parse_status, has_conflict, "
                     "chunk_count, visibility, doc_type, owner_id) "
                     "VALUES (%s,%s,true,%s,'.md',%s,'',%s,'ready',false,%s,'public','rule',NULL)",
-                    (args.kb_id, ver, p.name, len(text.encode('utf-8')),
-                     'ruleimport-' + p.name + '-' + str(ver), len(secs)))
+                    (args.kb_id, ver, filename, len(text.encode('utf-8')),
+                     'ruleimport-' + filename + '-' + str(ver), len(secs)))
                 doc_id = cur.lastrowid
                 if root_id is None:
                     cur.execute("UPDATE document SET root_id=%s WHERE id=%s", (doc_id, doc_id))
