@@ -78,12 +78,19 @@ EXTRA_DDL: list[tuple[str, str]] = [
         "document.doc_type 的索引（按类型取规则文档）",
         "CREATE INDEX IF NOT EXISTS idx_doc_type ON document (doc_type)",
     ),
-    # 存量数据回填：文件名像"规则/口径/标准"的文档升级为 rule（幂等，只动 doc）
+    # 存量数据回填：文件名像"规则/口径/规范/标准/要求"的文档升级为 rule（幂等，只动 doc）
     # 与入库时的判定口径完全一致，避免"老文档永远进不了规则通道"。
     (
         "存量文档按文件名回填 doc_type=rule",
         "UPDATE document SET doc_type = 'rule' WHERE doc_type = 'doc' "
-        "AND filename ~ '(规则|口径|标准|要求|规范|制度|流程|办法)'",
+        "AND filename ~ '(规则|口径|规范|标准|要求)'",
+    ),
+    # 反向纠正：早期把「制度/流程/办法」类长文档误判成 rule（实测《财务报销管理制度.pdf》
+    # 按"第 N 页"切片，规则目录里出现「第 1 页 表格」这种主题，2026-10-30 线上发现）。
+    (
+        "纠正误判为 rule 的制度类长文档",
+        "UPDATE document SET doc_type = 'doc' WHERE doc_type = 'rule' "
+        "AND filename !~ '(规则|口径|规范|标准|要求)'",
     ),
     # ── 冲突隔离细化到切片 ──────────────────────────────────    # ⚠️ 为什么加：冲突挂起原先落在**文档级**（doc.has_conflict 一票否决整篇），
     #    一个切片冲突就让整份文档从检索里消失。改为标记冲突切片后，

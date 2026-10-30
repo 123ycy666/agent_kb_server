@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import re
 import time
 
 from app.secretary import pgdb
@@ -23,6 +24,20 @@ MAX_TOPICS = 40          # 目录上限（超出按文档顺序截断）
 MAX_TEXT = 4000          # 单次 get 返回的正文上限
 _TTL = 60.0              # 秒：规则改动最多 1 分钟生效，不必重启
 _CACHE: dict = {'at': 0.0, 'rows': None}
+
+# 明显不是"规则主题"的标题：PDF/Excel 解析出来的页标记、纯表头。
+# 实测《财务报销管理制度.pdf》被判成 rule 后，目录里冒出「第 1 页 表格」这种主题。
+_BAD_TOPIC = ('第 1 页', '第 2 页', '表格', '页眉', '页脚')
+_BAD_TOPIC_RE = re.compile(r'^第?\s*\d+\s*页?$|^\d+$|^表格$|^表\s*\d+$')
+
+
+def _bad_topic(name: str) -> bool:
+    s = (name or '').strip()
+    if not s or len(s) < 2:
+        return True
+    if s in _BAD_TOPIC or _BAD_TOPIC_RE.match(s):
+        return True
+    return s.startswith(('第 1 页', '第1页', '第 2 页', '第2页'))
 
 
 def _conn():
@@ -94,7 +109,7 @@ def topics(force: bool = False) -> list[dict]:
         leaf = _leaf(_val(row, 'hp', 1))
         fname = str(_val(row, 'filename', 0) or '')
         topic = leaf or fname.rsplit('.', 1)[0]
-        if not topic or topic in seen:
+        if not topic or topic in seen or _bad_topic(topic):
             continue
         body = _text_of(row).replace('\n', ' ')
         seen[topic] = {'topic': topic, 'source': fname,
