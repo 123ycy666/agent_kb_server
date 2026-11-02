@@ -115,16 +115,27 @@ def _pack(want: str, rows: list[dict], matched_by: str, score: float | None = No
         used += len(body)
         if used >= MAX_TEXT:
             break
-    out = {'topic': want,
+    text = '\n'.join(parts)
+    out = {'ok': bool(text),
+           'topic': want,
            'section': rows[0]['section'],
            'code': rows[0]['code'],
            'source': prompt_material.SLOT_NAMES.get(rows[0]['slot'], ''),
            'matched_by': matched_by,
-           'text': '\n'.join(parts)}
+           'text': text}
     if score is not None:
         out['score'] = round(score, 3)
     if also:
         out['also'] = also
+    # 打分兜底命中时把话说清：这是"最接近的一条"，不一定对口。
+    # 实测（2026-11-02）问「今年预算能达标吗」，模型传「预算执行达标判据」→ 兜底命中
+    # 「三、预算执行」（口径对、题型不对），模型就以为取到了，不再试 20.11。
+    if matched_by == 'guess':
+        out['text'] = ('（下面这条是按字面最接近挑的：%s ｜ %s，**不一定对口**；'
+                       '若不合用，可用候选代号再取一次：%s）\n'
+                       % (rows[0]['code'] or rows[0]['section'][:12],
+                          prompt_material.short_name(rows[0]['section']),
+                          '、'.join(also or []) or '无')) + text
     return out
 
 
@@ -140,7 +151,8 @@ def get(topic: str = '', key: str = '', force: bool = False) -> dict:
     """按代号 / 小节名取正文。命中就给；命中不到明确说没有，并给候选代号。"""
     want = str(topic or key or '').strip().strip('「」"\'')
     if not want:
-        return {'error': '缺少 topic（要查哪条规则）：传代号，如 20.2',
+        return {'ok': False,
+                'error': '缺少 topic（要查哪条规则）：传代号，如 20.2',
                 'candidates': _candidates('')}
 
     rows = [r for r in _rows() if r['section']]
@@ -167,7 +179,9 @@ def get(topic: str = '', key: str = '', force: bool = False) -> dict:
     scored = sorted(((_score(want, r), r) for r in rows), key=lambda x: -x[0])
     if scored and scored[0][0] >= GUESS_MIN:
         best = scored[0]
-        return _pack(want, [best[1]], 'guess', score=best[0])
+        near = [prompt_material.labeled(x[1]['section']) for x in scored[1:4]]
+        return _pack(want, [best[1]], 'guess', score=best[0], also=near or None)
 
-    return {'error': '没有这条规则：%s（请用清单里的代号重试，比如 20.2）' % want,
+    return {'ok': False,
+            'error': '没有这条规则：%s（请用清单里的代号重试，比如 20.2）' % want,
             'candidates': _candidates(want)}
