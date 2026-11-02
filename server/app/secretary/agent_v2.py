@@ -101,7 +101,11 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
         # 规则材料（2026-11-01）：不再是「目录 + 按需取」，而是按阶段把这一阶段的
         # 必带小节直接拼进 system。查数循环这一段带 fetch + judge。
         # 换，不叠：收尾写正文前由 agent._swap_materials 换成 answer + check。
-        rules_menu = prompt_material.block(('fetch', 'judge'))
+        # ★ 2026-11-02：清单按**四份**算（index_slots=SLOTS）—— 实测收尾阶段才发现
+        #   有 answer 的题型清单，而那时工具已关，那 19 条从来没被读过。现在查数阶段
+        #   就能看见"这题该怎么答"的代号，可以提前 get_rule。
+        rules_menu = prompt_material.block(('fetch', 'judge'),
+                                           index_slots=prompt_material.SLOTS)
         # 身份 / 模式做法允许页面覆盖（prompt_text 表），没有覆盖就用代码里的默认值
         _identity = prompt_text.get('identity', prompts_data.IDENTITY)
         _modes = prompt_text.mode_texts(prompts_data.MODE_TEXTS)

@@ -212,7 +212,8 @@ def _sanitize_messages(messages):
     return out
 
 
-def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_choice=None):
+def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_choice=None,
+          tools=None):
     # ★ 默认开思考（**不要**关）：关掉思考时模型没有隐藏草稿纸，过程话术会直接写进 content，
     #   正文里出现「这是对策题。回答要点：…」「让我确认一下」「现在我已经收集了…」——
     #   领导看到的就是思考过程（实测，output/probe_thinking.py、probe_final_turn.py）。
@@ -230,7 +231,8 @@ def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_cho
         #   正文直接出来）；原来内网 dsv4 认的是 chat_template_kwargs，随内网 v4 到期一起停用。
         body['enable_thinking'] = False
     if use_tools:
-        body['tools'] = TOOLS
+        # tools：给一个工具子集（收尾阶段只开放 get_rule，物理上不让它再去查数）
+        body['tools'] = tools if tools else TOOLS
         if tool_choice:
             body['tool_choice'] = tool_choice
     body = json.dumps(body).encode('utf-8')
@@ -275,15 +277,70 @@ def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_cho
     raise ModelUnavailable(_model_error_text(model, last, last_detail)) from last
 
 
-def _final_answer(messages, model, max_tokens=2500):
-    """兜底：**关掉工具**再明确要一次正文。
+def _rule_tool():
+    """工具表里那一个 get_rule（收尾阶段只开放它）。"""
+    for t in TOOLS:
+        if ((t.get('function') or {}).get('name')) == 'get_rule':
+            return [t]
+    return []
+
+
+def _final_answer(messages, model, max_tokens=2500, allow_rule=False, trace=None):
+    """兜底：关掉工具再明确要一次正文。
 
     用在 content 为空的场合（实测 Q10「申报有没有不该批的」跑 594s、16 次查询后返回空正文）：
     开着思考时 reasoning 会把 max_tokens 吃满，正文就没了。不能把 reasoning 当答案给领导
     （那是内心独白），更不能给空白 —— 不带工具时它没得可调，只能写正文。
+
+    ★ allow_rule=True（2026-11-02）：先开放**仅 get_rule 一个工具**发一次。原因——
+      收尾前的 system 里换了 answer+check 的非必带清单（19 条「每类题怎么答」），
+      而原来是 `use_tools=False` 直接要正文：清单给了、工具关了，
+      那 19 条规则从来没被读过（实测）。现在给它一轮机会按代号取，最多一轮，防死循环。
+      trace 传进来就把这次取用记进去（kind='tool', tool='get_rule'），线上能看见。
     """
     msgs = list(messages) + [{'role': 'user', 'content':
                               '请直接给出给领导的最终回答正文，不要调用工具、不要复述分析过程、不要写思考过程。'}]
+    if allow_rule and _rule_tool():
+        try:
+            _r0 = _chat(msgs, model, use_tools=True, tools=_rule_tool(),
+                        max_tokens=600, think=False)
+            _msg0 = _r0['choices'][0]['message']
+            _calls0 = _msg0.get('tool_calls') or []
+        except Exception as exc:                       # noqa: BLE001 - 取规则失败就照旧要正文
+            print('[agent] 收尾取规则失败（直接要正文）：%s: %s'
+                  % (type(exc).__name__, str(exc)[:120]), flush=True)
+            _msg0, _calls0 = {}, []
+        if _calls0:
+            # 开场那句「不要调用工具」会误导它，这里把真实意图补一句
+            msgs[-1] = {'role': 'user', 'content':
+                        '要按某类题作答、或要判定标准时，可以先用 get_rule(代号) 取规则原文'
+                        '（代号照抄注入块末尾清单里的那个，别自己编名字）；取到之后'
+                        '再写出给领导的最终回答正文，不要复述取规则的过程。'}
+            msgs.append({'role': 'assistant', 'content': _msg0.get('content') or '',
+                         'tool_calls': _calls0})
+            for tc in _calls0:
+                _fn = (tc.get('function') or {}).get('name') or ''
+                try:
+                    _args = json.loads((tc.get('function') or {}).get('arguments') or '{}')
+                except Exception:                      # noqa: BLE001
+                    _args = {}
+                _out = {}
+                if _fn == 'get_rule':
+                    try:
+                        from app.secretary import rule_doc as _rd
+                        _out = _rd.get(topic=_args.get('topic') or _args.get('key') or '')
+                    except Exception as exc:           # noqa: BLE001
+                        _out = {'error': str(exc)[:160]}
+                msgs.append({'role': 'tool', 'tool_call_id': tc.get('id'),
+                             'content': json.dumps(_out, ensure_ascii=False)[:4000]})
+                if trace is not None:
+                    trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': _fn,
+                                  'args': _args, 'phase': 'final',
+                                  'result': {'ok': bool(_out.get('text')),
+                                             'chars': len(_out.get('text') or ''),
+                                             'code': _out.get('code'),
+                                             'matched_by': _out.get('matched_by'),
+                                             'error': _out.get('error')}})
     # 关思考：实测同一次「写汇报」开着思考要 23s（reasoning 2117 字 + 正文 382 字），
     # 关掉只需几秒；正文由上面的明确口令限定，不缺东西。
     # ★ 偶发空正文（实测 12 题里 1 次：生成 13.6 秒却 content 为空，疑似退化重复被 strip 掉），
@@ -1353,7 +1410,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                                         '就在回答里一句话说清需要补什么，不要再查。'}]
                      if _over_time else messages),
                     ('answer', 'check')),
-                model)
+                    model, allow_rule=True, trace=trace)
             trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content': _why + '，强制出正文'})
             break
         t0 = time.time()
@@ -1414,7 +1471,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             if not used_tool:
                 if not answer:
                     # 空正文（实测 12 题里 1 次）：**不许把空白交给领导**，另起一次要正文
-                    answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model)
+                    answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model,
+                                    allow_rule=True, trace=trace)
                     llm_ms = int((time.time() - t0) * 1000)
                 trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                               'content': answer[:600],
@@ -1422,7 +1480,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 break
             # 数据查完了：**另起一次「写汇报」调用**（不给工具、明确要求写正文）。
             # 关思考的查数轮省下的时间，全花在这一步上——只让它写正文，不让它继续想。
-            answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model)
+            answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model,
+                                    allow_rule=True, trace=trace)
             llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                           'content': answer[:600]})
@@ -1476,7 +1535,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                              '不要在回答里提到本条提示。' % step})
         if fins:
             # 模型自己说「数据够了」→ 由系统另起一次调用写正文（不用它这轮的 content，那是散文草稿）
-            answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model)
+            answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model,
+                                    allow_rule=True, trace=trace)
             llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                           'content': answer[:600], 'note': '模型调用 finish，已另起一次写汇报'})
@@ -1499,7 +1559,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                  '请只使用你本轮查到的数（合计/均值取结果里的 summary），逐条改正后重写正文；'
                  '不要改口径、不要新增没查过的数，也不要提这条提示。' % '、'.join(str(x) for x in _bad1[:8])}]
             try:
-                _ans2 = _final_answer(_swap_materials(_msgs, ('answer', 'check')), model)
+                _ans2 = _final_answer(_swap_materials(_msgs, ('answer', 'check')), model,
+                                      allow_rule=True, trace=trace)
             except Exception:                                  # noqa: BLE001
                 _ans2 = ''
             _bad2 = _untraceable_money(_ans2, _pool)
@@ -1518,7 +1579,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 {'role': 'user', 'content':
                  '回答里出现了「%s」—— 把内部系数写成标准是禁止的。请重写：要么只给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「还差多少、还需完成多少」，不要出现任何「XX%% 基准线 / 达标线 / 进度要求」。' % _coef1}],
             try:
-                _cans2 = _final_answer(_swap_materials(_cmsgs, ('answer', 'check')), model)
+                _cans2 = _final_answer(_swap_materials(_cmsgs, ('answer', 'check')), model,
+                                       allow_rule=True, trace=trace)
             except Exception:                                  # noqa: BLE001
                 _cans2 = ''
             _coef2 = _coefficient_talk(_cans2)

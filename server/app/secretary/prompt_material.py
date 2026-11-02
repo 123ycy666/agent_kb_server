@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import re
 import time
 
 from app.secretary import pgdb
@@ -101,6 +102,45 @@ def chars(slot: str) -> int:
     return len(text(slot))
 
 
+# ── 代号（2026-11-02）────────────────────────────────────────────────
+# 为什么要有：清单里的标题是 40 字带括号举例，模型不肯原样抄，凭印象编短名
+# （「预算执行达标判据」「十七、资金合理性」）→ get_rule 报"没有这条"，白跑一次。
+# 代号从标题前缀自动解析，**不需要人维护**，加规则照常写标题就行。
+_CODE_RE = re.compile(r'^\s*(\d+(?:\.\d+)*)')
+_CN_CODE_RE = re.compile(r'^\s*([一二三四五六七八九十百零〇]{1,4})、')
+
+
+def code_of(section: str) -> str:
+    """标题 → 代号：'20.2 审批待办…' → '20.2'；'六、缺陷类型…' → '六'；认不出返回 ''。"""
+    s = str(section or '')
+    m = _CODE_RE.match(s)
+    if m:
+        return m.group(1)
+    m = _CN_CODE_RE.match(s)
+    if m:
+        return m.group(1)
+    return ''
+
+
+def short_name(section: str, limit: int = 18) -> str:
+    """标题 → 短名：去掉括号举例、去掉代号、截断。'20.2 审批待办 / 审批积压类（「…」）'
+    → '审批待办 / 审批积压类'。"""
+    s = str(section or '').strip()
+    code = code_of(s)
+    if code:
+        s = s[len(code):].lstrip(' 、.．　')
+    s = re.sub(r'[（(][^（）()]*[）)]', '', s).strip()
+    s = re.sub(r'\s+', ' ', s)
+    return (s[:limit] + '…') if len(s) > limit else s
+
+
+def labeled(section: str) -> str:
+    """清单里一行：`20.2 ｜ 审批待办 / 审批积压类`；没有代号就只给短名。"""
+    code = code_of(section)
+    name = short_name(section)
+    return ('%s ｜ %s' % (code, name)) if code else (name or str(section or '')[:18])
+
+
 # 材料段的统一标记：换阶段时靠它把上一段切掉（换，不是叠）
 MARK = '\n\n===== 规则材料（本阶段） =====\n'
 
@@ -110,29 +150,37 @@ def index_text(slots) -> str:
 
     为什么必须有（2026-11-02）：非必带的节正文不进提示词，如果不给清单，模型
     根本不知道有这些主题，`get_rule` 永远不会被调用 —— 等于那 39 节白存。
+
+    2026-11-02 改：**给代号**（`20.2 ｜ 审批待办 / 审批积压类`），不再给 40 字带括号
+    举例的长标题 —— 实测模型不肯原样抄长标题，会凭印象编短名，然后 `get_rule` 报
+    "没有这条规则"。代号是标题前缀自动解析出来的，不需要人维护。
     """
-    names = []
+    lines = []
     for slot in slots:
         for r in sections(slot):
             if not r.get('pinned') and str(r.get('section') or '').strip():
-                names.append(str(r['section']))
-    if not names:
+                lines.append(labeled(str(r['section'])))
+    if not lines:
         return ''
-    return ('【下面这些规则没直接带上；要做判断时用 get_rule(主题) 取原文，'
-            '取不到就说明没有这条标准】\n- ' + '\n- '.join(names))
+    return ('【下面这些规则没直接带上；要按某类题作答前，先 get_rule(代号) 取原文，'
+            '取不到就说明没有这条标准；代号照抄左边那个，别自己编名字】\n- '
+            + '\n- '.join(lines))
 
 
-def block(slots, pinned_only: bool = True, with_index: bool = True) -> str:
+def block(slots, pinned_only: bool = True, with_index: bool = True,
+          index_slots=None) -> str:
     """把几份材料拼成一段（带标记）；没有内容返回空串。
 
-    with_index=True 时，末尾附「没带上的规则」清单 —— 不然模型不知道还有哪些可取。
+    with_index=True 时末尾附「没带上的规则」清单 —— 不然模型不知道还有哪些可取。
+    index_slots：清单按这几份算（默认同 slots）。查数阶段用它把 answer 的题型清单
+    也一起列出来（2026-11-02）：模型在查数阶段就知道这题该按哪类答，可以提前取。
     """
     parts = []
     for slot in slots:
         t = text(slot, pinned_only=pinned_only)
         if t:
             parts.append(t)
-    idx = index_text(slots) if with_index else ''
+    idx = index_text(index_slots if index_slots is not None else slots) if with_index else ''
     if idx:
         parts.append(idx)
     if not parts:
