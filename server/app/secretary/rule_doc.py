@@ -180,6 +180,15 @@ def get(topic: str = '', key: str = '', force: bool = False) -> dict:
     if scored and scored[0][0] >= GUESS_MIN:
         best = scored[0]
         near = [prompt_material.labeled(x[1]['section']) for x in scored[1:4]]
+        # ★ 保底：模型来取规则，多半是想知道"这类题怎么答"（answer 的题型节）。
+        #   实测「预算执行达标判据」字面更像「三、预算执行」（口径节），
+        #   于是它拿了口径就停手，不再去看 20.11 预测类。所以 answer 的题型节
+        #   至少要在 also 里出现一条，给它第二次机会。
+        if not any(x[1]['slot'] == 'answer' and not x[1]['pinned'] for x in scored[:4]):
+            _ans = next((x for x in scored[1:] if x[1]['slot'] == 'answer'
+                         and not x[1]['pinned']), None)
+            if _ans is not None:
+                near = [prompt_material.labeled(_ans[1]['section'])] + near[:2]
         return _pack(want, [best[1]], 'guess', score=best[0], also=near or None)
 
     return {'ok': False,
