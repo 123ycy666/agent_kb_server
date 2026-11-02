@@ -134,39 +134,3 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
 def use_tools(mode: str) -> bool:
     """通用模式不给工具（它不需要查库，给了只会去查）；其余模式照旧。"""
     return mode != 'general'
-
-
-# ── 指标口径预热（2026-10-21）────────────────────────────────────────
-# 实测：同一问题模型每轮自己写 SQL，执行率会漂（22.79% vs 0.00%）。
-# 提示词"必须用某工具"只是高概率；这里改成**代码先按固定口径算好再交给模型**，
-# 模型只负责措辞，数字不由它决定。
-_METRIC_HINTS = ('执行率', '预算执行', '预算花', '还剩多少', '花了多少', '预算用了')
-_STATION_RE = re.compile(r'([\u4e00-\u9fa5]{2,8}(?:供电所|供电服务站|县供电公司|市供电公司))')
-_CACHE: dict = {}
-
-
-def prefetch_metric(question: str, mode: str = 'data') -> str:
-    """命中核心指标时，按固定口径先查好，返回给模型看的 markdown；不命中返回空串。"""
-    if mode != 'data':
-        return ''
-    q = question or ''
-    if not any(h in q for h in _METRIC_HINTS):
-        return ''
-    m = _STATION_RE.search(q)
-    if not m:
-        return ''
-    station = m.group(1)
-    key = ('budget_execution', station)
-    hit = _CACHE.get(key)
-    if hit and (time.time() - hit[0]) < 60:
-        return hit[1]
-    try:
-        from app.secretary import metrics
-        res = metrics.handle({'station': station})
-    except Exception as exc:                       # noqa: BLE001  预取失败不影响正常问答
-        print('[agent_v2] 指标预热失败（不影响回答）：%s' % str(exc)[:120])
-        return ''
-    md = res.get('markdown') or ''
-    if md:
-        _CACHE[key] = (time.time(), md)
-    return md

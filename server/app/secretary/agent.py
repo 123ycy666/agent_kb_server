@@ -1344,11 +1344,6 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 上游强制范围不在这里再注入一遍：它已经在【统计范围】的地点行里写明「强制按此范围取数」，
     # 口径只留一个出处（以前这里注入的是 scope 这个 dict 的 repr，纯属噪声）。
     _mode = agent_v2.judge_mode(question, bool(doc_context))
-    _metric_md = agent_v2.prefetch_metric(question, _mode)
-    if _metric_md:
-        user_content += ('\n\n【已按固定口径查好】'
-                         '下面的数字已按统一口径算好，'
-                         '直接引用，不要自己再查、不要改算：\n' + _metric_md)
     _persona = persona
     if _persona is None and session_id:
         try:
@@ -1759,18 +1754,3 @@ try:
 except Exception:                                  # noqa: BLE001
     pass
 
-# ── 口径兜底工具（2026-10-21）────────────────────────────────────────
-# 高频指标的 SQL 不让模型现编（实测同一问题会漂：22.79% vs 0.00%）。
-# 这里把 metrics.TOOL 挂进工具表，并把 execute 包一层转发；finish 仍排最后。
-from app.secretary import metrics as _metrics
-
-if not any((t.get("function") or {}).get("name") == "budget_execution" for t in TOOLS):
-    TOOLS.insert(len(TOOLS) - 1, _metrics.TOOL)
-
-_agent_execute_orig = execute
-
-
-def execute(name, args):                            # noqa: F811  包裹旧实现
-    if name == "budget_execution":
-        return _metrics.handle(args or {})
-    return _agent_execute_orig(name, args)

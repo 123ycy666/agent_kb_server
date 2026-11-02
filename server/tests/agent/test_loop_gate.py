@@ -132,7 +132,6 @@ def main() -> int:
     agent.gaps.record = lambda *a, **k: None
     agent.semantic.codes_menu = lambda: ''
     agent.semantic.table_list_menu = lambda: 't_budget（替身）'
-    agent.agent_v2.prefetch_metric = lambda q, m='data': ''
     agent.agent_v2.tool_context = lambda: '\n\n【可用数据表】t_budget（替身）'
     agent.config.PAGE_ON = False
     agent.config.NUMBER_GUARD_ON = False
