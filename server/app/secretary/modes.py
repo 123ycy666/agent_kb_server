@@ -45,15 +45,20 @@ def rules_path() -> Path:
 
 def load_rules() -> dict:
     p = rules_path()
-    if not p.is_file():
-        return dict(_FALLBACK_RULES)
+    base = dict(_FALLBACK_RULES)
+    if p.is_file():
+        try:
+            data = yaml.safe_load(p.read_text(encoding='utf-8')) or {}
+            base.update({k: v for k, v in data.items() if isinstance(v, (list, dict))})
+        except Exception:                          # noqa: BLE001
+            pass
+    # 页面上的词表覆盖（prompt_text.keywords）叠在最上面；读不到就用代码里的
     try:
-        data = yaml.safe_load(p.read_text(encoding='utf-8')) or {}
-        out = dict(_FALLBACK_RULES)
-        out.update({k: v for k, v in data.items() if isinstance(v, (list, dict))})
-        return out
+        from app.secretary import prompt_text
+        base.update(prompt_text.keywords() or {})
     except Exception:                              # noqa: BLE001
-        return dict(_FALLBACK_RULES)
+        pass
+    return base
 
 
 def judge(question: str, *, has_files: bool = False, task: str | None = None,

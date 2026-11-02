@@ -75,15 +75,16 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
     if not enabled():
         return legacy(today)
     try:
-        from app.secretary import prompt_stack, semantic, rule_doc
-        # 规则目录（知识库 type=rule 文档的章节标题）：模型据此 get_rule 精确取。
-        rules_menu = ''
-        try:
-            rules_menu = rule_doc.menu()
-        except Exception:                          # noqa: BLE001 - 读不到按无规则
-            rules_menu = ''
+        from app.secretary import prompt_stack, semantic, prompt_material, prompt_text
+        # 规则材料（2026-11-01）：不再是「目录 + 按需取」，而是按阶段把这一阶段的
+        # 必带小节直接拼进 system。查数循环这一段带 fetch + judge。
+        # 换，不叠：收尾写正文前由 agent._swap_materials 换成 answer + check。
+        rules_menu = prompt_material.block(('fetch', 'judge'))
+        # 身份 / 模式做法允许页面覆盖（prompt_text 表），没有覆盖就用代码里的默认值
+        _identity = prompt_text.get('identity', prompts_data.IDENTITY)
+        _modes = prompt_text.mode_texts(prompts_data.MODE_TEXTS)
         head = prompt_stack.build(
-            mode=mode, identity=prompts_data.IDENTITY, modes=prompts_data.MODE_TEXTS,
+            mode=mode, identity=_identity, modes=_modes,
             priority=priority,
             answer_format=((answer_format or '') + '\n\n' + prompts_data.ANSWER_DATA).strip(),
             rules_menu=rules_menu or None,

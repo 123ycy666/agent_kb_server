@@ -104,6 +104,14 @@ if [ -f "$NEW_DIR/db/dispatch_tables.sql" ]; then
     || warn "dispatch 表导入失败（新接口会 503，检查 $LOG）"
 fi
 
+# ── 4.6 提示词材料（2026-11-01，幂等；规则从知识库搬出来进这两张表）──
+if [ -f "$NEW_DIR/db/prompt_materials.sql" ]; then
+  echo "  导入 db/prompt_materials.sql（幂等）"
+  docker cp "$NEW_DIR/db/prompt_materials.sql" "$PG:/tmp/prompt_materials.sql"
+  docker exec "$PG" psql -U kb -d "$DB" -q -v ON_ERROR_STOP=1 -f /tmp/prompt_materials.sql >> "$LOG" 2>&1 \
+    || warn "prompt_material 导入失败（页面会空，检查 $LOG）"
+fi
+
 # ── 5. 起容器 + 健康检查 + 回滚 ────────────────────────────
 step "启动新容器"
 run_container "$IMAGE"

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """提示词装配：代码只决定"顺序与优先级"，正文来自代码常量 + 知识库。
 
 层级（序号小的赢）
@@ -72,7 +72,7 @@ def build(*, mode: str = 'data', identity: str | None = None,
     if answer_format:
         add('S4', 'S4 作答格式（汇报口吻 + 交卷检查）', answer_format, 'code')
     if rules_menu:
-        add('S6', 'S6 规则目录（按主题精确查）', rules_menu, 'kb:doc_type=rule')
+        add('S6', 'S6 规则材料（本阶段注入）', rules_menu, 'table:prompt_material')
     if prefs:
         lines = ['%s：%s' % (k, val) for k, val in prefs.items() if str(val).strip()]
         add('L6', 'L6 个人偏好（本人设置）', '\n'.join(lines), 'user_prefs')

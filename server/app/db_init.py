@@ -78,28 +78,12 @@ EXTRA_DDL: list[tuple[str, str]] = [
         "document.doc_type 的索引（按类型取规则文档）",
         "CREATE INDEX IF NOT EXISTS idx_doc_type ON document (doc_type)",
     ),
-    # 存量数据回填：文件名像"规则/口径/规范/标准/要求"的文档升级为 rule（幂等，只动 doc）
-    # 与入库时的判定口径完全一致，避免"老文档永远进不了规则通道"。
-    (
-        "存量文档按文件名回填 doc_type=rule",
-        "UPDATE document SET doc_type = 'rule' WHERE doc_type = 'doc' "
-        "AND filename ~ '(规则|口径|规范|标准|要求)'",
-    ),
-    # 反向纠正：早期把「制度/流程/办法」类长文档误判成 rule（实测《财务报销管理制度.pdf》
-    # 按"第 N 页"切片，规则目录里出现「第 1 页 表格」这种主题，2026-10-30 线上发现）。
-    # ⚠️ 只纠这几个词，且跳过导入脚本生成的规则文档（它们的文件名是英文
-    #    business_rules.md 之类，不能按"文件名没写规则"就翻转 —— 那次误伤正是这么来的）。
-    (
-        "纠正误判为 rule 的制度类长文档",
-        "UPDATE document SET doc_type = 'doc' WHERE doc_type = 'rule' "
-        "AND filename ~ '(制度|流程|办法)' AND content_hash NOT LIKE 'ruleimport-%'",
-    ),
-    # 导入脚本文档一律是 rule（英文文件名不含中文关键词，靠这条保证不被误判）
-    (
-        "导入脚本产生的规则文档标为 rule",
-        "UPDATE document SET doc_type = 'rule' WHERE doc_type = 'doc' "
-        "AND content_hash LIKE 'ruleimport-%'",
-    ),
+    # ── doc_type 两条通道已废（2026-11-01）───────────────────
+    # 规则离开知识库，进 prompt_material 表；知识库只放资料。
+    # 原来这三条「按文件名回填 rule / 反向纠正 / 导入标记」必须删掉 ——
+    # 它们会在**每次容器启动**时把文件名带「规则」的文档又改回 rule，
+    # 把部署时执行的 `UPDATE document SET doc_type='doc'` 覆盖掉（线上实测：改完重启又回来 9 条）。
+    # 规则的身份现在只由「提示词」页面授予。
     # ── 冲突隔离细化到切片 ──────────────────────────────────    # ⚠️ 为什么加：冲突挂起原先落在**文档级**（doc.has_conflict 一票否决整篇），
     #    一个切片冲突就让整份文档从检索里消失。改为标记冲突切片后，
     #    需要区分「被新版取代」与「被冲突隔离」两种下架原因，否则复活时会误判。
@@ -120,6 +104,57 @@ EXTRA_DDL: list[tuple[str, str]] = [
     (
         "document_chunk.parent_content 列（父块上下文，parent-child 检索）",
         "ALTER TABLE document_chunk ADD COLUMN IF NOT EXISTS parent_content text",
+    ),
+    # ── 提示词材料（2026-11-01）────────────────────────────────
+    # 规则从知识库搬出来单独存：知识库只放资料，规则进这两张表。
+    # slot 四种：fetch 查数口径 / judge 判定标准 / answer 作答规则 / check 自检清单。
+    # 基础提示词（红线/优先级/身份/模式做法/汇报口吻）仍是代码常量，不进表。
+    (
+        "prompt_material 表（四份提示词材料）",
+        "CREATE TABLE IF NOT EXISTS prompt_material ("
+        "id bigserial PRIMARY KEY, "
+        "slot varchar(16) NOT NULL, "
+        "section varchar(160) NOT NULL, "
+        "body text NOT NULL, "
+        "sort_no int NOT NULL DEFAULT 0, "
+        "enabled boolean NOT NULL DEFAULT true, "
+        "version_no int NOT NULL DEFAULT 1, "
+        "updated_by varchar(64) NOT NULL DEFAULT '', "
+        "updated_at timestamptz NOT NULL DEFAULT now())",
+    ),
+    (
+        "prompt_material 的 slot 索引",
+        "CREATE INDEX IF NOT EXISTS idx_material_slot "
+        "ON prompt_material (slot, enabled, sort_no)",
+    ),
+    (
+        "complete_rule 表（补全表：问法 → 标准口径）",
+        "CREATE TABLE IF NOT EXISTS complete_rule ("
+        "id bigserial PRIMARY KEY, "
+        "kind varchar(16) NOT NULL DEFAULT 'norm', "
+        "match_text varchar(200) NOT NULL, "
+        "fill_text varchar(300) NOT NULL, "
+        "priority int NOT NULL DEFAULT 100, "
+        "enabled boolean NOT NULL DEFAULT true, "
+        "updated_at timestamptz NOT NULL DEFAULT now())",
+    ),
+    (
+        "complete_rule 的优先级索引",
+        "CREATE INDEX IF NOT EXISTS idx_complete_priority "
+        "ON complete_rule (enabled, priority)",
+    ),
+    (
+        "prompt_material.pinned 列（必带 / 按需）",
+        "ALTER TABLE prompt_material ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT true",
+    ),
+    (
+        "prompt_text 表（身份 / 汇报口吻 / 模式做法 / 词表 的页面覆盖）",
+        "CREATE TABLE IF NOT EXISTS prompt_text ("
+        "k varchar(64) PRIMARY KEY, "
+        "body text NOT NULL, "
+        "version_no int NOT NULL DEFAULT 1, "
+        "updated_by varchar(64) NOT NULL DEFAULT '', "
+        "updated_at timestamptz NOT NULL DEFAULT now())",
     ),
 ]
 

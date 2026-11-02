@@ -16,6 +16,7 @@ import ModelConfig from './pages/ModelConfig'
 import TaskCenter from './pages/TaskCenter'
 import AgentChat from './pages/AgentChat'
 import ChatHistory from './pages/ChatHistory'
+import Prompts from './pages/Prompts'
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useAuth()
@@ -63,6 +64,7 @@ export default function App() {
           <Route path="kb" element={<KnowledgeBaseList />} />
           <Route path="kb/:kbId/documents" element={<DocumentList />} />
           <Route path="search" element={<SearchTest />} />
+          <Route path="prompts" element={<Prompts />} />
           {/* 智能问答：SPA 内页面，iframe 嵌后端 /agent/（侧边栏与身份区保留） */}
           <Route path="agent" element={<AgentChat />} />
           <Route path="history" element={<ChatHistory />} />

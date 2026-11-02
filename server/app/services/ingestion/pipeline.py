@@ -37,21 +37,16 @@ from app.services.tag_governance import normalize_tags, sync_tag_vocabulary
 
 logger = logging.getLogger(__name__)
 
-# ── 文档类型判定（2026-10-30）────────────────────────────────
-# rule = 规则/口径：每轮注入给模型（不进向量检索）
-# doc  = 资料：走检索，命中后标出处
-# 判定按**文件名**做，前端不用多传字段（少一个前后端约定就少一处不一致）。
-#
-# ⚠️ 只认"规则/口径/规范/标准/要求"这几类**结构性**文档。
-#    不要把「制度/流程/办法」也算进来：实测《财务报销管理制度.pdf》被判成 rule 之后，
-#    它按"第 1 页 / 第 2 页"切片，规则目录里冒出「第 1 页 表格」这种主题（线上 2026-10-30）。
-#    长制度原文属于**资料**，该走检索。
-_RULE_NAME_HINTS = ('规则', '口径', '规范', '标准', '要求')
+# ── 文档类型判定（2026-11-01 停用）────────────────────────
+# 规则已经离开知识库（进 prompt_material 表），知识库只放资料 ⇒ 上传一律 doc。
+# 原来按文件名猜「规则/口径/规范/标准/要求」的判定已删：员工传《XX工作要求》会被判成
+# 规则、混进所有人的目录，为此打过三轮补丁（加词、反向纠正、跳过导入前缀）。
+# 规则的身份现在只由管理员在「提示词」页面授予，不靠取名。
 
 
 def _doc_type_of(filename: str) -> str:
-    name = str(filename or '')
-    return 'rule' if any(h in name for h in _RULE_NAME_HINTS) else 'doc'
+    """保留函数名只为兼容老调用；**一律返回 doc**。"""
+    return 'doc'
 
 
 def _safe_unlink(path: Path) -> None:

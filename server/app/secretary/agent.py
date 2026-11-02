@@ -294,6 +294,26 @@ def _final_answer(messages, model, max_tokens=2500):
     return ''
 
 
+def _swap_materials(messages, slots):
+    """把 system 里的「规则材料」段换成另一阶段的（换，不叠）。
+
+    2026-11-01：查数循环带 fetch + judge；收尾写正文前换成 answer + check。
+    上一阶段的材料整段切掉，中间查到的数据留在对话轮次里 —— 规则退出，结论留下。
+    """
+    try:
+        from app.secretary import prompt_material
+        blk = prompt_material.block(slots)
+        msgs = list(messages)
+        if not msgs or msgs[0].get('role') != 'system':
+            return msgs
+        base = prompt_material.strip_block(str(msgs[0].get('content') or ''))
+        msgs[0] = {'role': 'system', 'content': base + (blk or '')}
+        return msgs
+    except Exception as exc:                       # noqa: BLE001 - 换材料失败不影响回答
+        print('[agent] 换规则材料失败（沿用当前 system）：%s' % str(exc)[:120], flush=True)
+        return messages
+
+
 _TOOL_RESULT_CHARS = 4000      # 单个工具结果给模型的字符上限（可用 config 覆盖）
 
 
@@ -671,6 +691,20 @@ CHECK = (
 )
 
 
+def _answer_format() -> str:
+    """S4 作答格式 = 汇报口吻 + 交卷检查。
+
+    2026-11-01：允许在「提示词」页面覆盖（prompt_text.answer_format）；
+    没有覆盖就用代码常量。读失败一律回退，不许让问答崩。
+    """
+    default = COMMON + CHECK
+    try:
+        from app.secretary import prompt_text
+        return prompt_text.get('answer_format', default)
+    except Exception:                              # noqa: BLE001
+        return default
+
+
 
 # ── 按需工具：表字段明细 / 规则条目（2026-10-30）──────────────────────
 # 为什么做成工具而不是常驻提示词：表目录 26 张表 = 22.6K 字符（占 system 72%），
@@ -1034,10 +1068,24 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 检索范围**只走 kb_adapter 的线程上下文**（路由层 set_scope 登记）。
     # 2026-10-19 曾在这里接 kb_ids 形参兜底兼容，2026-10-20 cce1d3e 改为只走上下文；
     # 2026-10-21 合流时形参又被带回来，现已删除（两条路并存是冗余，且测试按原设计断言）。
+    # ⓪ 粗闸（2026-11-01）：先判这句话要不要动。不像业务问题就一个字都不改 ——
+    #    写通知 / 闲聊 / 问概念也被纠错、被补时间，是把「资金」改成「紫金台区」那类事故的源头。
+    from app.secretary import preprocess as _pre
+    allow_refine = _pre.gate(question)
     # ⓪ 字面纠错 + 名称归一（阶段①的「字面」部分，在问题补全之前）。
     #    必须先做：字没改对，后面检索知识库、补全、写 SQL 全是白费。
+    #    ★ 闸放行之外还有一条路：**问题里有业务对象名称**（「两水」「环潭」这种光杆所名）
+    #      也算业务问题 —— 「两水」两个字里一个业务词都没有，光看词表会被判成闲聊
+    #      （线上 2026-11-02 实测：问「两水」不补全、直接当通用问题答）。
     t_fix = time.time()
     fixed = name_fix.fix(question)
+    # name_fix 的返回里 names 字段可能是 None，靠「有没有改动」判更可靠：
+    # 「两水」→「两水供电所」就是它识别出业务对象了（实测线上 2026-11-02）。
+    if not allow_refine and (fixed.get('used') or str(fixed.get('text') or '') != question):
+        allow_refine = True
+    if not allow_refine:
+        fixed = {'used': False, 'text': question, 'word_fixes': [], 'name_fixes': [],
+                 'names': [], 'areas': [], 'hint': '', 'unresolved': [], 'ms': 0}
     if fixed['used']:
         question = fixed['text']
         trace.append({'seq': len(trace) + 1, 'kind': 'namefix', 'tool': 'name_fix',
@@ -1051,6 +1099,18 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                                  'unresolved': fixed.get('unresolved', []),
                                  'hint': fixed['hint']}})
     namefix_ms = int((time.time() - t_fix) * 1000)
+    # ⓪·3 补全（2026-11-01）：只有像业务问题才补 —— 只说了对象没问啥，补默认问法。
+    comp = {'changed': False, 'hits': []}
+    if allow_refine:
+        try:
+            comp = _pre.complete(question) or comp
+            if comp.get('changed'):
+                question = comp['text']
+                trace.append({'seq': len(trace) + 1, 'kind': 'complete', 'tool': 'complete',
+                              'result': {'before': raw_question, 'text': question,
+                                         'hits': comp.get('hits') or []}})
+        except Exception as _exc:                  # noqa: BLE001 - 补全失败按原话继续
+            print('[agent] 补全失败（按原话继续）：%s' % str(_exc)[:120], flush=True)
     # ⓪·4 载入多轮上下文（同一场会话最近的几轮问答）。
     #      **必须放在时间地点补全之前** —— 本轮没提时间/地点时要沿用上一轮的口径。
     #      载入失败按「无上下文」处理，绝不影响本轮问答。
@@ -1102,7 +1162,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     t_scope = time.time()
     scope = time_scope.describe(question, fixed, prev=prev_scope, today=today,
                                force_place=force_scope)
-    if scope['question'] and scope['question'] != question:
+    if allow_refine and scope['question'] and scope['question'] != question:
         question = scope['question']
     trace.append({'seq': len(trace) + 1, 'kind': 'scope', 'tool': 'time_scope',
                   'ms': int((time.time() - t_scope) * 1000),
@@ -1124,6 +1184,12 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     t_loop = time.time()
     # 问题为准；补全结果只作参考，由模型自己判断适不适用
     user_content = question
+    # 【本题口径】补全表命中的口径必须交给模型 —— 只记 trace 不注入等于没做
+    #（线上 2026-11-02 实测：问「两水供电所情况」补全没触发、口径也没给，模型只能按自己习惯答）。
+    _fills = [h for h in (comp.get('hits') or []) if str(h.get('fill') or '').strip()]
+    if _fills and allow_refine:
+        user_content += ('\n\n【本题口径（用户这么问时按这个答全，来自补全表；这不是新问题）】\n'
+                         + '\n'.join('- %s → %s' % (h.get('match'), h.get('fill')) for h in _fills))
     # 已摘要覆盖的轮次由【本场会话摘要】代表，明细里就不再重复带 ——
     # 否则同一件事讲两遍，既白烧 token，又可能让摘要与明细互相打架。
     # ★ 但**最近 N 轮例外**：紧跟上一轮的追问（「那售电量呢」）看原话比看摘要可靠，
@@ -1252,7 +1318,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                      # system 里【时间处理】撞车时没有裁判。用同一份常量，不另写一份。
                      priority=(RULES_PRIORITY if config.RULES_PRIORITY else ''),
                      # S4 作答格式：汇报口吻 + 交卷检查（原在 user 消息里）
-                     answer_format=(COMMON + CHECK),
+                     # 允许页面覆盖（prompt_text.answer_format），没有覆盖就用代码常量
+                     answer_format=_answer_format(),
                      # S7 我的规则（个人库 type=rule）
                      personal_rules=(_pkb.get('text') or ''))},
                 {'role': 'user', 'content': user_content}]
@@ -1271,10 +1338,13 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             # 什么都拿不到；宁可给一份「已查到什么 + 还缺什么」的回答。
             _why = ('已到查询步数上限 %d' % max_steps) if _over_step else ('已到单题时间预算 %.0f 秒' % config.QUESTION_BUDGET_S)
             answer = _final_answer(
-                list(messages) + [{'role': 'user', 'content':
-                                  '时间/步数预算到了，请**用已查到的数据**给出结论；'
-                                  '如果还缺关键前提（例如具体是哪张单、哪个所），'
-                                  '就在回答里一句话说清需要补什么，不要再查。'}] if _over_time else messages,
+                _swap_materials(
+                    (list(messages) + [{'role': 'user', 'content':
+                                        '时间/步数预算到了，请**用已查到的数据**给出结论；'
+                                        '如果还缺关键前提（例如具体是哪张单、哪个所），'
+                                        '就在回答里一句话说清需要补什么，不要再查。'}]
+                     if _over_time else messages),
+                    ('answer', 'check')),
                 model)
             trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content': _why + '，强制出正文'})
             break
@@ -1324,7 +1394,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 break
             # 数据查完了：**另起一次「写汇报」调用**（不给工具、明确要求写正文）。
             # 关思考的查数轮省下的时间，全花在这一步上——只让它写正文，不让它继续想。
-            answer = _final_answer(messages, model)
+            answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model)
             llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                           'content': answer[:600]})
@@ -1378,7 +1448,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                              '不要在回答里提到本条提示。' % step})
         if fins:
             # 模型自己说「数据够了」→ 由系统另起一次调用写正文（不用它这轮的 content，那是散文草稿）
-            answer = _final_answer(messages, model)
+            answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model)
             llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                           'content': answer[:600], 'note': '模型调用 finish，已另起一次写汇报'})
@@ -1401,7 +1471,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                  '请只使用你本轮查到的数（合计/均值取结果里的 summary），逐条改正后重写正文；'
                  '不要改口径、不要新增没查过的数，也不要提这条提示。' % '、'.join(str(x) for x in _bad1[:8])}]
             try:
-                _ans2 = _final_answer(_msgs, model)
+                _ans2 = _final_answer(_swap_materials(_msgs, ('answer', 'check')), model)
             except Exception:                                  # noqa: BLE001
                 _ans2 = ''
             _bad2 = _untraceable_money(_ans2, _pool)
@@ -1420,7 +1490,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 {'role': 'user', 'content':
                  '回答里出现了「%s」—— 把内部系数写成标准是禁止的。请重写：要么只给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「还差多少、还需完成多少」，不要出现任何「XX%% 基准线 / 达标线 / 进度要求」。' % _coef1}],
             try:
-                _cans2 = _final_answer(_cmsgs, model)
+                _cans2 = _final_answer(_swap_materials(_cmsgs, ('answer', 'check')), model)
             except Exception:                                  # noqa: BLE001
                 _cans2 = ''
             _coef2 = _coefficient_talk(_cans2)

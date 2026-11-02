@@ -18,6 +18,7 @@ import {
   DashboardOutlined,
   DeploymentUnitOutlined,
   ExclamationCircleOutlined,
+  FileTextOutlined,
   HistoryOutlined,
   LogoutOutlined,
   MessageOutlined,
@@ -52,6 +53,7 @@ export default function MainLayout() {
     { key: '/overview', icon: <DashboardOutlined />, label: <Link to="/overview">概览</Link> },
     { key: '/kb', icon: <BookOutlined />, label: <Link to="/kb">知识库</Link> },
     { key: '/search', icon: <SearchOutlined />, label: <Link to="/search">检索测试</Link> },
+    { key: '/prompts', icon: <FileTextOutlined />, label: <Link to="/prompts">提示词</Link> },
     {
       key: '/agent',
       icon: <MessageOutlined />,
