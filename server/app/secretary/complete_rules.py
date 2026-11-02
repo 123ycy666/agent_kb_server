@@ -67,32 +67,49 @@ def as_text() -> str:
 
 
 def save(items: list[dict]) -> dict:
-    """整表覆盖保存。items = [{kind, match_text, fill_text, priority}]"""
+    """整表覆盖保存。items = [{kind, match_text, fill_text, priority}]
+
+    ★ 2026-11-02 真库实测修的一次**数据丢失**：原来是「先 DELETE 全表、再逐行 INSERT」+
+      autocommit —— priority 传了非数字时 `int()` 抛异常，而 DELETE 已经提交：
+      **整张补全表被清空**；页面还会因为失败路径没清缓存继续显示旧行（看着没事，实际空了）。
+      现在：① 参数先全部算好；② 再开事务整体提交；失败 rollback，一行不少。
+    """
     items = [x for x in (items or []) if str(x.get('match_text') or '').strip()
              and str(x.get('fill_text') or '').strip()]
     try:
-        conn = pgdb.connect(autocommit=True)
+        args = [(str(x.get('kind') or 'norm')[:16], str(x.get('match_text'))[:200],
+                 str(x.get('fill_text'))[:300],
+                 int(x.get('priority') if x.get('priority') is not None else (i + 1) * 10))
+                for i, x in enumerate(items)]
+    except Exception as exc:                       # noqa: BLE001 - 类型不对就别碰库
+        return {'error': '内容格式不对（未写入任何数据）：%s' % str(exc)[:160]}
+    conn = None
+    try:
+        conn = pgdb.connect(autocommit=False)
+        cur = conn.cursor()
         try:
-            cur = conn.cursor()
-            try:
-                cur.execute('DELETE FROM complete_rule')
-                for i, x in enumerate(items):
-                    cur.execute(
-                        'INSERT INTO complete_rule (kind, match_text, fill_text, priority, enabled) '
-                        'VALUES (%s,%s,%s,%s,true)',
-                        (str(x.get('kind') or 'norm')[:16], str(x.get('match_text'))[:200],
-                         str(x.get('fill_text'))[:300],
-                         int(x.get('priority') if x.get('priority') is not None else (i + 1) * 10)))
-                clear_cache()
-                return {'ok': True, 'rows': len(items)}
-            finally:
-                cur.close()
+            cur.execute('DELETE FROM complete_rule')
+            for a in args:
+                cur.execute(
+                    'INSERT INTO complete_rule (kind, match_text, fill_text, priority, enabled) '
+                    'VALUES (%s,%s,%s,%s,true)', a)
         finally:
-            try:
-                conn.close()
-            except Exception:                      # noqa: BLE001
-                pass
+            cur.close()
+        conn.commit()
+        clear_cache()
+        return {'ok': True, 'rows': len(args)}
     except Exception as exc:                       # noqa: BLE001
-        print('[complete_rules] 保存失败：%s: %s'
+        try:
+            if conn is not None:
+                conn.rollback()                    # ★ 回滚：原表一行不少
+        except Exception:                          # noqa: BLE001
+            pass
+        print('[complete_rules] 保存失败（已回滚，原表未动）：%s: %s'
               % (type(exc).__name__, str(exc)[:200]), flush=True)
-        return {'error': '保存失败：%s' % str(exc)[:200]}
+        return {'error': '保存失败（已回滚，原表未动）：%s' % str(exc)[:200]}
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:                          # noqa: BLE001
+            pass

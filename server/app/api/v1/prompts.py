@@ -10,7 +10,9 @@
     GET  /api/v1/prompts/complete       补全表
     PUT  /api/v1/prompts/complete       保存补全表
 
-写操作只要求登录。线上只有管理员在用；要收紧再按 `actor.is_admin` 加闸（记在计划 Progress）。
+权限口径（2026-11-02 Fred 定）：**登录用户都能改，不设管理员闸**。
+这 13 个接口一律只 `Depends(get_current_actor)`；前端 `/prompts` 页面对所有登录用户开放。
+要收紧是另一件事，**别自己加 `is_admin` 判断** —— 加之前先问。
 """
 from __future__ import annotations
 
@@ -28,6 +30,21 @@ _HEAD = re.compile(r'^(#{1,4})\s+(.+?)\s*$', re.M)
 
 def _jr(data, status_code: int = 200):
     return JSONResponse(content=data, status_code=status_code)
+
+
+async def _json_body(request: Request):
+    """取 JSON 请求体：坏 JSON / 不是对象都返回 (None, 错误文案)。
+
+    2026-11-02 真库实测补的：`await request.json()` 直接抛会让几个写接口变成 500，
+    前端只能看到"服务异常"。所有写接口统一走这里。
+    """
+    try:
+        data = await request.json()
+    except Exception:                              # noqa: BLE001
+        return None, '请求体不是 JSON'
+    if not isinstance(data, dict):
+        return None, '请求体必须是 JSON 对象'
+    return data, ''
 
 
 def _split_md(text: str) -> list[dict]:
@@ -102,15 +119,20 @@ async def save_material(slot: str, request: Request,
     from app.secretary import prompt_material
     if slot not in prompt_material.SLOTS:
         return _jr({'error': '未知 slot：%s' % slot}, 404)
-    body = await request.json()
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
     sections = body.get('sections') or []
     if not isinstance(sections, list):
         return _jr({'error': 'sections 必须是数组'}, 400)
-    rows = [{'section': str(x.get('section') or '')[:160],
-             'body': str(x.get('body') or ''),
-             'sort_no': i,
-             'version_no': x.get('version_no') or 1}
-            for i, x in enumerate(sections)]
+    rows = []
+    for i, x in enumerate(sections):
+        if not isinstance(x, dict):
+            return _jr({'error': 'sections 里第 %d 项不是对象' % (i + 1)}, 400)
+        rows.append({'section': str(x.get('section') or '')[:160],
+                     'body': str(x.get('body') or ''),
+                     'sort_no': i,
+                     'version_no': x.get('version_no') or 1})
     res = prompt_material.replace_slot(slot, rows, user=actor.username)
     return _jr(res, 200 if res.get('ok') else 500)
 
@@ -171,7 +193,9 @@ def list_complete(actor: CurrentActor = Depends(get_current_actor)):
 @router.put('/complete', summary='保存补全表')
 async def save_complete(request: Request, actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import complete_rules
-    body = await request.json()
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
     res = complete_rules.save(body.get('rows') or [])
     return _jr(res, 200 if res.get('ok') else 500)
 
@@ -182,7 +206,9 @@ async def add_section(slot: str, request: Request,
     from app.secretary import prompt_material
     if slot not in prompt_material.SLOTS:
         return _jr({'error': '未知 slot：%s' % slot}, 404)
-    body = await request.json()
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
     return _jr(prompt_material.add_section(
         slot, body.get('section') or '', body.get('body') or '',
         bool(body.get('pinned', True)), user=actor.username))
@@ -205,7 +231,9 @@ def list_texts(actor: CurrentActor = Depends(get_current_actor)):
 async def save_text(key: str, request: Request,
                     actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import prompt_text
-    body = await request.json()
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
     res = prompt_text.save(key, body.get('body') or '', user=actor.username)
     return _jr(res, 200 if res.get('ok') else 500)
 

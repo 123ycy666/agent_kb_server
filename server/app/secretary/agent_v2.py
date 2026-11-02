@@ -63,6 +63,28 @@ def judge_mode(question: str, has_files: bool = False) -> str:
         return 'data'
 
 
+def tool_context() -> str:
+    """查数要用的目录：业务码表 + 可用数据表清单（前面带两个换行，可直接拼）。
+
+    system 与「核实提醒」共用同一份 —— 提醒时若是纯写作模式起的头，
+    这份目录原先根本没进 system，模型即使被解锁工具也不知道能查哪张表。
+    """
+    parts = []
+    try:
+        codes = semantic.codes_menu()
+        if codes:
+            parts.append(codes)
+    except Exception:                              # noqa: BLE001
+        pass
+    try:
+        parts.append('【可用数据表（只能查这些，字典外的表一律不可用）】\n'
+                     '字段明细请用 describe_table(表名) 现取，不要凭印象写字段。\n'
+                     + semantic.table_list_menu())
+    except Exception:                              # noqa: BLE001
+        pass
+    return ('\n\n' + '\n\n'.join(parts)) if parts else ''
+
+
 def system(mode: str, legacy, today=None, persona: str | None = None,
            prefs: dict | None = None, priority: str | None = None,
            answer_format: str | None = None, personal_rules: str | None = None) -> str:
@@ -95,19 +117,10 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
                  '不要拿数据里的时间当今天。' % (today or time.strftime('%Y-%m-%d')))
         # 通用模式**不塞**业务码表与数据表目录：那是查数专用上下文，
         # 塞进去会把「写个工作总结」拽回业务轨道 —— 这正是要解开的锁。
+        # 反过来，判成 general 之后才发现它要查数的（2026-11-02 内网实测），
+        # 由 agent 那一侧补救：触发核实提醒时用 tool_context() 把这份目录补进对话。
         if mode in ('data', 'doc'):
-            try:
-                codes = semantic.codes_menu()
-                if codes:
-                    head += '\n\n' + codes
-            except Exception:                      # noqa: BLE001
-                pass
-            try:
-                head += ('\n\n【可用数据表（只能查这些，字典外的表一律不可用）】\n'
-                         '字段明细请用 describe_table(表名) 现取，不要凭印象写字段。\n'
-                         + semantic.table_list_menu())
-            except Exception:                      # noqa: BLE001
-                pass
+            head += tool_context()
         return head
     except Exception as exc:                       # noqa: BLE001
         print('[agent_v2] 装配失败，回落旧装配：%s' % exc)

@@ -31,8 +31,8 @@ _TTL = 60.0          # 秒：改了规则最多 1 分钟生效，不必重启
 _CACHE: dict = {}
 
 
-def _conn():
-    return pgdb.connect(autocommit=True)
+def _conn(autocommit: bool = True):
+    return pgdb.connect(autocommit=autocommit)
 
 
 def clear_cache() -> None:
@@ -270,6 +270,10 @@ def delete_section(sec_id: int) -> dict:
             cur = conn.cursor()
             try:
                 cur.execute('DELETE FROM prompt_material WHERE id = %s', (int(sec_id),))
+                # 2026-11-02 真库实测：删不存在的 id 影响 0 行，原来也当成功返回，
+                # 页面上就显示"已删除"而实际什么也没发生。看 rowcount。
+                if not cur.rowcount:
+                    return {'error': '小节不存在：%s' % sec_id}
                 clear_cache()
                 return {'ok': True, 'id': int(sec_id), 'deleted': True}
             finally:
@@ -284,9 +288,15 @@ def delete_section(sec_id: int) -> dict:
 
 
 def replace_slot(slot: str, rows: list[dict], user: str = 'import') -> dict:
-    """整份覆盖（导入脚本用）：清掉原 slot 的行，按 rows 重写。
+    """整份覆盖（导入脚本 / 页面保存）：清掉原 slot 的行，按 rows 重写。
 
     rows = [{'section','body','sort_no'}]（可选 pinned / version_no）
+
+    ★ 2026-11-02 真库实测修的一次**数据丢失**：原来是「先 DELETE、再逐行 INSERT」+
+      autocommit —— 第三行写不进去（正文含 NUL、或 sort_no 传了非数字）时，
+      原内容已经删了、新内容只写了一半，页面只看到一句「写入失败」。
+      现在：① 参数先全部算好（算不出来直接返回，一行不碰）；
+            ② 再开事务整体提交；中途任何失败 rollback，原内容一行不少。
     """
     slot = (slot or '').strip()
     if slot not in SLOTS:
@@ -295,30 +305,42 @@ def replace_slot(slot: str, rows: list[dict], user: str = 'import') -> dict:
     if not rows:
         return {'error': '没有内容可写'}
     try:
-        conn = _conn()
-        try:
-            cur = conn.cursor()
-            try:
-                cur.execute('DELETE FROM prompt_material WHERE slot = %s', (slot,))
-                for i, r in enumerate(rows):
-                    cur.execute(
-                        'INSERT INTO prompt_material (slot, section, body, sort_no, '
-                        'enabled, pinned, version_no, updated_by) '
-                        'VALUES (%s,%s,%s,%s,true,%s,%s,%s)',
-                        (slot, str(r.get('section') or '')[:160], str(r.get('body') or ''),
+        args = []
+        for i, r in enumerate(rows):
+            args.append((slot, str(r.get('section') or '')[:160], str(r.get('body') or ''),
                          int(r.get('sort_no') if r.get('sort_no') is not None else i),
                          bool(r.get('pinned', True)),
                          int(r.get('version_no') or 1), str(user or '')[:64]))
-                clear_cache()
-                return {'ok': True, 'slot': slot, 'sections': len(rows)}
-            finally:
-                cur.close()
+    except Exception as exc:                       # noqa: BLE001 - 类型不对就别碰库
+        return {'error': '内容格式不对（未写入任何数据）：%s' % str(exc)[:160]}
+    conn = None
+    try:
+        conn = _conn(autocommit=False)
+        cur = conn.cursor()
+        try:
+            cur.execute('DELETE FROM prompt_material WHERE slot = %s', (slot,))
+            for a in args:
+                cur.execute(
+                    'INSERT INTO prompt_material (slot, section, body, sort_no, '
+                    'enabled, pinned, version_no, updated_by) '
+                    'VALUES (%s,%s,%s,%s,true,%s,%s,%s)', a)
         finally:
-            try:
-                conn.close()
-            except Exception:                      # noqa: BLE001
-                pass
+            cur.close()
+        conn.commit()
+        clear_cache()
+        return {'ok': True, 'slot': slot, 'sections': len(args)}
     except Exception as exc:                       # noqa: BLE001
-        print('[prompt_material] 覆盖 %s 失败：%s: %s'
+        try:
+            if conn is not None:
+                conn.rollback()                    # ★ 回滚：原内容一行不少
+        except Exception:                          # noqa: BLE001
+            pass
+        print('[prompt_material] 覆盖 %s 失败（已回滚，原内容未动）：%s: %s'
               % (slot, type(exc).__name__, str(exc)[:200]), flush=True)
-        return {'error': '写入失败：%s' % str(exc)[:200]}
+        return {'error': '写入失败（已回滚，原内容未动）：%s' % str(exc)[:200]}
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:                          # noqa: BLE001
+            pass

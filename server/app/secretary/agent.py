@@ -21,6 +21,7 @@ import urllib.request
 
 from app.secretary import agent_v2
 from app.secretary import config
+from app.secretary import evidence_gate
 from app.secretary import gaps
 from app.secretary import name_fix
 from app.secretary import semantic
@@ -28,8 +29,9 @@ from app.secretary import time_scope
 from app.secretary import tools_db
 from app.secretary import tools_kb
 
-# 数字断言：出现「数字 + 单位」就认为它在给业务数字（这类答案必须有工具出处）
-_CLAIM = re.compile(r'\d+(?:\.\d+)?\s*(?:万|亿|%|％|件|个|条|户|千瓦时|千瓦|kWh|元|次|小时|倍)')
+# 闸门判定（"这句答案能不能直接交出去"）已搬到 evidence_gate.py（2026-11-02）：
+# 原先是「问题侧词表 _BIZ + 答案侧数字 _CLAIM」两条正则，问题侧那半是开集，补不完。
+# 下面这个 _BIZ 只留给词表覆盖用（_apply_pack_lexicon），**不再参与闸门判定**。
 _BIZ = re.compile(r'供电所|供电公司|台区|工单|预算|审批|线损|停电|缺陷|售电|指标|项目')
 
 
@@ -1326,6 +1328,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     answer = ''
     nudged = False
     blocked = False
+    # 判成 general 的轮次本来不传 tools；一旦闸门要求核实，就把它解锁（见 evidence_gate）
+    _tool_unlocked = False
+    gate_log: list = []     # 闸门每次判断留痕，落进 result 供内网排障
     step = 0
     while True:
         step += 1
@@ -1353,7 +1358,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         # 实测同一轮：auto 会写 240~3400 字过程散文（一轮 10~17s），required 只有 56 token / 1.7s。
         # 收尾靠 finish 工具，不靠"模型自己停下来顺手写答案"。
         resp = _chat(messages, model, think=False, max_tokens=600,
-                     use_tools=agent_v2.use_tools(_mode))
+                     use_tools=(agent_v2.use_tools(_mode) or _tool_unlocked))
         llm_ms = int((time.time() - t0) * 1000)
         msg = resp['choices'][0]['message']
         calls = msg.get('tool_calls') or []
@@ -1363,34 +1368,54 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             #（那正是领导看到思考过程的原因）。真正的答案由下面 _final_answer 另起一次调用写。
             answer = (msg.get('content') or '').strip()
             used_tool = any(t.get('kind') == 'tool' for t in trace)
-            # 通用问题（问候 / 介绍 / 常识 / 写东西）本来就不该查库：
-            # 答案里没有业务数字、也没有业务对象 → 直接放行，不提醒、不加注。
-            # 以前这里一律先"要求核实"，连"你能干什么"都要被逼着检索一次 —— 把模型当查库机。
-            # V2：general 模式是纯写作/常识问答，不因为出现业务词就逼它去查库
-            _biz_force = bool(_BIZ.search(question)) and _mode != 'general'
-            if not used_tool and not _CLAIM.search(answer) and not _biz_force:
-                trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
-                              'content': answer[:600], 'note': '通用回答，未查业务库'})
-                break
-            # 业务问题不查库就下结论：先要求核实一次；仍不调则拦下，不当答案返回。
-            if not used_tool and not nudged:
+            # 闸门（2026-11-02 改）：不再看「问题里有没有业务词」，只看**这句答案里
+            # 有没有没出处的断言**。规则见 evidence_gate.py，理由：问题侧词表是开集 ——
+            # 内网「全市情况怎么样」没命中任何业务词 → 判 general → 不给工具 → 模型写
+            # "数据缺失"，而这句话没有数字 → 当通用问答放行；同一句若写了数字反被拦。
+            # 判据必须落在答案侧，问题怎么问都不影响。
+            act, why = evidence_gate.decide(used_tool=used_tool, nudged=nudged,
+                                            answer=answer, mode=_mode)
+            gate_log.append({'act': act, 'why': why, 'mode': _mode,
+                             'tools_given': bool(agent_v2.use_tools(_mode) or _tool_unlocked)})
+            if act == evidence_gate.ACT_NUDGE:
+                # 提醒时必须**把工具补上**：判成 general 的轮次压根没传 tools，
+                # 只提醒不给工具，模型只能再编一遍，然后必然走到 block（内网第 1 条就是这样）。
                 nudged = True
+                extra = ''
+                if not agent_v2.use_tools(_mode):
+                    _tool_unlocked = True
+                    extra = agent_v2.tool_context()
                 trace.append({'seq': len(trace) + 1, 'kind': 'nudge', 'model_ms': llm_ms,
-                              'content': '模型未调用任何工具就想作答，已要求其先核实'})
+                              'content': '已要求先核实：' + (why or '这一轮没调工具'),
+                              'result': {'tools_unlocked': bool(extra)}})
                 messages.append({'role': 'assistant', 'content': answer})
                 messages.append({'role': 'user', 'content':
-                                 '你这一轮没有调用任何工具。请先用工具核实事实（查知识库口径 + 查业务库数据），再给出结论；'
-                                 '如果确实不需要任何工具，也请先说明理由并至少调用一次工具确认。'
-                                 '另外：需要查多个互不依赖的数时，请把要用到的 run_sql **一次发出**，'
+                                 '你这一轮没有调用任何工具。'
+                                 + ((why + '。') if why else '')
+                                 + '请先用工具核实（查业务库数据，必要时查知识库口径），再给出结论；'
+                                 '确实不需要任何工具就一句话说明理由，且回答里不要出现'
+                                 '没有查询结果支撑的数字、比例或"没有记录"这类结论。'
+                                 '需要查多个互不依赖的数时，请把要用到的 run_sql **一次发出**，'
                                  '不要一条一条分多轮来。'
-                                 '不要在回答里提到这条提示，也不要复述你的工具调用过程。'})
+                                 '不要在回答里提到这条提示，也不要复述你的工具调用过程。'
+                                 + extra})
                 continue
-            if not used_tool:
+            if act == evidence_gate.ACT_BLOCK:
                 blocked = True
                 trace.append({'seq': len(trace) + 1, 'kind': 'blocked', 'model_ms': llm_ms,
-                              'content': '未调用任何工具即下结论，已拦下。模型原文：' + answer[:300]})
+                              'content': '未调用任何工具即下结论，已拦下（%s）。模型原文：%s'
+                                         % (why, answer[:300])})
                 answer = ('【未核实，不予作答】这一轮没有调用任何工具去核对事实，结论不可信，已拦下。'
                           '请重试，或把问题问得更具体一些。')
+                break
+            if not used_tool:
+                if not answer:
+                    # 空正文（实测 12 题里 1 次）：**不许把空白交给领导**，另起一次要正文
+                    answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model)
+                    llm_ms = int((time.time() - t0) * 1000)
+                trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
+                              'content': answer[:600],
+                              'note': '通用回答，未查业务库' + (('：' + why) if why else '')})
                 break
             # 数据查完了：**另起一次「写汇报」调用**（不给工具、明确要求写正文）。
             # 关思考的查数轮省下的时间，全花在这一步上——只让它写正文，不让它继续想。
@@ -1589,6 +1614,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         'kb_query_count': len(kb_calls),
         'no_db_query': len(db_calls) == 0,
         'unverified': blocked,
+        # 闸门留痕（2026-11-02）：为什么被拦 / 为什么放行、那一轮给没给工具。
+        # 内网只看得到最终 JSON，没有这一段就分不清"模型不老实"和"没给工具"。
+        'evidence_gate': gate_log,
         'steps': len(trace),
         'history_used': len(history),
         'history_injected': len(hist_detail),

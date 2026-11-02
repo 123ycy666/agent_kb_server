@@ -82,11 +82,16 @@ class _Cursor:
         sql = _translate(sql)
         is_insert = sql.strip().lower().startswith("insert")
         if is_insert and "returning" not in sql.lower():
-            sql = sql.rstrip().rstrip(";") + " RETURNING id"
+            # ★ RETURNING * 不是 RETURNING id（2026-11-02 真库实测）：
+            #   prompt_text 的主键是 k、**没有 id 列**，`RETURNING id` 让那条
+            #   `INSERT ... ON CONFLICT (k)` 直接 UndefinedColumn —— 页面上「身份 /
+            #   汇报口吻 / 模式做法 / 词表」四个覆盖项一直在保存失败，线上那张表 0 行就是这个。
+            sql = sql.rstrip().rstrip(";") + " RETURNING *"
         self._cur.execute(sql, params or ())
         if is_insert:
             row = self._cur.fetchone()
-            self.lastrowid = int(row["id"]) if row else None
+            # 没有 id 列的表（prompt_text）lastrowid 就是 None，不能抛 KeyError
+            self.lastrowid = int(row["id"]) if row and row.get("id") is not None else None
             self.rowcount = self._cur.rowcount if self._cur.rowcount >= 0 else 1
         else:
             self.rowcount = self._cur.rowcount
