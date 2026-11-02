@@ -525,18 +525,10 @@ def place_of(fixed, question=''):
         return area_hit or unit_hit
     # 原问题和纠错后的问题都比一遍：「凉水供电所」在纠错后是「两水供电所」，
     # 名单里存的是后者，只比原问题就认不出来。
+    # ★ 2026-11-02 删掉一段死代码：这里原来查 object_index 认台区，但那个模块
+    #   **整个仓库都不存在**，ImportError 被下面的 except 吞掉 —— 注释里写的
+    #   「9颗松」台区兜底从来没生效过。要恢复就先补模块，别留一段假装有。
     blob = (question or '') + ' ' + str((fixed or {}).get('text') or '')
-    # ★ 先认**台区**：纠错层只报「改过的」名字，「广水市第一人民医院」本来就是
-    #   库里的标准名，names/areas 全是空的 —— 不加这一步，下面的简称兜底会把
-    #   「广水」认成县公司，把台区范围**放大成整个公司**（2026-10-27 实测：
-    #   问题问的是那个医院台区，口径却变成广水市供电公司，数字看着正常但全错）。
-    try:
-        from app.secretary import object_index
-        for o in object_index.scan(blob):
-            if o['level'] == 'area':
-                return o['std_name']
-    except Exception:                       # noqa: BLE001
-        pass
     for nm, _k in _units():
         if nm in blob:
             return nm
@@ -560,24 +552,16 @@ def _says_whole_city(question):
 
 
 def _object_of(place):
-    """地名 → 对象身份（含该在每张表里怎么过滤）。
+    """地名 → 对象身份（跨表过滤条件）。
 
-    ★ 这一步解决「补全后的名字换个表就查不到」：
-      补全层只能给一个名字，而同一个对象在各表写法不同（「广水市供电公司」vs
-      「国网广水市供电公司」）、station 层的 scope_key 还是 sha256。
-      查一次维表，把可直接抄进 SQL 的条件一起交给模型。
+    ★ 2026-11-02：这个函数原先靠 `object_index` 模块，而那个模块**整个仓库不存在**，
+      ImportError 被下面的 except 吞掉 —— 十个月来它恒返回 None，那段「维度过滤条件」
+      从没进过提示词。现在直接把话说清：恒为 None，要恢复就先补模块。
+      （`describe()` 里的 `object` 字段保留，调用方不用改。）
+
     维表没就绪 / 认不出 → 返回 None，只是少一段说明，不影响口径。
     """
-    try:
-        from app.secretary import object_index
-        if not object_index.available():
-            return None
-        if place in ('', '全市'):
-            # 「全市」不是一个对象名，但模型照样需要一个正确条件
-            return object_index.best('随州市', level='city')
-        return object_index.best(place)
-    except Exception:                       # noqa: BLE001
-        return None
+    return None
 
 
 def describe(question, fixed=None, prev=None, today=None, force_place=None):
@@ -602,16 +586,23 @@ def describe(question, fixed=None, prev=None, today=None, force_place=None):
     place = forced or place_of(fixed, question)
     place_default = False
     place_inherited = False
+    # ★ 2026-11-02：**认不出地点时不再静默套上一轮**。
+    #   旧逻辑是 `if not place and prev: place = prev['place']`，然后把「地点：两水供电所」
+    #   钉死进【统计范围】—— 用户下一句问「曾都供电所」，只要名录里没有这个名
+    #   （51 条名录来自纠错词典 t_nc_typo，没有「曾都供电所」，只有「国网曾都区供电公司」），
+    #   就会被当成"没说地点"，整题按两水查、按两水答。
+    #   加提示没用：这里早就写了"如果本轮提到别的地点以问题为准"，可钉死的范围压过附注。
+    #   所以机器字段照旧沿用（落库连续性、下一轮的"上一轮"都靠它），但**口径里不写死**，
+    #   改写成"本轮范围未定 + 让模型按原话查维表确认"，见下面的 place_confirm 分支。
+    place_confirm = False
     if not place:
-        # 没认出地点：上一轮有、且这轮没明说「全市」这类范围词 → 沿用上一轮。
-        # 注意必须排除「全市」：place_of 对「明说全市」和「什么都没说」都返回空串，
-        # 不加这一个判断，用户问「那全市的呢」会被错误地沿用到上一轮的供电所。
-        if prev and prev.get('place') and not _says_whole_city(question):
-            place = prev['place']
-            place_inherited = True
+        if _says_whole_city(question):
+            place = '全市'                     # 用户明说全市，确定，不用确认
         else:
-            place = '全市'
-            place_default = True
+            place = (prev or {}).get('place') or '全市'
+            place_inherited = bool((prev or {}).get('place'))
+            place_default = not place_inherited
+            place_confirm = True               # 没认出 → 这一轮的范围没定下来
     _today = _as_date(today)
     cur_y, cur_m = int(_today.year), int(_today.month)
     now_key = '%04d%02d' % (cur_y, cur_m)
@@ -628,20 +619,23 @@ def describe(question, fixed=None, prev=None, today=None, force_place=None):
     if forced:
         lines.append('地点：%s（**上游业务系统指定的数据范围，强制按此范围取数**；'
                      '本轮问题里若出现别的地名，指的是该范围内的对象，不改范围）' % place)
-    elif place_inherited:
-        # 沿用的地点是**推断**出来的，不是用户这轮说的 —— 必须允许模型推翻，
-        # 否则用户换成别的简称（我们没认出来的）就会被错误地按上一轮的口径查。
-        lines.append('地点：%s（本轮问题里没认出地点，沿用上一轮。'
-                     '**如果本轮问题里其实提到了别的地点，以问题里说的为准**）' % place)
+    elif place_confirm:
+        # 认不出地点：**不替用户定范围**。旧版这里写的是「地点：两水供电所（沿用上一轮）」
+        # —— 那句话把范围钉死了，「曾都供电所」就被答成两水。现在只给条件和做法。
+        lines.append(
+            '地点：**本轮范围未定** —— 系统没从原话里认出单位名，这一轮不替你定范围。\n'
+            '      · 原话里没有单位名（纯追问，比如「那售电量呢」）→ 沿用上一轮：%s；\n'
+            '      · 原话里提到了单位（比如「曾都供电所」「曾都所」「曾都那边」）→ '
+            '**不许用上一轮的范围**：先用 run_sql 查 t_power_supply_company / '
+            't_power_company 把标准名确认下来，再按它取数；'
+            '查不到就反问一句是哪个单位，不要猜、也不要按全市糊过去。' % place)
     else:
         lines.append('地点：%s%s' % (place, '（问题里没说地点，默认全市）' if place_default else ''))
 
-    # 把这个对象的「跨表过滤条件」一起交给模型。名字在各表写法不同，条件不会变。
-    obj = _object_of(place)
-    if obj:
-        from app.secretary import object_index
-        for ln in object_index.describe(obj).splitlines():
-            lines.append('      ' + ln)
+    # 跨表过滤条件（object_index）暂缺：那个模块**整个仓库不存在**，
+    # 原来这里 `from app.secretary import object_index` 每次都 ImportError 被吞，
+    # 等于从没生效过。要恢复就先补模块，别留一段假装有。
+    obj = None
 
     # 口径可用性：提前说清 —— **只说明，绝不替用户换口径**
     #   ★ 原来的写法是「请改用本年累计」，等于让模型把用户问的 5 月偷偷换成 9 月累计。
@@ -671,6 +665,7 @@ def describe(question, fixed=None, prev=None, today=None, force_place=None):
                          % (t['time_text'], t['period_key'], _p))
 
     return {'time': t, 'place': place, 'place_default': place_default,
+            'place_confirm': place_confirm,
             'object': obj,
             'inherited': {'time': bool(t['note'] and '沿用上一轮' in t['note']),
                           'place': place_inherited},

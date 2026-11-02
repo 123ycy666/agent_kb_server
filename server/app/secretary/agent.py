@@ -1178,6 +1178,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                              'history_turns': len(history),
                              'time_inherited': scope['inherited']['time'],
                              'place_inherited': scope['inherited']['place'],
+                             # ★ 2026-11-02：true = 本轮没认出地点，范围没定下来，
+                             # 模型要按原话 + 维表确认（不再静默套上一轮）。
+                             'place_confirm': bool(scope.get('place_confirm')),
                              'hint': scope['time']['note']}})
     # **不预检索、不预注入判据**：按问题检索判据挑"该用哪条标准"实测不稳（会把相邻技能的标准当成本题的标准，
     # 例如把「项目执行进度异常」当成「审批积压」）。判据改成让模型在循环里用 kb_search 工具自己查 ——
@@ -1590,6 +1593,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             # 这两个为 true 说明该值**不是用户这轮说的**，而是从上一轮沿用来的
             'time_inherited': scope['inherited']['time'],
             'place_inherited': scope['inherited']['place'],
+            # 本轮地点没认出来 → 范围未定，排障时一眼能看到（2026-11-02）
+            'place_confirm': bool(scope.get('place_confirm')),
         },
         'user_profile': profile or '',
         'completion_used': False,      # 已取消「问题改写」，这个字段保留只为兼容历史记录
