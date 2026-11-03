@@ -109,8 +109,8 @@ def _code_text(key: str) -> str:
         except Exception as exc:                   # noqa: BLE001
             return '【业务码表】读取失败：%s' % str(exc)[:120]
     if key == 'base.identity':
-        from app.secretary import prompt_text, prompts_data
-        return prompt_text.get('identity', prompts_data.IDENTITY)
+        from app.secretary import prompt_text, prompts_data, project
+        return project.fill(prompt_text.get('identity', prompts_data.IDENTITY))
     if key == 'base.redlines':
         # 2026-11-03：代码常量已删，改成页面 key（默认空 → 页面显示"（空）"）
         from app.secretary import prompt_text

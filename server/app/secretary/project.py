@@ -11,6 +11,19 @@ import os
 SITE = (os.environ.get("SITE") or "suizhou").strip()
 SITE_NAME = (os.environ.get("SECRETARY_SITE_NAME") or '随州').strip()
 SITE_FULL = (os.environ.get("SECRETARY_SITE_FULL") or '国网随州供电公司').strip()
+
+
+def fill(text: str) -> str:
+    """把提示词正文里的 {SITE_NAME} / {SITE_FULL} 换成真实单位名。
+
+    ★ 2026-11-03 修：身份正文里一直写着 `{SITE_FULL}（{SITE_NAME}）`，而**没有任何地方
+      做替换** —— 模型看到的就是字面的花括号（实测 dump system 可见），
+      等于身份那一段少了一半信息。装配与页面展示都走这里。
+    """
+    s = str(text or '')
+    return (s.replace('{SITE_FULL}', SITE_FULL)
+             .replace('{SITE_NAME}', SITE_NAME)
+             .replace('{SITE_CODE}', SITE_CODE))
 SITE_CODE = (os.environ.get("SECRETARY_SITE_CODE") or 'suizhou').strip()
 
 FEATURES = {'general': True, 'data': True, 'doc': True, 'office': True}
