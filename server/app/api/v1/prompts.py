@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
 """提示词页面接口（2026-11-01）。
 
-六个动作：
-    GET  /api/v1/prompts/tree           主流程节点 + 每节点挂的材料
+    GET  /api/v1/prompts/tree           主流程节点 + 每节点挂的材料（八步）
     GET  /api/v1/prompts/material/{slot} 某一份的正文与分节
     PUT  /api/v1/prompts/material/{slot} 保存某一份（整份）
     POST /api/v1/prompts/material/{slot}/import  上传 markdown 覆盖某一份（按标题切）
     GET  /api/v1/prompts/preview        当前基础提示词（按层）
-
-★ 2026-11-03（Fred）：`GET/PUT /api/v1/prompts/complete`（补全表）已删除。
+    GET/PUT /api/v1/prompts/complete    补全表（第 4 步用；2026-11-03 恢复）
+    GET  /api/v1/prompts/lexicon/{key}  纠错词典（页面直接增删改查）
 
 权限口径（2026-11-02 Fred 定）：**登录用户都能改，不设管理员闸**。
 这 13 个接口一律只 `Depends(get_current_actor)`；前端 `/prompts` 页面对所有登录用户开放。
 要收紧是另一件事，**别自己加 `is_admin` 判断** —— 加之前先问。
 """
 from __future__ import annotations
+
+from fastapi.encoders import jsonable_encoder
 
 import re
 
@@ -29,7 +30,10 @@ _HEAD = re.compile(r'^(#{1,4})\s+(.+?)\s*$', re.M)
 
 
 def _jr(data, status_code: int = 200):
-    return JSONResponse(content=data, status_code=status_code)
+    # ★ 2026-11-03 修 500：词表行里带 `update_time`（datetime），`JSONResponse` 直接编码会抛
+    #   TypeError → 整个 /prompts/lexicon/* 全 500，页面显示"共 0 条"（数据其实在）。
+    #   jsonable_encoder 统一处理 datetime / Decimal，所有接口一起吃这一处。
+    return JSONResponse(content=jsonable_encoder(data), status_code=status_code)
 
 
 async def _json_body(request: Request):
