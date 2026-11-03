@@ -5,6 +5,9 @@
 这就是空壳部署后的真实形态（库里没有覆盖、没有规则材料）。
 
 跑法：py -X utf8 _scratch/verify_shell.py
+
+**只对 main（空壳）有意义**：`online` 分支把规则入口打开了（SLOTS 非空），
+在那条分支上跑到这里会直接说"这不是空壳分支"然后退出 0 —— 不是失败。
 """
 from __future__ import annotations
 
@@ -14,6 +17,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'server'))
+
+# ── 空壳分支守卫：online 分支上不跑这套断言 ──────────────────────────
+from app.secretary import prompt_material as _pm     # noqa: E402
+
+if _pm.SLOTS:
+    print('跳过：当前分支 prompt_material.SLOTS = %s，不是空壳分支（main）。' % (_pm.SLOTS,))
+    raise SystemExit(0)
 
 # ── 先把 DB 打掉：空壳环境就是"库读不到 → 全走代码默认值" ──────────────
 from app.secretary import pgdb                       # noqa: E402
