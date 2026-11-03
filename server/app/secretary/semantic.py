@@ -106,8 +106,18 @@ def _build():
                 if k not in seen or len(str(v)) > len(seen[k]):
                     seen[k] = str(v)[:60]
         samples[t] = seen
-    return {'tables': tables, 'index': index, 'cols': cols, 'metrics': metrics, 'syn': syn,
-            'samples': samples, 'counts': counts, 'codes': _codes()}
+    payload = {'tables': tables, 'index': index, 'cols': cols, 'metrics': metrics, 'syn': syn,
+               'samples': samples, 'counts': counts, 'codes': _codes(), 'overrides': []}
+    # 页面上的「覆盖层」（2026-11-02）：业务库只读（tools_db 只放 SELECT），
+    # 所以页面上改的表名/说明存在本系统 PG，读完业务库再套一层 —— 覆盖值优先。
+    try:
+        from app.secretary import meta_admin
+        meta_admin.apply(payload)
+        payload['overrides'] = meta_admin.rows()
+    except Exception as exc:                       # noqa: BLE001
+        print('[semantic] 套元数据覆盖失败（按业务库原值）：%s: %s'
+              % (type(exc).__name__, str(exc)[:120]), flush=True)
+    return payload
 
 
 def _codes():
