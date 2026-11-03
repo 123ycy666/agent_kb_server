@@ -258,6 +258,28 @@ def _prev_ym(ym):
     return '%04d%02d' % (y, m)
 
 
+def _ytd_end(cur_y, cur_m):
+    """「本年累计」算到哪个月：**上一个月**（2026-11-03 定）。
+
+    为什么要跟「没说时间 → 上一个月」对齐：
+      当前 11 月，问「今年情况」如果算到 11 月，等于拿一个还没结算的当月去凑累计；
+      同一时刻问「情况」（没说时间）却按 10 月查 —— 同一个"今年"两套算法，用户一眼看出不对
+      （2026-11-03 实测：`今年情况` → 2026年1-11月，`情况` → 2026年10月）。
+
+    1 月不跨年：上一个月是去年 12 月，但「今年」不能算到去年，直接落到 1 月。
+    """
+    if cur_m <= 1:
+        return cur_y, 1
+    return cur_y, cur_m - 1
+
+
+def _ytd_text(y, em):
+    """本年累计的文案：`2026年1-10月`；1 月时写 `2026年1月`（不写「1-1月」）。"""
+    if em <= 1:
+        return '%d年1月' % y
+    return '%d年1-%d月' % (y, em)
+
+
 def _is_station_level(question, fixed):
     """这次问的是不是「供电所/台区」这一层（快照表在这一层没有当月口径）。
 
@@ -414,14 +436,16 @@ def resolve(question, today=None, prev=None):
         g = m.group(1)
         y = 2000 + int(g) if len(g) == 2 else int(g)
         if y == cur_y:
-            # 今年的年份说法，含义仍是「今年以来」→ 累计到系统当月
+            # 今年的年份说法，含义仍是「今年以来」→ 累计到**上一个月**（2026-11-03 定）
+            ey, em = _ytd_end(cur_y, cur_m)
+            _key = '%04d%02d' % (ey, em)
             _note = ''
-            if now_key > biz_ym:
-                _note = ('库内已结算到 %s，%d年1-%d月 里的 %d 月可能还没出齐，'
+            if _key > biz_ym:
+                _note = ('库内已结算到 %s，%s 里的 %d 月可能还没出齐，'
                          '若数偏小请如实说明，不要自行换成别的月份'
-                         % (_ym_text(biz_ym), y, cur_m, cur_m))
-            return _mk(m.group(0), '%d年1-%d月' % (y, cur_m), 'yearToDate',
-                       now_key, note=_note, q=q)
+                         % (_ym_text(biz_ym), _ytd_text(ey, em), em))
+            return _mk(m.group(0), _ytd_text(ey, em), 'yearToDate',
+                       _key, note=_note, q=q)
         _note = ''
         if y > cur_y:
             _note = '%d 年还没到，库里不会有数据 —— 请如实告知用户，不要用其他年份顶替' % y
@@ -474,13 +498,16 @@ def resolve(question, today=None, prev=None):
         if word in q:
             y = cur_y + off
             if off == 0:
+                # ★ 2026-11-03 定：本年累计算到**上一个月**（与「没说时间」同口径）
+                ey, em = _ytd_end(cur_y, cur_m)
+                _key = '%04d%02d' % (ey, em)
                 _note = ''
-                if now_key > biz_ym:
-                    _note = ('库内已结算到 %s，%d年1-%d月 里的 %d 月可能还没出齐，'
+                if _key > biz_ym:
+                    _note = ('库内已结算到 %s，%s 里的 %d 月可能还没出齐，'
                              '若数偏小请如实说明，不要自行换成别的月份'
-                             % (_ym_text(biz_ym), y, cur_m, cur_m))
-                return _mk(word, '%d年1-%d月' % (y, cur_m), 'yearToDate',
-                           now_key, note=_note, q=q)
+                             % (_ym_text(biz_ym), _ytd_text(ey, em), em))
+                return _mk(word, _ytd_text(ey, em), 'yearToDate',
+                           _key, note=_note, q=q)
             return _mk(word, '%d年' % y, 'year', str(y), q=q)
 
     # ⑥ 季度：库里没有季度口径，只能给区间 + 说明
