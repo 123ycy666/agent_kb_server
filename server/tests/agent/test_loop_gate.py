@@ -138,101 +138,81 @@ def main() -> int:
     agent.config.PAGE_ON = False
     agent.config.NUMBER_GUARD_ON = False
 
-    # ── 场景 1：内网第 2 条重放（先答「数据缺失」→ 必须被要求核实 → 查到数 → 正文）
-    res, fm = run('2025年全市情况', [
-        {'content': '2025年全市治理成效指标与预算执行情况数据缺失，无法作答。'},
-        {'content': '', 'calls': _call()},
-        {'content': '', 'calls': []},
-        {'content': '2025年全市执行率105.64%。'},
-    ])
-    chk('场景1 trace 里有 nudge', 'nudge' in kinds(res), str(kinds(res)))
-    chk('场景1 没被拦（unverified=False）', res['unverified'] is False, str(res['unverified']))
-    chk('场景1 最终正文来自查到数之后', '105.64' in res['answer'], res['answer'][:40])
-    chk('场景1 确实查了一次', res['db_query_count'] == 1, str(res['db_query_count']))
-    chk('场景1 闸门留痕 nudge→pass',
-        [g['act'] for g in res['evidence_gate']] == [eg.ACT_NUDGE, eg.ACT_PASS],
-        str(res['evidence_gate']))
-    chk('场景1 知道这是查数题（给了工具）', fm.calls[0]['use_tools'] is True,
-        str(fm.calls[0]['use_tools']))
+    # ── 场景 1：模型直接给正文 → 一次收工，不催、不拦（2026-11-03 守卫全关）
+    res, fm = run('2025年全市情况', [{'content': '2025年全市执行率105.64%。'}])
+    chk('场景1 一次就收（不再催"先核实"）', len(fm.calls) == 1, str(len(fm.calls)))
+    chk('场景1 没有 nudge', 'nudge' not in kinds(res), str(kinds(res)))
+    chk('场景1 正文就是模型给的', '105.64' in res['answer'], res['answer'][:40])
+    chk('场景1 没查库也放行（unverified=False）', res['unverified'] is False,
+        str(res['unverified']))
+    chk('场景1 闸门留痕恒空（守卫已关）', res['evidence_gate'] == [], str(res['evidence_gate']))
 
-    # ── 场景 2：判成 general 的问句写了数字 → 提醒时**把工具补上**
-    res, fm = run('帮我写个通知', [
-        {'content': '全市共分配预算2536.73万元，执行率105.64%。'},
-        {'content': '', 'calls': _call()},
-        {'content': '', 'calls': []},
-        {'content': '通知正文。'},
-    ])
-    chk('场景2 第一轮没给工具（general 模式）', fm.calls[0]['use_tools'] is False,
-        str(fm.calls[0]['use_tools']))
-    chk('场景2 提醒后把工具补上了', len(fm.calls) > 1 and fm.calls[1]['use_tools'] is True,
-        str([c['use_tools'] for c in fm.calls]))
-    chk('场景2 nudge 里记了 tools_unlocked',
-        any(t.get('kind') == 'nudge' and (t.get('result') or {}).get('tools_unlocked')
-            for t in res['trace']), str([t.get('kind') for t in res['trace']]))
-    chk('场景2 最后查到了数', res['db_query_count'] == 1, str(res['db_query_count']))
+    # ── 场景 2：工具一律给 —— 不再按"词表判模式"开关工具
+    for q in ('你好', '帮我写个通知', '全市情况怎么样'):
+        res, fm = run(q, [{'content': '好的。'}])
+        chk('场景2 工具一律给：%s' % q, fm.calls[0]['use_tools'] is True,
+            str(fm.calls[0]['use_tools']))
 
-    # ── 场景 3：死活不查、两次都给断言 → 提醒一次后**放行**（2026-11-03 取消 block）
+    # ── 场景 3：模型查一次数、然后不再发工具 → 另起一次写正文
     res, fm = run('全市情况怎么样', [
-        {'content': '全市预算执行率105.64%。'},
-        {'content': '按系统口径全市数据缺失，无法作答。'},
-        {'content': '（不该被调用）'},
-    ])
-    chk('场景3 不再拦死（不返回"未核实不予作答"）',
-        res.get('unverified') is not True
-        and not res['answer'].startswith('【未核实，不予作答】'), res['answer'][:40])
-    chk('场景3 只调了 2 次模型（没死循环）', len(fm.calls) == 2, str(len(fm.calls)))
-    chk('场景3 闸门留痕 nudge→pass（不再有 block）',
-        [g['act'] for g in res['evidence_gate']] == [eg.ACT_NUDGE, eg.ACT_PASS],
-        str(res['evidence_gate']))
-    chk('场景3 理由写进了 trace',
-        any('没有工具结果支撑' in str(t.get('content') or '') for t in res['trace']),
-        str(kinds(res)))
-
-    # ── 场景 4：纯问候 → 一次放行，不 nudge、不查库
-    res, fm = run('你好', [{'content': '你好，我可以帮你查数据或写材料。'}])
-    chk('场景4 问候一次就放行', len(fm.calls) == 1, str(len(fm.calls)))
-    chk('场景4 没有 nudge', 'nudge' not in kinds(res), str(kinds(res)))
-    chk('场景4 没查库', res['db_query_count'] == 0)
-    chk('场景4 闸门留痕 pass',
-        [g['act'] for g in res['evidence_gate']] == [eg.ACT_PASS], str(res['evidence_gate']))
-
-    # ── 场景 5：空正文 → 不许把空白交给领导
-    res, fm = run('全市情况怎么样', [
+        {'content': '', 'calls': _call()},
         {'content': ''},
+        {'content': '查完之后的正文。'},
+    ])
+    chk('场景3 确实查了一次', res['db_query_count'] == 1, str(res['db_query_count']))
+    chk('场景3 正文来自查完之后那次调用', res['answer'] == '查完之后的正文。',
+        repr(res['answer']))
+
+    # ── 场景 4：空正文 → 不许把空白交出去
+    res, fm = run('全市情况怎么样', [
         {'content': ''},
         {'content': '补出来的正文。'},
     ])
-    chk('场景5 空正文被补上了', res['answer'] == '补出来的正文。', repr(res['answer']))
-    chk('场景5 补正文那次没给工具', fm.calls[-1]['use_tools'] is False, str(fm.calls))
+    chk('场景4 空正文被补上了', res['answer'] == '补出来的正文。', repr(res['answer']))
+    chk('场景4 补正文那次没给工具', fm.calls[-1]['use_tools'] is False, str(fm.calls))
 
-    # ── 场景 6：模型自己调 finish 收尾 → 照旧另起一次写正文（别被闸门挡了）
+    # ── 场景 5：模型自己调 finish 收尾 → 照旧另起一次写正文
     res, fm = run('全市情况怎么样', [
         {'content': '', 'calls': _call()},
         {'content': '', 'calls': _call('finish', 'f1')},
         {'content': '收尾后的正文。'},
     ])
-    chk('场景6 finish 之后能拿到正文', res['answer'] == '收尾后的正文。', repr(res['answer']))
-    chk('场景6 没被拦', res['unverified'] is False, str(res['unverified']))
+    chk('场景5 finish 之后能拿到正文', res['answer'] == '收尾后的正文。', repr(res['answer']))
+    chk('场景5 没被拦', res['unverified'] is False, str(res['unverified']))
 
-    # ── 场景 7：写通知里出现「3 项要求」这类正文数字 → 提醒一次，但**材料必须出得去**
-    res, fm = run('帮我写个通知', [
-        {'content': '各单位要落实 3 项要求、覆盖 12 个班组。'},
-        {'content': '各单位要落实 3 项要求、覆盖 12 个班组。'},
-    ])
-    chk('场景7 写材料里的数字不被拦', res['unverified'] is False, str(res['unverified']))
-    chk('场景7 通知正文照常给出', '3 项要求' in res['answer'], repr(res['answer'][:30]))
-    chk('场景7 仍然提醒过一次', 'nudge' in kinds(res), str(kinds(res)))
+    # ── 场景 6：写材料里的数字照样出得去（不再有"数字必须有出处"的提醒）
+    res, fm = run('帮我写个通知', [{'content': '各单位要落实 3 项要求、覆盖 12 个班组。'}])
+    chk('场景6 写材料里的数字不被拦', res['unverified'] is False, str(res['unverified']))
+    chk('场景6 通知正文照常给出', '3 项要求' in res['answer'], repr(res['answer'][:30]))
+    chk('场景6 没有提醒', 'nudge' not in kinds(res), str(kinds(res)))
 
-    # ── 场景 8：极端输入（空串 / 单个标点 / 超长）不许崩，也不许空转
+    # ── 场景 7：八步的痕迹都在（第 1 步 intent、第 6 步 confirm 各一条）
+    k = kinds(res)
+    chk('场景7 trace 有 intent（第 1 步）', 'intent' in k, str(k))
+    chk('场景7 trace 有 scope（第 5 步）', 'scope' in k, str(k))
+    chk('场景7 trace 有 confirm（第 6 步）', 'confirm' in k, str(k))
+    chk('场景7 trace 有 answer（第 8 步）', k[-1] == 'answer', str(k))
+
+    # ── 场景 8：步数上限 = 30（只防死循环），到顶强制出正文
+    chk('场景8 默认步数上限 30', agent.config.MAX_STEPS == 30, str(agent.config.MAX_STEPS))
+    res, fm = run('全市情况怎么样', [
+        {'content': '', 'calls': _call()},
+        {'content': '', 'calls': _call()},
+        {'content': '到顶之后的正文。'},
+    ], max_steps=1)
+    chk('场景8 到顶强制出正文', '到顶之后的正文。' in res['answer'], repr(res['answer']))
+    chk('场景8 到顶有留痕', 'final' in kinds(res), str(kinds(res)))
+
+    # ── 场景 9：极端输入（空串 / 单个标点 / 超长）不许崩，也不许空转
     for q in ('', '。', '全市' * 500):
         try:
             res, fm = run(q, [{'content': '请把问题说清楚一些。'}])
             ok, extra = True, '%s 次调用' % len(fm.calls)
         except Exception as exc:                        # noqa: BLE001
             ok, extra = False, '%s: %s' % (type(exc).__name__, str(exc)[:60])
-        chk('场景8 极端输入不崩：%r' % (q[:8]), ok, extra)
+        chk('场景9 极端输入不崩：%r' % (q[:8]), ok, extra)
         if ok:
-            chk('场景8 极端输入有返回：%r' % (q[:8]), bool(res['answer']) or res['unverified'],
+            chk('场景9 极端输入有返回：%r' % (q[:8]), bool(res['answer']) or res['unverified'],
                 repr(res['answer'][:20]))
 
     bad = [c for c in _checks if not c[1]]

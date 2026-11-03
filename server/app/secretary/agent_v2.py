@@ -127,12 +127,9 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
         #   它是"我不填也生效的字"。要日期就在页面上自己写。
         if (os.environ.get('SECRETARY_INJECT_DATE') or '').strip() == '1':
             head += ('\n\n今天的日期是 %s。' % (today or time.strftime('%Y-%m-%d')))
-        # 通用模式**不塞**业务码表与数据表目录：那是查数专用上下文，
-        # 塞进去会把「写个工作总结」拽回业务轨道 —— 这正是要解开的锁。
-        # 反过来，判成 general 之后才发现它要查数的（2026-11-02 内网实测），
-        # 由 agent 那一侧补救：触发核实提醒时用 tool_context() 把这份目录补进对话。
-        if mode in ('data', 'doc'):
-            head += tool_context()
+        # ★ 2026-11-03 定稿：工具一律给，数据表目录也一律给 —— 该查数还是该写文档
+        #   由模型自己判断，不再按"模式"开关（那条分流靠的是写死的业务词表）。
+        head += tool_context()
         return head
     except Exception as exc:                       # noqa: BLE001
         print('[agent_v2] 装配失败，回落旧装配：%s' % exc)

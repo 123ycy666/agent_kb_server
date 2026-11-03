@@ -42,7 +42,9 @@ def main() -> int:
     z = prompt_stack.build(mode='data', redlines='红线X')
     g_ids, d_ids = prompt_stack.layer_ids(g), prompt_stack.layer_ids(d)
     chk('general 层（没传红线）：L1/L2/S4', g_ids == ['L1', 'L2', 'S4'], str(g_ids))
-    chk('data 层：多出 S1 与 S6', d_ids == ['S1', 'L1', 'L2', 'S4', 'S6'], str(d_ids))
+    # ★ 2026-11-03 定稿：模式做法里业务三段（data/doc/office）已清空 →
+    #   mode='data' 时 L2 不再出现（空就不注入，这是"我填什么就是什么"的直接后果）。
+    chk('data 层：业务做法清空后没有 L2', d_ids == ['S1', 'L1', 'S4', 'S6'], str(d_ids))
     chk('传了红线才有 S0', prompt_stack.layer_ids(z)[:1] == ['S0'], str(prompt_stack.layer_ids(z)))
     chk('不传就没有装配说明', '装配说明' not in g['system'])
     chk('不传就没有 S0', 'S0' not in g['system'])
@@ -52,10 +54,16 @@ def main() -> int:
     chk('S4 作答格式进了 system', '作答格式X' in d['system'])
 
     # ── 2 代码里的提示词正文 ────────────────────────────────
-    chk('四种模式提示词齐', set(prompts_data.MODE_TEXTS) >= {'data', 'doc', 'general', 'office'},
+    chk('四种模式提示词键齐', set(prompts_data.MODE_TEXTS) >= {'data', 'doc', 'general', 'office'},
         str(list(prompts_data.MODE_TEXTS)))
-    chk('每份模式提示词非空',
-        all(len((t or '').strip()) > 100 for t in prompts_data.MODE_TEXTS.values()))
+    # ★ 2026-11-03 定稿：只剩 general（基础流程：正常问答 / 正常聊天），业务三段清空
+    chk('业务三段（data/doc/office）已清空',
+        all(not (prompts_data.MODE_TEXTS.get(k) or '').strip()
+            for k in ('data', 'doc', 'office')),
+        {k: len(prompts_data.MODE_TEXTS.get(k) or '') for k in prompts_data.MODE_TEXTS})
+    chk('general 是基础流程且非空',
+        len((prompts_data.MODE_TEXTS.get('general') or '').strip()) > 100,
+        len((prompts_data.MODE_TEXTS.get('general') or '')))
     chk('身份正文非空且是"助手"', '助手' in prompts_data.IDENTITY, prompts_data.IDENTITY[:40])
     chk('作答要求非空', len(prompts_data.ANSWER_DATA) > 100)
     chk('版式默认值 docx.body_pt = 16', prompts_data.DOC_DEFAULTS['docx']['body_pt'] == 16,
@@ -113,18 +121,21 @@ def main() -> int:
         chk('%s 不含单位名' % name, '随州' not in src)
 
     # ── 8 装配器可用（不抛异常）────────────────────────────
-    sys_text = agent_v2.system('data', agent._system, '2026-10-30',
+    sys_text = agent_v2.system('general', agent._system, '2026-10-30',
 
                                # 2026-11-03：COMMON/CHECK 已下线，S4 用替身正文验装配
                                answer_format='作答格式替身')
-    chk('system 装配成功且非空', len(sys_text) > 1000, str(len(sys_text)))
+    chk('system 装配成功且非空', len(sys_text) > 300, str(len(sys_text)))
     # ★ 2026-11-03：S0 红线 / S1 优先级常量已删（改成页面 key，默认空）
     chk('system 不含 S1（空壳）', 'S1 谁说了算' not in sys_text)
     chk('system 不含 S0（空壳）', 'S0 诚信与安全红线' not in sys_text)
     chk('system 不含装配说明', '以下是内容按优先级' not in sys_text and 'S0 红线 >' not in sys_text)
     chk('system 不含硬编码日期句', '今天的日期是' not in sys_text)
     chk('system 仍含身份（保留）', '随州' in sys_text)
-    chk('system 含表清单', 'describe_table' in sys_text)
+    # ★ 2026-11-03 定稿：数据表目录由 tool_context() 提供，且**任何模式都给**
+    #   （工具一律给）。库连不上时它是空的，所以这里验"装配里确实调了它"。
+    _src_v2 = io.open(SERVER / 'app' / 'secretary' / 'agent_v2.py', encoding='utf-8').read()
+    chk('system 恒带数据表目录（不再按模式开关）', 'head += tool_context()' in _src_v2)
     chk('system 不含全量字段样例', '（例:' not in sys_text)
     chk('system 长度 < 15000', len(sys_text) < 15000, str(len(sys_text)))
 

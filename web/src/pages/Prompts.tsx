@@ -8,8 +8,10 @@ import {
   Drawer,
   Empty,
   Input,
+  InputNumber,
   message,
   Popconfirm,
+  Select,
   Space,
   Spin,
   Table,
@@ -64,7 +66,11 @@ export default function Prompts() {
   const [saving, setSaving] = useState(false)
   const [importText, setImportText] = useState('')
   const [showImport, setShowImport] = useState(false)
-  // ★ 2026-11-03（Fred）：补全表下线，compOpen / compRows / compSaving 一并删除。
+  // ★ 2026-11-03 定稿：补全表回来了 —— 第 4 步拿原问题 + 补后问题来查它（只查不改），
+  //   这张表就是用户体验，直接在页面上迭代。
+  const [compOpen, setCompOpen] = useState(false)
+  const [compRows, setCompRows] = useState<any[]>([])
+  const [compSaving, setCompSaving] = useState(false)
   const [txtOpen, setTxtOpen] = useState(false)
   const [txtKey, setTxtKey] = useState('')
   const [txtName, setTxtName] = useState('')
@@ -140,7 +146,46 @@ export default function Prompts() {
     }
   }
 
-  // ★ 2026-11-03（Fred）：补全表下线，loadComplete / saveComplete 一并删除。
+  // ── 补全表（2026-11-03 恢复）─────────────────────────────────
+  const loadComplete = async () => {
+    try {
+      const r: any = await http.get('/prompts/complete')
+      setCompRows((r.rows || []).map((x: any) => ({
+        kind: x.kind || 'norm',
+        match_text: x.match_text || '',
+        fill_text: x.fill_text || '',
+        priority: x.priority ?? 0,
+      })))
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const saveComplete = async () => {
+    setCompSaving(true)
+    try {
+      const r: any = await http.put('/prompts/complete', { rows: compRows })
+      if (r?.ok) {
+        message.success(`已保存 ${r.rows} 条，下一轮问答生效`)
+        await loadTree()
+        await loadComplete()
+      } else {
+        message.error(r?.error || '保存失败')
+      }
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setCompSaving(false)
+    }
+  }
+
+  const addCompRow = () =>
+    setCompRows((v) => [...v, { kind: 'norm', match_text: '', fill_text: '', priority: (v.length + 1) * 10 }])
+
+  const delCompRow = (i: number) => setCompRows((v) => v.filter((_, idx) => idx !== i))
+
+  const setCompCell = (i: number, k: string, val: any) =>
+    setCompRows((v) => v.map((row, idx) => (idx === i ? { ...row, [k]: val } : row)))
 
   const slot = current ? SLOT_KEYS[current.key] : ''
 
@@ -166,6 +211,12 @@ export default function Prompts() {
   )
 
   const openMaterial = async (m: Mat) => {
+    // 补全表：单独的抽屉（整表编辑 + 保存）
+    if (m.key === 'mat.complete') {
+      setCompOpen(true)
+      await loadComplete()
+      return
+    }
     // 身份 / 模式做法 / 业务词表：走文本编辑器（存 prompt_text，可覆盖）
     if (m.textKey) {
       await loadText(m.textKey, m.name)
@@ -341,12 +392,13 @@ export default function Prompts() {
           提示词
         </Title>
         <Text type="secondary">
-          整条问答链路共 5 份材料；点节点右侧的材料可查看与编辑
+          八步流水线；点节点右侧的材料可查看与编辑，改了下一轮就生效
         </Text>
         <Button icon={<ReloadOutlined />} onClick={loadTree}>
           刷新
         </Button>
         <Button onClick={() => { setLexOpen(true); loadLex('typo', '') }}>纠错词典</Button>
+        <Button onClick={() => { setCompOpen(true); loadComplete() }}>补全表</Button>
         <Button onClick={() => { setMetaOpen(true); loadMeta() }}>数据表</Button>
         <Tag color="blue">合计 {totalChars.toLocaleString()} 字</Tag>
       </Space>
@@ -782,6 +834,67 @@ export default function Prompts() {
             },
           ]}
         />
+      </Drawer>
+
+      <Drawer
+        title={`补全表（第 4 步：只查不改）　${compRows.length} 条`}
+        width={860}
+        open={compOpen}
+        onClose={() => setCompOpen(false)}
+        extra={
+          <Space>
+            <Button onClick={addCompRow}>加一行</Button>
+            <Button type="primary" loading={compSaving} onClick={saveComplete}>
+              保存
+            </Button>
+          </Space>
+        }
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="匹配到这一条，就把它作为「参考资料」交给第 6 步，不会替用户改问题。条数多、不沾边的由第 6 步自己取舍。"
+        />
+        {compRows.length === 0 && (
+          <Empty description="还没有补全条目（空表 = 第 4 步什么都不返回，正常跑）" />
+        )}
+        {compRows.map((r, i) => (
+          <Card key={i} size="small" style={{ marginBottom: 8 }}>
+            <Space align="start" wrap>
+              <Select
+                value={r.kind}
+                style={{ width: 90 }}
+                onChange={(v) => setCompCell(i, 'kind', v)}
+                options={[
+                  { value: 'norm', label: '归一' },
+                  { value: 'fill', label: '补缺' },
+                ]}
+              />
+              <Input
+                value={r.match_text}
+                placeholder="匹配到的话（如：情况怎么样）"
+                style={{ width: 260 }}
+                onChange={(e) => setCompCell(i, 'match_text', e.target.value)}
+              />
+              <Input
+                value={r.fill_text}
+                placeholder="补成什么（如：按六项指标 + 预算执行分析）"
+                style={{ width: 320 }}
+                onChange={(e) => setCompCell(i, 'fill_text', e.target.value)}
+              />
+              <InputNumber
+                value={r.priority}
+                min={0}
+                style={{ width: 80 }}
+                onChange={(v) => setCompCell(i, 'priority', v ?? 0)}
+              />
+              <Button danger size="small" onClick={() => delCompRow(i)}>
+                删
+              </Button>
+            </Space>
+          </Card>
+        ))}
       </Drawer>
     </div>
   )

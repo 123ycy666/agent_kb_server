@@ -109,9 +109,20 @@ EXTRA_DDL: list[tuple[str, str]] = [
     # 规则从知识库搬出来单独存：知识库只放资料，规则进这两张表。
     # slot 四种：fetch 查数口径 / judge 判定标准 / answer 作答规则 / check 自检清单。
     # 基础提示词（红线/优先级/身份/模式做法）仍是代码常量，不进表。
-    # ★ 2026-11-03（Fred）：主分支空壳化 —— 四份材料在 `prompt_material.SLOTS = ()`
-    #   里整体关闭，表结构保留（online 分支还要用它）；`complete_rule`（补全表）
-    #   已从链路里删除，建表语句一并去掉。
+    # ★ 2026-11-03（Fred）：主分支空壳化只清**内容**，机制留着 ——
+    #   四份材料（fetch/judge/answer/check）表结构保留、页面可编辑，内容由 Fred 自己填；
+    #   `complete_rule`（补全表）恢复：第 4 步要拿原问题和补后问题来查它（只查不改）。
+    (
+        "complete_rule 表（补全表：匹配 → 补成什么）",
+        "CREATE TABLE IF NOT EXISTS complete_rule ("
+        "id bigserial PRIMARY KEY, "
+        "kind varchar(16) NOT NULL DEFAULT 'norm', "
+        "match_text varchar(200) NOT NULL, "
+        "fill_text varchar(300) NOT NULL, "
+        "priority int NOT NULL DEFAULT 0, "
+        "enabled boolean NOT NULL DEFAULT true, "
+        "updated_at timestamptz NOT NULL DEFAULT now())",
+    ),
     (
         "prompt_material 表（四份提示词材料）",
         "CREATE TABLE IF NOT EXISTS prompt_material ("

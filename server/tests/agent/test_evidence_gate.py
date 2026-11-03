@@ -165,11 +165,11 @@ def main() -> int:
         got = modes.judge(q)['mode']
         chk('判模式「%s」→ %s' % (q, exp), got == exp, got)
 
-    # ── 6 接线：agent.py 真的用上了闸门，且不再拿问题侧词表当闸
+    # ── 6 接线：本文件 1~5 节验的纯逻辑留着；agent 侧的接线 2026-11-03 定稿已停用
     src = (SERVER / 'app' / 'secretary' / 'agent.py').read_text(encoding='utf-8')
-    chk('agent.py 调用 evidence_gate.decide', 'evidence_gate.decide(' in src)
+    chk('agent.py 已停用 evidence_gate（守卫全关）', 'evidence_gate.decide(' not in src)
     chk('agent.py 不再有用 _biz_force 放行', '_biz_force' not in src)
-    chk('agent.py 提醒时补工具（_tool_unlocked）', '_tool_unlocked' in src)
+    chk('agent.py 不再有"催一次"分支', '_tool_unlocked' not in src)
     chk('agent_v2 有 tool_context', 'def tool_context' in (
         SERVER / 'app' / 'secretary' / 'agent_v2.py').read_text(encoding='utf-8'))
     chk('modes.py 兜底注释写明理由', '按查数处理' in (

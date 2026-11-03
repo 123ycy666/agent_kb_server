@@ -92,7 +92,9 @@ def main() -> int:
 
     # ── 1/2 装配结构 ───────────────────────────────────────
     sys_text = agent_v2.system('data', agent._system, '2026-10-30',
-                               priority=agent.RULES_PRIORITY,
+                               # ★ 2026-11-03 定稿：S1 优先级常量已删（改成页面 key，默认空）。
+                               #   这个测试验的是"传了就有"，所以直接给一段替身正文。
+                               priority='优先级替身',
                                # 2026-11-03：COMMON/CHECK 已下线，S4 用替身正文验装配
                                answer_format='作答格式替身')
     chk('system 里含 S1 谁说了算', 'S1 谁说了算' in sys_text)

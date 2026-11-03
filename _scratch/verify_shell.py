@@ -1,167 +1,146 @@
 # -*- coding: utf-8 -*-
-"""空壳化验收（2026-11-03）—— 全部断言，跑完打印 PASS/FAIL 汇总。
+"""八步流水线 + 空壳 验收（2026-11-03 定稿）。
 
-不连任何库：把 `pgdb.connect` 打成抛错，代码里所有"读失败回退默认值"的路径都会走默认值，
-这就是空壳部署后的真实形态（库里没有覆盖、没有规则材料）。
+跑法：`py -X utf8 _scratch/verify_shell.py`
 
-跑法：py -X utf8 _scratch/verify_shell.py
+不连任何库：把 `pgdb.connect` 打成抛错，所有"读失败回退默认值"的路径都走默认值 ——
+这就是空壳部署后的真实形态（库里没有覆盖、没有规则材料、补全表空）。
 
-**只对 main（空壳）有意义**：`online` 分支把规则入口打开了（SLOTS 非空），
-在那条分支上跑到这里会直接说"这不是空壳分支"然后退出 0 —— 不是失败。
+覆盖：
+    ① 页面四个可编辑框存在、默认空（intent / confirm / redlines / priority）
+    ② 第 1 步：框空 / 非"不走" → 走；只有"不走"才不走
+    ③ 第 3 步：只说对象的补默认问法
+    ④ 第 4 步：补全表命中只返回条目，不改问题
+    ⑤ 第 6 步：参考资料齐全（补前补后 / 命中条目 / 最近几轮），四行能解析
+    ⑥ 节点树 = 八步，材料键对得上，没有断链（不再引已删常量）
+    ⑦ 装配：空内容 → S0/S1/S4/S6 一段都不进 system
+    ⑧ 模式做法：只留 general（基础流程），业务三段清空
+    ⑨ 守卫全关：步数 30、数字闸关、时间预算不限、不再调 evidence_gate
+    ⑩ 四份材料槽还在（机制留、内容空）
 """
 from __future__ import annotations
 
-import datetime
+import os
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'server'))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, 'server'))
 
-# ── 空壳分支守卫：online 分支上不跑这套断言 ──────────────────────────
-from app.secretary import prompt_material as _pm     # noqa: E402
-
-if _pm.SLOTS:
-    print('跳过：当前分支 prompt_material.SLOTS = %s，不是空壳分支（main）。' % (_pm.SLOTS,))
-    raise SystemExit(0)
-
-# ── 先把 DB 打掉：空壳环境就是"库读不到 → 全走代码默认值" ──────────────
-from app.secretary import pgdb                       # noqa: E402
-
-def _no_db(*a, **k):
-    raise RuntimeError('验收脚本：不连库')
-
-pgdb.connect = _no_db                                # type: ignore[assignment]
-
-from app.secretary import (                          # noqa: E402
-    agent_v2, modes, preprocess, prompt_material, prompt_stack, prompt_tree, time_scope,
-)
-
-FAILS: list[str] = []
-CASES = 0
+FAIL = []
+OK = []
 
 
-def chk(name: str, ok: bool, detail='') -> None:
-    global CASES
-    CASES += 1
-    if ok:
-        print('PASS  %s%s' % (name, ('  ← ' + str(detail)) if detail else ''))
-    else:
-        print('FAIL  %s%s' % (name, ('  ← ' + str(detail)) if detail else ''))
-        FAILS.append(name)
+def chk(name, cond, detail=''):
+    (OK if cond else FAIL).append(name)
+    print(('  ok   ' if cond else '  FAIL ') + name + (('  ← ' + str(detail)) if (detail and not cond) else ''))
 
 
-# ── ① 链路：6 份材料都不在节点上 ────────────────────────────────────
-tree = prompt_tree.tree()
-keys = [m['key'] for n in tree for m in n['materials']]
-GONE = ('mat.complete', 'mat.fetch', 'mat.judge', 'mat.answer', 'base.format', 'mat.check')
-for k in GONE:
-    chk('链路里没有 %s' % k, k not in keys, '现有 %d 份材料' % len(keys))
-chk('节点数仍是 12（只删材料不删步骤）', len(tree) == 12, len(tree))
-chk('节点 4 补全没有材料', not [m for n in tree if n['id'] == 'p4' for m in n['materials']])
+def main():
+    # 不连库：任何读表都抛，走代码默认值
+    from app.secretary import pgdb
+    pgdb.connect = lambda *a, **k: (_ for _ in ()).throw(RuntimeError('no db'))
 
-# ── ② 空壳总开关：四份材料整体关闭 ──────────────────────────────────
-chk('prompt_material.SLOTS 为空', prompt_material.SLOTS == (), prompt_material.SLOTS)
-chk('block() 不再拼任何材料', prompt_material.block(('fetch', 'judge')) == '')
-chk('材料概览为空', prompt_material.summary() == [], prompt_material.summary())
+    from app.secretary import (preprocess, confirm, prompt_text, prompt_tree,
+                               prompt_stack, prompt_material, prompts_data,
+                               config, complete_rules)
 
-# ── ③ 时间地点：默认补上一个月 ─────────────────────────────────────
-time_scope._latest_ym = lambda: '202610'
-time_scope._units = lambda: []
-time_scope.tools_db._exec = lambda *a, **k: {'rows': []}
-r = time_scope.resolve('情况怎么样', today=datetime.date(2026, 11, 5))
-chk('11月没提时间 → 2026年10月', (r['time_text'], r['period_key']) == ('2026年10月', '202610'),
-    (r['time_text'], r['period_key']))
-chk('默认期间的说明写清楚了', '上一个月' in r['note'], r['note'])
-r1 = time_scope.resolve('情况怎么样', today=datetime.date(2027, 1, 9))
-chk('1月没提时间 → 上一年12月', (r1['time_text'], r1['period_key']) == ('2026年12月', '202612'),
-    (r1['time_text'], r1['period_key']))
-r2 = time_scope.resolve('上个月线损', today=datetime.date(2026, 11, 5))
-chk('明说上个月仍然算上个月', r2['period_key'] == '202610' and not r2['is_default'], r2['period_key'])
+    print('[1] 页面四个可编辑框')
+    keys = set(prompt_text.TEXT_KEYS)
+    for k in ('intent', 'confirm', 'redlines', 'priority'):
+        chk('TEXT_KEYS 有 %s' % k, k in keys, sorted(keys))
+    rows = {r['key']: r for r in prompt_text.all_texts()}
+    for k in ('intent', 'confirm', 'redlines', 'priority'):
+        chk('%s 默认空' % k, (rows.get(k) or {}).get('default') == '', rows.get(k))
 
-# ── ④ 业务词表语义：命中直通词才算"不是业务问题" ─────────────────────
-GATE = [
-    ('两水', True, '只有所名、一个业务词都没有 → 业务问题'),
-    ('两水供电所情况', True, '业务问题'),
-    ('上个月线损多少', True, '业务问题'),
-    ('全市情况怎么样', True, '业务问题'),
-    ('现在还有多少条缺陷工单没闭环', True, '业务问题'),
-    ('帮我写个通知', False, '写作 → 直通'),
-    ('做个PPT汇报', False, '出文件 → 直通'),
-    ('你好', False, '寒暄 → 直通'),
-    ('什么叫线损', False, '问概念 → 直通'),
-]
-for q, want, why in GATE:
-    got = preprocess.gate(q)
-    chk('gate(%s) = %s' % (q, want), got is want, '%s（实得 %s）' % (why, got))
+    print('[2] 第 1 步 要不要走预处理')
+    chk('框空 → 走（全走）', preprocess.gate('两水情况') is True)
+    # 下面几项要"框里有内容"才有意义：库连不上时框恒为空，这里临时给两段规则。
+    _real_get = prompt_text.get
+    prompt_text.get = lambda k, d='': ({'intent': '只要不是闲聊就回"走"',
+                                        'confirm': '按资料归整成四行'}.get(k)
+                                       or _real_get(k, d))
+    chk('回"走" → 走', preprocess.gate('两水情况', ask=lambda s, u: '走') is True)
+    chk('回"不走" → 不走', preprocess.gate('你好', ask=lambda s, u: '不走') is False)
+    chk('回废话 → 走（只认"不走"）', preprocess.gate('你好', ask=lambda s, u: '？') is True)
+    chk('调用抛错 → 走', preprocess.gate('你好', ask=lambda s, u: 1 / 0) is True)
+    chk('空白 → 不走', preprocess.gate('   ') is False)
 
-chk('modes 不再返回 business_topics',
-    'business_topics' not in modes.load_rules(),
-    sorted(modes.load_rules().keys()))
-chk('judge(台区线损情况) = data', modes.judge('台区线损情况')['mode'] == 'data')
+    print('[3] 第 3 步 补问法')
+    c = preprocess.complete('两水供电所')
+    chk('只说对象 → 补默认问法', c['changed'] and c['text'] == '两水供电所情况怎么样', c)
+    c2 = preprocess.complete('两水供电所情况')
+    chk('带"情况" → 只补"怎么样"', c2['text'] == '两水供电所情况怎么样', c2)
+    c3 = preprocess.complete('上个月新装了多少户')
+    chk('已经问清 → 一个字不加', c3['changed'] is False and c3['text'] == '上个月新装了多少户', c3)
 
-# ── ⑤ 补全：只补默认问法，不再有表命中 ──────────────────────────────
-comp = preprocess.complete('两水供电所情况')
-chk('补全：只有对象没问法 → 补「怎么样」', comp['text'] == '两水供电所情况怎么样', comp['text'])
-chk('补全：hits 恒空（补全表已删）', comp['hits'] == [], comp['hits'])
-chk('补全：说清了问什么就不动', preprocess.complete('上个月线损多少')['changed'] is False)
+    print('[4] 第 4 步 补全表只查不改')
+    chk('表空 → 0 命中', preprocess.hits('两水情况') == [])
+    chk('补全不改问题', preprocess.complete('两水情况')['text'].startswith('两水情况'))
+    chk('complete_rules 有 读表/保存/预览',
+        all(hasattr(complete_rules, x) for x in ('rows', 'save', 'as_text')))
 
-# ── ⑥ 装配：system 里没有 S4 / 规则材料 ─────────────────────────────
-sysmsg = agent_v2.system('data', lambda today=None: '【旧装配】', today='2026-11-05')
-ids = [x['id'] for x in prompt_stack.build(mode='data')['layers']]
-# 注：身份（L1）里本来就有「汇报口吻，不寒暄」这句风格要求，它属于身份、保留；
-#     这里查的是 **S4 那一段** 与 **规则材料段** 有没有被整段注入。
-for bad in ('S4 作答格式', '规则材料', '【汇报口吻与格式】', '交卷前对一遍'):
-    chk('system 不含「%s」' % bad, bad not in sysmsg)
-chk('装配层里没有 S4 / S6', ('S4' not in ids) and ('S6' not in ids), ids)
+    print('[5] 第 6 步 问题确定')
+    scope = {'time': {'time_text': '2026年10月', 'is_default': True},
+             'place': '全市', 'place_default': True}
+    fixed = {'text': '两水供电所', 'used': True, 'hint': ''}
+    comp = {'text': '两水供电所情况怎么样', 'changed': True, 'hits': []}
+    r = confirm.run('两水情况', fixed, comp, scope, [], ask=None)
+    chk('框空 / 无调用 → 不归整', r['used'] is False and r['text'] == '')
+    blk = r['block']
+    for frag in ('原话', '更正后', '补问法后', '补全表命中的条目', '时间', '范围', '最近几轮'):
+        chk('参考资料有「%s」' % frag, frag in blk)
+    chk('补前写明"这次没说"', '（这次没说）' in blk, blk[:200])
+    one = confirm.run('两水情况', fixed, comp, scope, [], ask=lambda s, u: 'x')
+    chk('有框 + 有调用 → 归整', one['used'] is True)
+    prompt_text.get = _real_get
+    ln = confirm.lines('要什么：看两水装表\n时间：2026年10月\n范围：两水供电所\n其它要求：简略')
+    chk('四行能解析', ln['要什么'] == '看两水装表' and ln['其它要求'] == '简略', ln)
 
-# ── ⑥′ 空壳：代码里不许再有"我不填也生效"的业务文本 ──────────────────
-for bad in ('S0 诚信与安全红线', 'S1 谁说了算', '以下内容按优先级排列', 'S0 红线 >',
-            '今天的日期是', '【判断标准从哪来】', '第 2 轮了'):
-    chk('system 不含「%s」' % bad, bad not in sysmsg)
+    print('[6] 节点树 = 八步')
+    nodes = prompt_tree.tree()
+    chk('八个节点', len(nodes) == 8, len(nodes))
+    mats = [m['key'] for n in nodes for m in n['materials']]
+    for k in ('base.intent', 'base.confirm', 'mat.complete', 'mat.fetch', 'mat.answer'):
+        chk('材料里有 %s' % k, k in mats, mats)
+    chk('不再有 base.format（汇报口吻已删）', 'base.format' not in mats)
+    for m in [m for n in nodes for m in n['materials']]:
+        chk('材料 %s 能取到正文' % m['key'], isinstance(m['body'], str))
 
-from app.secretary import prompt_text as pt, evidence_gate as eg   # noqa: E402
-chk('红线/优先级是页面 key（默认空）',
-    pt.TEXT_KEYS.get('redlines') is not None and pt.TEXT_KEYS.get('priority') is not None
-    and pt.get('redlines', '') == '' and pt.get('priority', '') == '',
-    [pt.get('redlines', ''), pt.get('priority', '')])
+    print('[7] 装配：空内容不注入')
+    b = prompt_stack.build(mode='general', identity='', modes={'general': ''},
+                           priority='', redlines='', answer_format=None, rules_menu=None)
+    ids = [x['id'] for x in b['layers']]
+    chk('S0/S1/S4/S6 都不出现', not ({'S0', 'S1', 'S4', 'S6'} & set(ids)), ids)
 
-# ── ⑥″ 地点：没认出来、也没有上一轮 → 说"按全市取数"，不许说假的沿用 ──
-_sc = time_scope.describe('情况怎么样', today=datetime.date(2026, 11, 5))
-chk('没认地点+无上一轮 → 按全市取数', '按全市取数' in _sc['scope_text'], _sc['scope_text'][:60])
-chk('不说假的「沿用上一轮」', '沿用上一轮' not in _sc['scope_text'])
-_prev = {'period_type': 'month', 'period_key': '202609', 'time_text': '2026年9月',
-         'place': '两水供电所'}
-_sc2 = time_scope.describe('情况怎么样', today=datetime.date(2026, 11, 5), prev=_prev)
-chk('有上一轮就说沿用（并给出改口办法）',
-    '沿用上一轮：两水供电所' in _sc2['scope_text'], _sc2['scope_text'][:60])
+    print('[8] 模式做法只留基础流程')
+    mt = prompts_data.MODE_TEXTS
+    chk('data/doc/office 清空',
+        all(not (mt.get(k) or '').strip() for k in ('data', 'doc', 'office')),
+        {k: len(mt.get(k) or '') for k in mt})
+    chk('general 有基础流程', len((mt.get('general') or '').strip()) > 30)
+    chk('身份里不再指"L0 红线"', 'L0 红线' not in (prompts_data.IDENTITY or ''))
 
-# ── ⑥‴ 闸门：不再锁死；历史查过直接放行 ──────────────────────────
-_ans = '完成率98.6%，共12条'
-chk('闸门永不返回 block',
-    all(eg.decide(used_tool=False, nudged=True, answer=_ans, mode=m)[0] != eg.ACT_BLOCK
-        for m in ('data', 'general', 'doc', 'office')))
-chk('历史查过 → 直接放行',
-    eg.decide(used_tool=False, nudged=False, answer=_ans, mode='data',
-              history_ok=True)[0] == eg.ACT_PASS)
+    print('[9] 守卫全关')
+    chk('步数上限 30', config.MAX_STEPS == 30, config.MAX_STEPS)
+    chk('数字闸默认关', config.NUMBER_GUARD_ON is False)
+    chk('时间预算不限', config.QUESTION_BUDGET_S == 0, config.QUESTION_BUDGET_S)
+    src = open(os.path.join(ROOT, 'server/app/secretary/agent.py'),
+               encoding='utf-8').read()
+    chk('主循环不再调 evidence_gate', 'evidence_gate.decide' not in src)
+    chk('不再往用户消息里注入【统计范围】',
+        '【统计范围】（已按今天日期算好' not in src)
+    chk('不再用词表判模式', 'judge_mode(' not in src)
+    chk('有第 1 步 / 第 6 步调用', '_pre.gate(' in src and 'confirm.run(' in src)
 
-# ── ⑦ 路由：补全表接口已下线 ────────────────────────────────────────
-from app.api.v1 import prompts as prompts_api        # noqa: E402
-paths = sorted({getattr(r, 'path', '') for r in prompts_api.router.routes})
-chk('没有 /complete 路由', not any('/complete' in p for p in paths), paths)
+    print('[10] 四份材料槽还在')
+    chk('SLOTS 四份', prompt_material.SLOTS == ('fetch', 'judge', 'answer', 'check'),
+        prompt_material.SLOTS)
 
-# ── ⑧ 文件层面：complete_rules 模块已删除、备份齐全 ─────────────────
-chk('complete_rules.py 已删除',
-    not (ROOT / 'server/app/secretary/complete_rules.py').exists())
-bak = ROOT / 'docs/08-历史归档/2026-11-03-删除的提示词规则'
-want_files = ['README.md', '判据规则-原文.md', '汇报口吻-自检清单-作答规则.md',
-              '补全表.md', '业务相关问题词表.md', '时间地点规则-改前.md']
-for f in want_files:
-    chk('备份存在 %s' % f, (bak / f).is_file(), (bak / f).stat().st_size if (bak / f).is_file() else '-')
+    print('\n成功 %d 项，失败 %d 项' % (len(OK), len(FAIL)))
+    for f in FAIL:
+        print('  FAIL: ' + f)
+    return 1 if FAIL else 0
 
-print('\n%d 项：%d 通过，%d 失败' % (CASES, CASES - len(FAILS), len(FAILS)))
-if FAILS:
-    print('失败项：')
-    for f in FAILS:
-        print('  - ' + f)
-    raise SystemExit(1)
+
+if __name__ == '__main__':
+    sys.exit(main())

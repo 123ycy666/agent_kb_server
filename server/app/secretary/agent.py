@@ -353,6 +353,19 @@ def _final_answer(messages, model, max_tokens=2500, allow_rule=False, trace=None
     return ''
 
 
+def _ask_short(system, user, model, max_tokens=400):
+    """一次极短的判断调用（第 1 步「要不要走」、第 6 步「问题确定」用）。
+
+    关思考 + 不给工具 + 低温：要的是"一个词"或"四行定稿"，不要散文。
+    失败直接抛 —— 调用方兜底（按"走" / 不归整），不许把整题搞挂。
+    """
+    resp = _chat([{'role': 'system', 'content': str(system or '')},
+                  {'role': 'user', 'content': str(user or '')}],
+                 model, use_tools=False, max_tokens=max_tokens, think=False)
+    msg = resp['choices'][0]['message'] or {}
+    return str(msg.get('content') or '').strip()
+
+
 def _swap_materials(messages, slots):
     """把 system 里的「规则材料」段换成另一阶段的（换，不叠）。
 
@@ -1035,12 +1048,33 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 检索范围**只走 kb_adapter 的线程上下文**（路由层 set_scope 登记）。
     # 2026-10-19 曾在这里接 kb_ids 形参兜底兼容，2026-10-20 cce1d3e 改为只走上下文；
     # 2026-10-21 合流时形参又被带回来，现已删除（两条路并存是冗余，且测试按原设计断言）。
-    # ⓪ 粗闸（2026-11-01，判定方向 2026-11-03 反转）：先判这句话要不要动。
-    #    **没命中直通词（寒暄/问概念/出文件/写作）就是业务问题** → 纠错 + 补全；
-    #    直通的（写通知 / 闲聊 / 问概念 / 出文件）一个字都不改 ——
-    #    否则是把「资金」改成「紫金台区」那类事故的源头。详见 preprocess.gate。
     from app.secretary import preprocess as _pre
-    allow_refine = _pre.gate(question)
+    from app.secretary import confirm
+    # ── ① 要不要走预处理（纠错 + 补全 + 补时间地点）—— 2026-11-03 定稿 ──
+    #    判据在页面框 `intent`（Fred 自己写、随时改）。只认「不走」这个词；
+    #    框空 / 判不出 / 调用失败 → 一律走（多补一句的代价，远小于该补没补）。
+    #    判断要看"最近几轮"，所以历史必须先载入（原来在补全之后，已前移）。
+    turns = config.HISTORY_TURNS if history_turns is None else max(0, int(history_turns))
+    history = []
+    if turns and session_id:
+        try:
+            from app.secretary import qa_log
+            history = qa_log.load_context(session_id, limit=turns)
+        except Exception as e:                      # noqa: BLE001
+            print('[agent] 读取多轮上下文失败（按无上下文继续）：%s: %s'
+                  % (type(e).__name__, e), flush=True)
+    prev_scope = None
+    if history:
+        last = history[-1]
+        prev_scope = {'period_type': last.get('period_type'),
+                      'period_key': last.get('period_key'),
+                      'time_text': last.get('time_text'),
+                      'place': last.get('place')}
+    allow_refine = _pre.gate(question, history,
+                             ask=lambda _s, _u: _ask_short(_s, _u, model))
+    trace.append({'seq': len(trace) + 1, 'kind': 'intent', 'tool': 'intent',
+                  'result': {'go': '走' if allow_refine else '不走',
+                             'history_turns': len(history)}})
     # ⓪ 字面纠错 + 名称归一（阶段①的「字面」部分，在问题补全之前）。
     #    必须先做：字没改对，后面检索知识库、补全、写 SQL 全是白费。
     #    ★ 闸放行之外还有一条路：**问题里有业务对象名称**（「两水」「环潭」这种光杆所名）
@@ -1048,10 +1082,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #      （线上 2026-11-02 实测：问「两水」不补全、直接当通用问题答）。
     t_fix = time.time()
     fixed = name_fix.fix(question)
-    # name_fix 的返回里 names 字段可能是 None，靠「有没有改动」判更可靠：
-    # 「两水」→「两水供电所」就是它识别出业务对象了（实测线上 2026-11-02）。
-    if not allow_refine and (fixed.get('used') or str(fixed.get('text') or '') != question):
-        allow_refine = True
+    # ★ 2026-11-03 定稿：名字改对了也**不再**把"不走"翻成"走" —— 走不走只由第 1 步定。
     if not allow_refine:
         fixed = {'used': False, 'text': question, 'word_fixes': [], 'name_fixes': [],
                  'names': [], 'areas': [], 'hint': '', 'unresolved': [], 'ms': 0}
@@ -1080,25 +1111,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                                          'hits': comp.get('hits') or []}})
         except Exception as _exc:                  # noqa: BLE001 - 补全失败按原话继续
             print('[agent] 补全失败（按原话继续）：%s' % str(_exc)[:120], flush=True)
-    # ⓪·4 载入多轮上下文（同一场会话最近的几轮问答）。
-    #      **必须放在时间地点补全之前** —— 本轮没提时间/地点时要沿用上一轮的口径。
-    #      载入失败按「无上下文」处理，绝不影响本轮问答。
-    turns = config.HISTORY_TURNS if history_turns is None else max(0, int(history_turns))
-    history = []
-    if turns and session_id:
-        try:
-            from app.secretary import qa_log
-            history = qa_log.load_context(session_id, limit=turns)
-        except Exception as e:                      # noqa: BLE001
-            print('[agent] 读取多轮上下文失败（按无上下文继续）：%s: %s'
-                  % (type(e).__name__, e), flush=True)
-    prev_scope = None
-    if history:
-        last = history[-1]
-        prev_scope = {'period_type': last.get('period_type'),
-                      'period_key': last.get('period_key'),
-                      'time_text': last.get('time_text'),
-                      'place': last.get('place')}
+    # ⓪·4 多轮上下文已在第 1 步之前载入（判断要看最近几轮），这里只补 L2 会话摘要。
     # ⓪·4b L2 会话摘要：更早轮次的浓缩，让「翻出旧会话继续聊」时不至于只知道最近几轮。
     #       ★ 它**只用于注入提示**，不参与下面的「沿用上一轮口径」——
     #         那条链路必须能看到**紧邻的上一轮**，哪怕它已经被摘要覆盖了
@@ -1154,39 +1167,33 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 需要判断就去查，查不到就不下判断（见回答契约第 7 条）。
     # 问题也不改写：补全只补地名/名称/时间（上面的 name_fix 与 time_scope）。
     t_loop = time.time()
-    # 问题为准；补全结果只作参考，由模型自己判断适不适用
-    user_content = question
-    # ★ 2026-11-03：这里原来把「补全表命中的口径」拼进 user 消息。补全表已删除，
-    #   `preprocess.complete()` 的 hits 恒为空，这段注入一并去掉。
-    # 已摘要覆盖的轮次由【本场会话摘要】代表，明细里就不再重复带 ——
-    # 否则同一件事讲两遍，既白烧 token，又可能让摘要与明细互相打架。
-    # ★ 但**最近 N 轮例外**：紧跟上一轮的追问（「那售电量呢」）看原话比看摘要可靠，
-    #   实测只靠摘要时 history_injected 会是 0，追问的精细度下降。
+    # ── ⑥ 问题确定：把前面几步揉成一份定稿，第 7 步只拿这份 ────────────────
+    #    判据在页面框 `confirm`（空 = 不归整，参考资料原样下传）。
+    #    ★ 2026-11-03 定稿：主循环不再吃「原话 + 最近几轮 + 【统计范围】」那一堆 ——
+    #      取舍只在这一处，改一处就生效。第 1 步判"不走"时（闲聊 / 明确要求）
+    #      原话直接进第 7 步，缺信息由它自己反问用户。
+    if allow_refine:
+        _conf = confirm.run(question, fixed, comp, scope, history,
+                            ask=lambda _s, _u: _ask_short(_s, _u, model))
+    else:
+        _conf = {'used': False, 'text': '', 'block': ''}
+    trace.append({'seq': len(trace) + 1, 'kind': 'confirm', 'tool': 'confirm',
+                  'result': {'used': bool(_conf.get('used')),
+                             'text': str(_conf.get('text') or '')[:800]}})
+    if _conf.get('used'):
+        user_content = ('【本轮要办的事】（第 6 步归整后的定稿，按它办）\n' + _conf['text'])
+    elif _conf.get('block'):
+        user_content = _conf['block']
+    else:
+        user_content = question
+    # 只给一行日期：第 6 步框空着时，"上个月"要靠它自己推。这是信息，不是纪律。
+    user_content += '\n\n【今天】%s' % (today or time.strftime('%Y-%m-%d'))
+    # 摘要与最近几轮**不再拼进主循环**（第 6 步已经把该用的信息归整进定稿了）。
+    # hist_detail 仍要算：落库结果里的 history_injected 靠它，排障要看。
     keep = max(0, int(getattr(config, 'SUMMARY_KEEP_RECENT', 2) or 0))
     always = history[-keep:] if (history and keep) else []
     hist_detail = [h for h in history
                    if int(h.get('seq_no') or 0) > sum_upto or h in always]
-    if sess_sum.get('summary'):
-        user_content += (
-            '\n\n【本场会话摘要】（这场会话**更早轮次**的浓缩，仅作背景）\n'
-            + sess_sum['summary'] + '\n'
-            '注意三点：① 这是背景信息，**既不是数据来源、也不是结论来源** —— 回答里的任何数字，'
-            '以及任何结论（包括「未查到」「未生成工单」「处于草稿或审核状态」「数据缺失、已改用累计」'
-            '这类状态判断），都必须以本轮 run_sql 的结果为准；**摘要里写过的也要重新查一遍**。'
-            '② 若与本轮原话或下面【统计范围】冲突，**一律以本轮原话和【统计范围】为准**；'
-            '③ 不要复述这段摘要。')
-    if hist_detail:
-        hl = []
-        for i, h in enumerate(hist_detail, 1):
-            hl.append('%d) 用户：%s' % (i, h.get('raw_question') or ''))
-            hl.append('   系统：%s' % (h.get('answer') or '').replace('\n', ' '))
-            hl.append('   当时口径：%s / %s' % (h.get('time_text') or '-', h.get('place') or '-'))
-        user_content += (
-            '\n\n【对话历史】（同一场会话最近的 %d 轮，用来判断本轮在问什么、省略了什么）\n%s\n'
-            '注意三点：① 历史里的数字是按**当时的口径**算的；本轮口径没变时，'
-            '**可以直接沿用历史查到的数**，不必为了"必须重新查"再跑一遍。'
-            '② 本轮口径以上面【统计范围】为准；口径变了就按新口径重查。'
-            '③ 不要在回答里复述或提及这段历史本身。' % (len(hist_detail), '\n'.join(hl)))
     # ⓪·6 规则：**目录常驻 + 按需精确取**（2026-10-30 改）
     #     原来是"拿问题去向量检索《判据规则》切片，只留 4 片"，线上实测那 4 片的相似度
     #     只有 0.17~0.19 —— 是不是该用的那条规则全看运气，而且还会把相邻题的标准套错。
@@ -1208,14 +1215,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                       'result': {'topics': len(rule_topics),
                                  'titles': [x['topic'][:60] for x in rule_topics[:8]]}})
 
-    # 统计范围必须明确交给模型：六项指标是按「范围 + 期间」预计算的，
-    # 不给这一句，它就得自己猜该取 month 还是 yearToDate、该取哪个月。
-    user_content += ('\n\n【统计范围】（已按今天日期算好，直接采用，不要自行推算日期）\n'
-                     + scope['scope_text'] + _scope_detail(scope['place']))
-    if fixed['hint']:
-        # 名称被归到「地名层」时（库里没有这个精确名），必须告诉模型用前缀查，
-        # 否则它很可能拿合成名做等值匹配，一条都查不到还以为是空数据。
-        user_content += ('\n\n【名称归一说明】' + fixed['hint'])
+    # ★ 2026-11-03 定稿：【统计范围】守卫段和【名称归一说明】都不再注入。
+    #   时间 / 范围由第 6 步写进定稿（第 5 步算好的结果在那里），改一处就生效；
+    #   名称改成什么，在定稿的"更正后"一行里已经写清楚了。
     # ★ 2026-11-03（Fred）：COMMON（汇报口吻/分层）与 CHECK（交卷前 5 条）已下线，
     #   不再往 system 或 user 消息里注入。`_is_analysis` 只用于 qtype 落库，不再切换提示词。
     _is_analysis = _wants_analysis(question)
@@ -1242,9 +1244,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             '\n③ 如果给的是节选（上面标了「全文约 N 字，节选 M/K 段」），'
             '不要声称"全文只有这些"；需要别的位置就说"需要再查"并说明查哪一节。'
             '\n④ 本次不需要查业务库；只有用户明确要求"和系统里的数据比对"时才调 run_sql。')
-    # 上游强制范围不在这里再注入一遍：它已经在【统计范围】的地点行里写明「强制按此范围取数」，
-    # 口径只留一个出处（以前这里注入的是 scope 这个 dict 的 repr，纯属噪声）。
-    _mode = agent_v2.judge_mode(question, bool(doc_context))
+    # 上游强制范围不在这里再注入一遍：需要它的时候它已经在第 6 步的定稿里。
+    # ★ 2026-11-03 定稿：不再用 `modes.judge` 那套词表判"这题属于哪种模式"来开关工具 ——
+    #   工具一律给（该查数还是该写文档由模型自己判断），模式固定 general（基础流程那段）。
+    #   这是链路里最后一张写死的业务词表，删掉之后不再有词表匹配。
+    _mode = 'general'
     _persona = persona
     if _persona is None and session_id:
         try:
@@ -1287,11 +1291,10 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                      personal_rules=(_pkb.get('text') or ''))},
                 {'role': 'user', 'content': user_content}]
     answer = ''
-    nudged = False
+    # ★ 2026-11-03 定稿「守卫先全关」：不再有"催一次""锁死"两种处置。
+    #   模型没调工具也一样放行；出问题再按现象一个个开回来（旧逻辑见 git 历史）。
     blocked = False
-    # 判成 general 的轮次本来不传 tools；一旦闸门要求核实，就把它解锁（见 evidence_gate）
-    _tool_unlocked = False
-    gate_log: list = []     # 闸门每次判断留痕，落进 result 供内网排障
+    gate_log: list = []     # 保留字段（落库结果里内网在用），本轮恒为空
     step = 0
     while True:
         step += 1
@@ -1310,79 +1313,34 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                                         '如果还缺关键前提（例如具体是哪张单、哪个所），'
                                         '就在回答里一句话说清需要补什么，不要再查。'}]
                      if _over_time else messages),
-                    ('answer', 'check')),
+                    ('answer',)),
                     model, allow_rule=True, trace=trace)
             trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content': _why + '，强制出正文'})
             break
         t0 = time.time()
-        # 查数轮：关思考（省内心独白）+ tool_choice=required（不许写散文，只准发工具调用）。
-        # 实测同一轮：auto 会写 240~3400 字过程散文（一轮 10~17s），required 只有 56 token / 1.7s。
-        # 收尾靠 finish 工具，不靠"模型自己停下来顺手写答案"。
-        resp = _chat(messages, model, think=False, max_tokens=600,
-                     use_tools=(agent_v2.use_tools(_mode) or _tool_unlocked))
+        # 第 7 步 · 干活循环。工具**一律给**（该查数、该查知识库、该写文档由模型判断），
+        # 查数轮关思考：实测同一轮开思考会写 240~3400 字过程散文（一轮 10~17s）。
+        resp = _chat(messages, model, think=False, max_tokens=600, use_tools=True)
         llm_ms = int((time.time() - t0) * 1000)
         msg = resp['choices'][0]['message']
         calls = msg.get('tool_calls') or []
         if not calls:
-            # 这一轮的正文只用于「有没有瞎下结论」的判定；**不当最终答案**：
-            # 查数轮是关思考跑的，它的 content 里可能混着"我已经收集了…让我汇报"这类过程话术
-            #（那正是领导看到思考过程的原因）。真正的答案由下面 _final_answer 另起一次调用写。
+            # 模型不再发工具了 = 它认为信息够了（也可能它要反问用户，答案就是那句反问）。
+            # ★ 2026-11-03 定稿「守卫先全关」：不催、不锁、不判"有没有出处"，直接进第 8 步。
             answer = (msg.get('content') or '').strip()
             used_tool = any(t.get('kind') == 'tool' for t in trace)
-            # 闸门（2026-11-02 改）：不再看「问题里有没有业务词」，只看**这句答案里
-            # 有没有没出处的断言**。规则见 evidence_gate.py，理由：问题侧词表是开集 ——
-            # 内网「全市情况怎么样」没命中任何业务词 → 判 general → 不给工具 → 模型写
-            # "数据缺失"，而这句话没有数字 → 当通用问答放行；同一句若写了数字反被拦。
-            # 判据必须落在答案侧，问题怎么问都不影响。
-            # ★ 2026-11-03：历史证据也算出处 —— 上一轮查出来的数，这一轮直接引用
-            #   不该被判"没核实"。答案里的断言都能在历史回答里找到时放行。
-            _hist_text = ' '.join(str(x.get('answer') or '') for x in (history or []))
-            _now_claims = evidence_gate.claims(answer)
-            _hist_claims = set(evidence_gate.claims(_hist_text))
-            _history_ok = bool(_now_claims) and set(_now_claims) <= _hist_claims
-            act, why = evidence_gate.decide(used_tool=used_tool, nudged=nudged,
-                                            answer=answer, mode=_mode,
-                                            history_ok=_history_ok)
-            gate_log.append({'act': act, 'why': why, 'mode': _mode,
-                             'tools_given': bool(agent_v2.use_tools(_mode) or _tool_unlocked)})
-            if act == evidence_gate.ACT_NUDGE:
-                # 提醒时必须**把工具补上**：判成 general 的轮次压根没传 tools，
-                # 只提醒不给工具，模型只能再编一遍，然后必然走到 block（内网第 1 条就是这样）。
-                nudged = True
-                extra = ''
-                if not agent_v2.use_tools(_mode):
-                    _tool_unlocked = True
-                    extra = agent_v2.tool_context()
-                trace.append({'seq': len(trace) + 1, 'kind': 'nudge', 'model_ms': llm_ms,
-                              'content': '已要求先核实：' + (why or '这一轮没调工具'),
-                              'result': {'tools_unlocked': bool(extra)}})
-                messages.append({'role': 'assistant', 'content': answer})
-                messages.append({'role': 'user', 'content':
-                                 '你这一轮没有调用任何工具。'
-                                 + ((why + '。') if why else '')
-                                 + '请先用工具核实（查业务库数据，必要时查知识库口径），再给出结论；'
-                                 '确实不需要任何工具就一句话说明理由，且回答里不要出现'
-                                 '没有查询结果支撑的数字、比例或"没有记录"这类结论。'
-                                 '需要查多个互不依赖的数时，请把要用到的 run_sql **一次发出**，'
-                                 '不要一条一条分多轮来。'
-                                 '不要在回答里提到这条提示，也不要复述你的工具调用过程。'
-                                 + extra})
-                continue
-            # ★ 2026-11-03：`ACT_BLOCK`（锁死）整段删除 —— 守卫只提醒一次，不再拦死。
             if not used_tool:
                 if not answer:
-                    # 空正文（实测 12 题里 1 次）：**不许把空白交给领导**，另起一次要正文
-                    answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model,
-                                    allow_rule=True, trace=trace)
+                    # 空正文：另起一次要正文。不许把空白交给用户。
+                    answer = _final_answer(_swap_materials(messages, ('answer',)), model,
+                                           trace=trace)
                     llm_ms = int((time.time() - t0) * 1000)
                 trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
-                              'content': answer[:600],
-                              'note': '通用回答，未查业务库' + (('：' + why) if why else '')})
+                              'content': answer[:600], 'note': '未查业务库'})
                 break
-            # 数据查完了：**另起一次「写汇报」调用**（不给工具、明确要求写正文）。
-            # 关思考的查数轮省下的时间，全花在这一步上——只让它写正文，不让它继续想。
-            answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model,
-                                    allow_rule=True, trace=trace)
+            # 查过了：另起一次调用写正文（不让它继续查，也不让过程话术当答案）。
+            answer = _final_answer(_swap_materials(messages, ('answer',)), model,
+                                   trace=trace)
             llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                           'content': answer[:600]})
@@ -1417,7 +1375,10 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             _body = _trim(o['name'], o['result'])
             if o['name'] == 'run_sql':
                 _sql = (o.get('args') or {}).get('sql')
-                _body += _time_guard(_sql, scope) + _scope_guard(_sql, scope) + _unit_guard(_sql)
+                # ★ 2026-11-03 定稿：三条"就地提醒"（没带时间 / 没带范围 / 没带单位）全部停用。
+                #   它们是预设式守卫；需要约束就把规矩写进页面的「查数口径」。
+                #   旧代码保留：_time_guard / _scope_guard / _unit_guard。
+                pass
             messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _body})
         # 周期性软提醒：防止一直翻表不收手。
         # ⚠️ 必须放在**全部 tool 回填之后**：OpenAI 兼容协议要求 assistant(tool_calls) 后
@@ -1427,7 +1388,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         #   必答项随规则一起删了，这句在指空；代码也不再替模型管节奏。
         if fins:
             # 模型自己说「数据够了」→ 由系统另起一次调用写正文（不用它这轮的 content，那是散文草稿）
-            answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model,
+            answer = _final_answer(_swap_materials(messages, ('answer',)), model,
                                     allow_rule=True, trace=trace)
             llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
@@ -1460,7 +1421,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                  '请只使用你本轮查到的数（合计/均值取结果里的 summary），逐条改正后重写正文；'
                  '不要改口径、不要新增没查过的数，也不要提这条提示。' % '、'.join(str(x) for x in _bad1[:8])}]
             try:
-                _ans2 = _final_answer(_swap_materials(_msgs, ('answer', 'check')), model,
+                _ans2 = _final_answer(_swap_materials(_msgs, ('answer',)), model,
                                       allow_rule=True, trace=trace)
             except Exception:                                  # noqa: BLE001
                 _ans2 = ''
@@ -1480,7 +1441,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 {'role': 'user', 'content':
                  '回答里出现了「%s」—— 把内部系数写成标准是禁止的。请重写：要么只给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「还差多少、还需完成多少」，不要出现任何「XX%% 基准线 / 达标线 / 进度要求」。' % _coef1}],
             try:
-                _cans2 = _final_answer(_swap_materials(_cmsgs, ('answer', 'check')), model,
+                _cans2 = _final_answer(_swap_materials(_cmsgs, ('answer',)), model,
                                        allow_rule=True, trace=trace)
             except Exception:                                  # noqa: BLE001
                 _cans2 = ''

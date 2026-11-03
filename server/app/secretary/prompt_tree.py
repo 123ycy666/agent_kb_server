@@ -4,20 +4,16 @@
 页面的树、节点、材料按钮全部由这里生成，**不在前端写死**——改结构只改这一处。
 
 材料三种来源，页面上靠 `editable` / `source` 区分：
-    code:*    代码常量（只读：红线 / 优先级 / 身份 / 时间地点规则）
-    table:prompt_material  四份材料（★ 2026-11-03 主分支空壳化后整体关闭，见 prompt_material.SLOTS）
-    table:complete_rule    补全表（★ 2026-11-03 已删除）
-    词表/词典  只读展示（业务词表仍可页面覆盖）
-
-★ 2026-11-03（Fred）：链路里删掉的 6 份材料 —— 补全表、查数口径、判定标准、
-  作答规则、汇报口吻、自检清单。原文备份在
-  `docs/08-历史归档/2026-11-03-删除的提示词规则/`，恢复方式见那份 README。
+    code:*    代码常量（只读，最多 S0/S1 与身份这类）
+    table:prompt_material  五份材料（四份可改）
+    table:complete_rule    补全表（可改）
+    词表/词典  只读展示
 """
 from __future__ import annotations
 
 NODES = [
     {
-        'id': 'p1', 'no': 1, 'name': '提问', 'desc': '用户原话',
+        'id': 'p1', 'no': 1, 'name': '接手这句话', 'desc': '用户原话 + 最近几轮问答',
         'materials': [
             {'key': 'base.identity', 'name': '身份', 'editable': True},
             {'key': 'base.redlines', 'name': '红线', 'editable': True},
@@ -25,64 +21,52 @@ NODES = [
         ],
     },
     {
-        'id': 'p2', 'no': 2, 'name': '要不要动这句话', 'desc': '是不是业务问题',
+        'id': 'p2', 'no': 2, 'name': '要不要走预处理', 'desc': '走 = 纠错 + 补全 + 补时间地点；不走直接去干活',
         'materials': [
-            {'key': 'modes.keywords', 'name': '业务词表', 'editable': True},
+            {'key': 'base.intent', 'name': '① 要不要走预处理', 'editable': True},
         ],
     },
     {
-        'id': 'p3', 'no': 3, 'name': '改错字', 'desc': '打错的名改成库里的标准名',
+        'id': 'p3', 'no': 3, 'name': '纠错', 'desc': '错别字 / 单位 / 站名改成库里的标准名',
         'materials': [
-            {'key': 'nc.typo', 'name': '纠错词典', 'editable': False},
+            {'key': 'nc.typo', 'name': '② 纠错词典', 'editable': False},
         ],
     },
     {
-        'id': 'p4', 'no': 4, 'name': '补全', 'desc': '只补缺的问法（补全表 2026-11-03 已删）',
-        'materials': [],
-    },
-    {
-        'id': 'p5', 'no': 5, 'name': '定时间地点', 'desc': '上个月 → 2026年10月',
+        'id': 'p4', 'no': 4, 'name': '补问法 + 查补全表', 'desc': '补默认问法；拿原问题和补后问题去表里找命中（只查不改）',
         'materials': [
-            {'key': 'time.scope', 'name': '时间地点规则', 'editable': False},
+            {'key': 'mat.complete', 'name': '④ 补全表', 'editable': True},
         ],
     },
     {
-        'id': 'p6', 'no': 6, 'name': '判题型', 'desc': '查数 / 分析 / 写作 / 出文件',
+        'id': 'p5', 'no': 5, 'name': '算时间地点', 'desc': '上个月 → 2026年10月；没说就默认上一个月 / 全市',
         'materials': [
-            {'key': 'modes.keywords', 'name': '题型词表', 'editable': True},
-            {'key': 'modes.text', 'name': '模式做法', 'editable': True},
+            {'key': 'time.scope', 'name': '⑤ 时间地点规则', 'editable': False},
         ],
-        'branches': ['B 查数', 'C 分析', 'D 写材料', 'E 出文件', 'A 写作（不查库）'],
     },
     {
-        'id': 'p7', 'no': 7, 'name': '去查', 'desc': '要数→业务库 / 不知字段→字典表 / 问制度→资料库',
+        'id': 'p6', 'no': 6, 'name': '问题确定', 'desc': '把前面几步揉成四行定稿：要什么 / 时间 / 范围 / 其它要求',
         'materials': [
+            {'key': 'base.confirm', 'name': '⑥ 问题确定', 'editable': True},
+        ],
+    },
+    {
+        'id': 'p7', 'no': 7, 'name': '干活（主循环）', 'desc': '拿定稿自己决定查字段 / 查知识库 / 查数 / 写文档；信息不够就反问用户',
+        'materials': [
+            {'key': 'mat.fetch', 'name': '⑦ 查数口径', 'editable': True},
             {'key': 'semantic.tables', 'name': '数据表清单', 'editable': False},
             {'key': 'semantic.columns', 'name': '字段说明', 'editable': False},
             {'key': 'semantic.codes', 'name': '字典表', 'editable': False},
         ],
     },
     {
-        'id': 'p8', 'no': 8, 'name': '数够了吗', 'desc': '口径对齐、能下结论；不够就回去再查',
-        'materials': [],
-    },
-    {
-        'id': 'p9', 'no': 9, 'name': '要不要判', 'desc': '查数不判；分析要判（判定标准 2026-11-03 已删）',
-        'materials': [],
-    },
-    {
-        'id': 'p10', 'no': 10, 'name': '作答', 'desc': '先结论，再支撑数（作答规则/汇报口吻 2026-11-03 已删）',
-        'materials': [],
-    },
-    {
-        'id': 'p11', 'no': 11, 'name': '自检', 'desc': '交卷前过一遍（自检清单 2026-11-03 已删）',
-        'materials': [],
-    },
-    {
-        'id': 'p12', 'no': 12, 'name': '交付', 'desc': '回答给员工，同时留档',
-        'materials': [],
+        'id': 'p8', 'no': 8, 'name': '回答', 'desc': '拿查回来的信息，按回答规则写成回答',
+        'materials': [
+            {'key': 'mat.answer', 'name': '⑧ 回答规则', 'editable': True},
+        ],
     },
 ]
+
 
 
 def _code_text(key: str) -> str:
@@ -109,15 +93,20 @@ def _code_text(key: str) -> str:
         except Exception as exc:                   # noqa: BLE001
             return '【业务码表】读取失败：%s' % str(exc)[:120]
     if key == 'base.identity':
-        from app.secretary import prompt_text, prompts_data, project
-        return project.fill(prompt_text.get('identity', prompts_data.IDENTITY))
+        from app.secretary import prompt_text, prompts_data
+        return prompt_text.get('identity', prompts_data.IDENTITY)
     if key == 'base.redlines':
-        # 2026-11-03：代码常量已删，改成页面 key（默认空 → 页面显示"（空）"）
         from app.secretary import prompt_text
-        return prompt_text.get('redlines', '') or '（空：页面上填了才注入）'
+        return prompt_text.get('redlines', '')
     if key == 'base.priority':
         from app.secretary import prompt_text
-        return prompt_text.get('priority', '') or '（空：页面上填了才注入）'
+        return prompt_text.get('priority', '')
+    if key == 'base.intent':
+        from app.secretary import prompt_text
+        return prompt_text.get('intent', '')
+    if key == 'base.confirm':
+        from app.secretary import prompt_text
+        return prompt_text.get('confirm', '')
     if key == 'modes.text':
         import json as _json
         from app.secretary import prompt_text, prompts_data
@@ -128,9 +117,10 @@ def _code_text(key: str) -> str:
         from app.secretary import modes
         return _json.dumps(modes.load_rules(), ensure_ascii=False, indent=2)
     if key == 'time.scope':
-        return ('【时间地点补全规则】（代码实现，只读展示）\n'
+        return ('【时间地点补全规则】（代码实现，只读展示；改说法在页面的时间地点规则里）\n'
                 '· 相对时间词换成具体期间：上个月 / 今年 / 9 月 → 具体年月\n'
-                '· 本轮没提时间 → 沿用上一轮；上一轮也没有 → 取**上一个月**（11月问 → 补10月）\n'
+                '· 本轮没提时间 → **默认上一个月**（2026-11-03 改；不再沿用上一轮，\n'
+                '  是否沿用由第 6 步「问题确定」判断）\n'
                 '· 地点：从问题里的所 / 县 / 台区名取；没有 → 全市\n'
                 '· 表在不同表里写法不同（「广水市供电公司」vs「广水」）→ 统一按名称清单换')
     return ''
@@ -168,6 +158,9 @@ def _typo_text() -> str:
 
 def _table_text(key: str) -> tuple[str, bool]:
     """返回 (正文, 是否存在)。"""
+    if key == 'mat.complete':
+        from app.secretary import complete_rules
+        return complete_rules.as_text(), True
     if key.startswith('mat.'):
         from app.secretary import prompt_material
         slot = key.split('.', 1)[1]
@@ -188,15 +181,20 @@ def material_body(key: str) -> str:
 # 每份材料「什么时候进提示词」——页面直接显示，不用猜
 WHEN = {
     'base.identity': '每条消息都在',
-    'base.redlines': '每条消息都在',
-    'base.priority': '每条消息都在',
-    'modes.text': '判完题型后',
-    'semantic.tables': '查数时（data / doc 模式）',
+    'base.redlines': '填了才注入（每条消息）',
+    'base.priority': '填了才注入（每条消息）',
+    'base.intent': '第 1 步：每次调用一次模型判断',
+    'base.confirm': '第 6 步：每次调用一次模型归整',
+    'modes.text': '每条消息都在（基础流程那段）',
+    'mat.fetch': '第 7 步干活循环里',
+    'mat.answer': '第 8 步写回答时',
+    'semantic.tables': '干活循环里（工具目录）',
     'semantic.columns': '不进提示词：describe_table 按需取',
-    'semantic.codes': '查数时（data / doc 模式）',
+    'semantic.codes': '干活循环里（业务码表）',
     'nc.typo': '预处理：代码读，不进提示词',
-    'time.scope': '预处理：代码读，不进提示词',
-    'modes.keywords': '判题型：代码读，不进提示词',
+    'mat.complete': '预处理：代码读，不进提示词',
+    'time.scope': '预处理：代码算，不进提示词',
+    'modes.keywords': '已不参与链路（词表匹配已删）',
 }
 
 
@@ -205,6 +203,8 @@ TEXT_KEY = {
     'base.identity': 'identity',
     'base.redlines': 'redlines',
     'base.priority': 'priority',
+    'base.intent': 'intent',
+    'base.confirm': 'confirm',
     'modes.text': 'modes',
     'modes.keywords': 'keywords',
 }

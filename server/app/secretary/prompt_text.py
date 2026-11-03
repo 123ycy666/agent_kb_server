@@ -28,6 +28,11 @@ TEXT_KEYS = {
     'priority': '谁说了算（S1，纯文本；不填就不注入）',
     'modes': '模式做法（JSON：data / doc / general / office 四段）',
     'keywords': '业务词表 / 题型词表（JSON：produce / data / kb / explain / chat …）',
+    # ── 第 1 步 / 第 6 步（2026-11-03 定稿，Fred「流程要能在页面上改」）──────
+    # 这两段原来是代码里的词表匹配（`modes.judge`）和散在 agent 里的判断，改一次要发版。
+    # 现在都是纯文本，填什么生效什么；空着 = 这一步不做判断（见 preprocess / confirm）。
+    'intent': '① 要不要走预处理（空 = 全部走：纠错+补全+补时间地点）',
+    'confirm': '⑥ 问题确定（空 = 不归整，原样往下传）',
     # ── 时间地点规则（2026-11-02 搬出代码）──────────────────────────
     # 这几组原来是 time_scope.py 里的常量，改一次要发版。现在允许页面覆盖：
     # 表里有值就用表里的，没有就用代码常量（行为与以前完全一致）。
@@ -138,6 +143,9 @@ def all_texts() -> list[dict]:
         # ★ 2026-11-03：`answer_format` 已下线（S4 汇报口吻 + 交卷检查不再注入）
         'modes': json.dumps(prompts_data.MODE_TEXTS, ensure_ascii=False, indent=2),
         'keywords': '',
+        # 2026-11-03：两个流程判断框，默认空（空 = 不做判断）
+        'intent': '',
+        'confirm': '',
     }
     try:
         from app.secretary import modes

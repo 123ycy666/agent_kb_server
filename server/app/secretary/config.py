@@ -257,13 +257,14 @@ KB_IDS = [int(x) for x in
 # 六项指标已统一到这两张预计算表：快照（本期值）+ 对比（同比/环比）。
 TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').split(',') if x]
 
-# 单题时间预算（秒）：超过就停止继续查数，用已查到的内容作答，并在回答里说明还缺什么。
-# 实测「不指定对象」的问题（「这单钱都花哪了」）会一直翻表到客户端超时（600 s 无响应）。
-QUESTION_BUDGET_S = float(ENV.get('SECRETARY_QUESTION_BUDGET') or '240')
+# 单题时间预算（秒）：0 = 不限。
+# ★ 2026-11-03 定稿：关掉 —— 复杂问题、处理文件本来就可能是长任务，
+#   唯一的硬上限是 MAX_STEPS=30（防死循环）。要压测再设 SECRETARY_QUESTION_BUDGET。
+QUESTION_BUDGET_S = float(ENV.get('SECRETARY_QUESTION_BUDGET') or '0')
 
-# 数字闸：回答里的金额必须能在本轮 SQL 结果（含 summary、成对和差比）里找到出处，
-# 找不到就重问一次。关掉设 SECRETARY_NUMBER_GUARD=0。
-NUMBER_GUARD_ON = (ENV.get('SECRETARY_NUMBER_GUARD') or '1') not in ('0', 'false', 'False')
+# 数字闸 / 系数闸：★ 2026-11-03 定稿「守卫先全关」—— 默认关，出问题再说。
+# 原来的行为：回答里的金额必须能在本轮 SQL 结果里找到出处，找不到就重问一次。
+NUMBER_GUARD_ON = (ENV.get('SECRETARY_NUMBER_GUARD') or '0') not in ('0', 'false', 'False')
 
 # 系统提示从 ai_data.ai_prompt 注入（取 IS_new=1 的最新版），不在代码里写死。
 # 列表里不存在的 key 会自动跳过，所以可以先接好槽位、等内容补上就自动生效。
@@ -293,11 +294,12 @@ COMPLETION_URL = (LLM_BASE.split('/compatible-mode')[0] +
 RULES_PRIORITY = (os.environ.get('SECRETARY_RULES_PRIORITY') or '1').strip().lower() \
     not in ('0', 'false', 'no', 'off')
 
-# 工具调用步数上限：0 = 不设上限（由模型自己决定什么时候收手）。
+# 工具调用步数上限。
 # ★ 2026-10-08 撤回默认值 14：Fred 明确「不要随意加上限，优化的是过程，想办法让他快点，
-#   不是限制他」。要提速就改链路（页面移出关键路径、减少每轮上下文、换更快的思考档），
-#   不许靠砍模型能查多少次来提速。保留这个开关只为压测用，默认必须是不限。
-MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '0'))
+#   不是限制他」。
+# ★ 2026-11-03 定稿：设 30 —— 只防真死循环（同一个工具反复查不收敛），不含任何业务规则。
+#   复杂问题十几二十步是正常的，30 留足余量；要更长改环境变量 SECRETARY_MAX_STEPS。
+MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '30'))
 
 # HTTP 接口的**防呆上限**：历史对话类接口（/api/sessions、/api/history）在「要求全部返回」时，
 # 一次最多给这么多条，超出的截断，并在响应里带 truncated=true 让调用方知道被截了。

@@ -72,18 +72,19 @@ def _split_md(text: str) -> list[dict]:
 def overview(actor: CurrentActor = Depends(get_current_actor)):
     """内网对接用：一个请求拿到页面需要的全部数据，不用连调六个接口。
 
-    ★ 2026-11-03：`complete`（补全表）已从返回里去掉 —— 补全表下线了。
-      `materials` / `inject` 现在是空的（`prompt_material.SLOTS = ()`，主分支空壳）。
+    ★ 2026-11-03 定稿：`complete`（补全表）回来了 —— 第 4 步要用它（只查不改），
+      Fred 在页面上迭代这张表。
     """
-    from app.secretary import prompt_tree, prompt_material, prompt_text
+    from app.secretary import prompt_tree, prompt_material, prompt_text, complete_rules
     return _jr({
         'ok': True,
         'nodes': prompt_tree.tree(),
         'materials': prompt_material.summary(),
         'texts': prompt_text.all_texts(),
+        'complete': [dict(r) for r in complete_rules.rows()],
         'inject': {
             'loop_block': len(prompt_material.block(('fetch', 'judge'))),
-            'final_block': len(prompt_material.block(('answer', 'check'))),
+            'final_block': len(prompt_material.block(('answer',))),
         },
         'actor': {'username': actor.username, 'is_admin': actor.is_admin},
     })
@@ -168,11 +169,13 @@ def preview(mode: str = 'data', actor: CurrentActor = Depends(get_current_actor)
     ⚠️ 不调 agent_v2（那要一整套运行时参数）；这里直接用 prompt_stack.build
     拿同一份常量，保证页面看到的就是代码里的原文。
     """
-    from app.secretary import prompt_stack, prompts_data, agent, prompt_material
-    ans = (agent.COMMON + '\n\n' + agent.CHECK + '\n\n' + prompts_data.ANSWER_DATA).strip()
-    r = prompt_stack.build(mode=mode, identity=prompts_data.IDENTITY,
-                           modes=prompts_data.MODE_TEXTS, priority=agent.RULES_PRIORITY,
-                           answer_format=ans)
+    from app.secretary import prompt_stack, prompts_data, prompt_text, prompt_material
+    # ★ 2026-11-03 定稿：红线 / 优先级 / 作答格式都从页面取（默认空 = 不注入）。
+    r = prompt_stack.build(mode=mode, identity=prompt_text.get('identity', prompts_data.IDENTITY),
+                           modes=prompt_text.mode_texts(prompts_data.MODE_TEXTS),
+                           priority=prompt_text.get('priority', ''),
+                           redlines=prompt_text.get('redlines', ''),
+                           rules_menu=prompt_material.block(('fetch',), index_slots=None))
     layers = []
     for x in r.get('layers') or []:
         body = ''
@@ -186,9 +189,7 @@ def preview(mode: str = 'data', actor: CurrentActor = Depends(get_current_actor)
                 'layers': layers, 'materials': prompt_material.summary()})
 
 
-# ★ 2026-11-03（Fred）：`GET/PUT /prompts/complete`（补全表）已删除 ——
-#   补全表从提示词链路里下线，`complete_rules` 模块一并删除。
-#   原文备份：docs/08-历史归档/2026-11-03-删除的提示词规则/补全表.md
+# ★ 2026-11-03 定稿：补全表的 GET/PUT 在下面（`/complete`）恢复 —— 第 4 步要用。
 
 
 @router.post('/material/{slot}/section', summary='新增一节（自己加判断类型）')
@@ -233,6 +234,30 @@ async def save_text(key: str, request: Request,
 def reset_text(key: str, actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import prompt_text
     res = prompt_text.reset(key)
+    return _jr(res, 200 if res.get('ok') else 500)
+
+
+# ── 补全表（2026-11-03 恢复）────────────────────────────────────────
+# 第 4 步拿「原问题 + 补后问题」来这张表里找命中条目，**只查不改**。
+# Fred 在页面上迭代这张表（用户体验就靠它）：整表覆盖保存，失败回滚、一行不少。
+@router.get('/complete', summary='补全表全部条目')
+def complete_list(actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import complete_rules
+    return _jr({'ok': True, 'rows': [dict(r) for r in complete_rules.rows()],
+                'preview': complete_rules.as_text()})
+
+
+@router.put('/complete', summary='整表覆盖保存补全表')
+async def complete_save(request: Request,
+                        actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import complete_rules
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
+    items = body.get('rows')
+    if items is None:
+        items = body.get('items')
+    res = complete_rules.save(items or [])
     return _jr(res, 200 if res.get('ok') else 500)
 
 
