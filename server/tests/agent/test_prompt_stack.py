@@ -132,10 +132,11 @@ def main() -> int:
     chk('system 不含装配说明', '以下是内容按优先级' not in sys_text and 'S0 红线 >' not in sys_text)
     chk('system 不含硬编码日期句', '今天的日期是' not in sys_text)
     chk('system 仍含身份（保留）', '随州' in sys_text)
-    # ★ 2026-11-03 定稿：数据表目录由 tool_context() 提供，且**任何模式都给**
-    #   （工具一律给）。库连不上时它是空的，所以这里验"装配里确实调了它"。
+    # ★ 2026-11-03（Fred）：提示词里**不注入任何业务目录**（表清单 / 字典表都不进），
+    #   要表结构用 describe_table / find_column 现取；注入什么只由页面上的框决定。
     _src_v2 = io.open(SERVER / 'app' / 'secretary' / 'agent_v2.py', encoding='utf-8').read()
-    chk('system 恒带数据表目录（不再按模式开关）', 'head += tool_context()' in _src_v2)
+    chk('agent_v2 不再有 tool_context 注入',
+        'tool_context' not in _src_v2 and 'table_list_menu' not in _src_v2)
     chk('system 不含全量字段样例', '（例:' not in sys_text)
     chk('system 长度 < 15000', len(sys_text) < 15000, str(len(sys_text)))
 

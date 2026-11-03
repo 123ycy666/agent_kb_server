@@ -170,8 +170,6 @@ def main() -> int:
     chk('agent.py 已停用 evidence_gate（守卫全关）', 'evidence_gate.decide(' not in src)
     chk('agent.py 不再有用 _biz_force 放行', '_biz_force' not in src)
     chk('agent.py 不再有"催一次"分支', '_tool_unlocked' not in src)
-    chk('agent_v2 有 tool_context', 'def tool_context' in (
-        SERVER / 'app' / 'secretary' / 'agent_v2.py').read_text(encoding='utf-8'))
     chk('modes.py 兜底注释写明理由', '按查数处理' in (
         SERVER / 'app' / 'secretary' / 'modes.py').read_text(encoding='utf-8'))
 

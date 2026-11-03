@@ -63,28 +63,6 @@ def judge_mode(question: str, has_files: bool = False) -> str:
         return 'data'
 
 
-def tool_context() -> str:
-    """查数要用的目录：业务码表 + 可用数据表清单（前面带两个换行，可直接拼）。
-
-    system 与「核实提醒」共用同一份 —— 提醒时若是纯写作模式起的头，
-    这份目录原先根本没进 system，模型即使被解锁工具也不知道能查哪张表。
-    """
-    parts = []
-    try:
-        codes = semantic.codes_menu()
-        if codes:
-            parts.append(codes)
-    except Exception:                              # noqa: BLE001
-        pass
-    try:
-        parts.append('【可用数据表（只能查这些，字典外的表一律不可用）】\n'
-                     '字段明细请用 describe_table(表名) 现取，不要凭印象写字段。\n'
-                     + semantic.table_list_menu())
-    except Exception:                              # noqa: BLE001
-        pass
-    return ('\n\n' + '\n\n'.join(parts)) if parts else ''
-
-
 def system(mode: str, legacy, today=None, persona: str | None = None,
            prefs: dict | None = None, priority: str | None = None,
            answer_format: str | None = None, personal_rules: str | None = None) -> str:
@@ -127,9 +105,9 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
         #   它是"我不填也生效的字"。要日期就在页面上自己写。
         if (os.environ.get('SECRETARY_INJECT_DATE') or '').strip() == '1':
             head += ('\n\n今天的日期是 %s。' % (today or time.strftime('%Y-%m-%d')))
-        # ★ 2026-11-03 定稿：工具一律给，数据表目录也一律给 —— 该查数还是该写文档
-        #   由模型自己判断，不再按"模式"开关（那条分流靠的是写死的业务词表）。
-        head += tool_context()
+        # ★ 2026-11-03（Fred）：**不注入任何业务目录** —— 表清单 / 字典表都不进提示词，
+        #   模型要表结构就用 describe_table(表名) / find_column 现取。
+        #   提示词里能出现什么，只由页面上的框决定（身份 / 红线 / 优先级 / 意图 / 问题确定 / 材料）。
         return head
     except Exception as exc:                       # noqa: BLE001
         print('[agent_v2] 装配失败，回落旧装配：%s' % exc)
