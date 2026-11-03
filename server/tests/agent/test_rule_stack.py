@@ -84,11 +84,17 @@ def _cleanup() -> None:
 def main() -> int:
     print('提示词重构验收（真 PG）')
     from app.secretary import agent, agent_v2, rule_doc, personal_kb
+    from app.secretary import prompt_material as _pm
+    # ★ 2026-11-03：主分支空壳把 prompt_material.SLOTS 置空了。这个测试验的是
+    #   「材料按阶段注入 / get_rule 按代号取」这套**机制**，本地把四份开回来再测，
+    #   不改仓库配置（空壳本身由 _scratch/verify_shell.py 守着）。
+    _pm.SLOTS = ('fetch', 'judge', 'answer', 'check')
 
     # ── 1/2 装配结构 ───────────────────────────────────────
     sys_text = agent_v2.system('data', agent._system, '2026-10-30',
                                priority=agent.RULES_PRIORITY,
-                               answer_format=(agent.COMMON + agent.CHECK))
+                               # 2026-11-03：COMMON/CHECK 已下线，S4 用替身正文验装配
+                               answer_format='作答格式替身')
     chk('system 里含 S1 谁说了算', 'S1 谁说了算' in sys_text)
     chk('system 里含 S4 作答格式', 'S4 作答格式' in sys_text)
     chk('system 里只有表清单（无字段样例值）', '（例:' not in sys_text,

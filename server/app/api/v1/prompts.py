@@ -7,8 +7,8 @@
     PUT  /api/v1/prompts/material/{slot} 保存某一份（整份）
     POST /api/v1/prompts/material/{slot}/import  上传 markdown 覆盖某一份（按标题切）
     GET  /api/v1/prompts/preview        当前基础提示词（按层）
-    GET  /api/v1/prompts/complete       补全表
-    PUT  /api/v1/prompts/complete       保存补全表
+
+★ 2026-11-03（Fred）：`GET/PUT /api/v1/prompts/complete`（补全表）已删除。
 
 权限口径（2026-11-02 Fred 定）：**登录用户都能改，不设管理员闸**。
 这 13 个接口一律只 `Depends(get_current_actor)`；前端 `/prompts` 页面对所有登录用户开放。
@@ -68,15 +68,18 @@ def _split_md(text: str) -> list[dict]:
     return out
 
 
-@router.get('/overview', summary='一次拿全：节点树 + 四份材料 + 补全表 + 代码提示词 + 注入字数')
+@router.get('/overview', summary='一次拿全：节点树 + 四份材料 + 代码提示词 + 注入字数')
 def overview(actor: CurrentActor = Depends(get_current_actor)):
-    """内网对接用：一个请求拿到页面需要的全部数据，不用连调六个接口。"""
-    from app.secretary import prompt_tree, prompt_material, complete_rules, prompt_text
+    """内网对接用：一个请求拿到页面需要的全部数据，不用连调六个接口。
+
+    ★ 2026-11-03：`complete`（补全表）已从返回里去掉 —— 补全表下线了。
+      `materials` / `inject` 现在是空的（`prompt_material.SLOTS = ()`，主分支空壳）。
+    """
+    from app.secretary import prompt_tree, prompt_material, prompt_text
     return _jr({
         'ok': True,
         'nodes': prompt_tree.tree(),
         'materials': prompt_material.summary(),
-        'complete': complete_rules.rows(),
         'texts': prompt_text.all_texts(),
         'inject': {
             'loop_block': len(prompt_material.block(('fetch', 'judge'))),
@@ -183,21 +186,9 @@ def preview(mode: str = 'data', actor: CurrentActor = Depends(get_current_actor)
                 'layers': layers, 'materials': prompt_material.summary()})
 
 
-@router.get('/complete', summary='补全表')
-def list_complete(actor: CurrentActor = Depends(get_current_actor)):
-    from app.secretary import complete_rules
-    return _jr({'ok': True, 'rows': complete_rules.rows(),
-                'text': complete_rules.as_text()})
-
-
-@router.put('/complete', summary='保存补全表')
-async def save_complete(request: Request, actor: CurrentActor = Depends(get_current_actor)):
-    from app.secretary import complete_rules
-    body, err = await _json_body(request)
-    if err:
-        return _jr({'error': err}, 400)
-    res = complete_rules.save(body.get('rows') or [])
-    return _jr(res, 200 if res.get('ok') else 500)
+# ★ 2026-11-03（Fred）：`GET/PUT /prompts/complete`（补全表）已删除 ——
+#   补全表从提示词链路里下线，`complete_rules` 模块一并删除。
+#   原文备份：docs/08-历史归档/2026-11-03-删除的提示词规则/补全表.md
 
 
 @router.post('/material/{slot}/section', summary='新增一节（自己加判断类型）')
@@ -243,3 +234,96 @@ def reset_text(key: str, actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import prompt_text
     res = prompt_text.reset(key)
     return _jr(res, 200 if res.get('ok') else 500)
+
+
+# ── 纠错词典（2026-11-02）───────────────────────────────────────────
+# 四张 `t_nc_*` 表在本系统 PG 里，页面直接增删改查。
+# `t_nc_catalog` / `t_nc_pinyin` 不开放：离线编译产物，改一个字要重算两万行。
+@router.get('/lexicon', summary='纠错词典四张表的概览')
+def lexicon_overview(actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import lex_admin
+    return _jr({'ok': True, 'tables': lex_admin.overview()})
+
+
+@router.get('/lexicon/{key}', summary='查一张词表（分页 + 模糊搜索）')
+def lexicon_rows(key: str, q: str = '', limit: int = 50, offset: int = 0,
+                 actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import lex_admin
+    if key not in lex_admin.TABLES:
+        return _jr({'error': '未知词表：%s' % key}, 404)
+    res = lex_admin.rows(key, q=q, limit=limit, offset=offset)
+    return _jr(res, 200 if res.get('ok') else 500)
+
+
+@router.post('/lexicon/{key}', summary='新增一条')
+async def lexicon_create(key: str, request: Request,
+                         actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import lex_admin
+    if key not in lex_admin.TABLES:
+        return _jr({'error': '未知词表：%s' % key}, 404)
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
+    res = lex_admin.create(key, body)
+    return _jr(res, 200 if res.get('ok') else 400)
+
+
+@router.put('/lexicon/{key}/{rid}', summary='改一条')
+async def lexicon_update(key: str, rid: int, request: Request,
+                         actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import lex_admin
+    if key not in lex_admin.TABLES:
+        return _jr({'error': '未知词表：%s' % key}, 404)
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
+    res = lex_admin.update(key, rid, body)
+    return _jr(res, 200 if res.get('ok') else 400)
+
+
+@router.delete('/lexicon/{key}/{rid}', summary='删一条（软删，改完 60 秒内生效）')
+def lexicon_delete(key: str, rid: int, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import lex_admin
+    if key not in lex_admin.TABLES:
+        return _jr({'error': '未知词表：%s' % key}, 404)
+    res = lex_admin.delete(key, rid)
+    return _jr(res, 200 if res.get('ok') else 500)
+
+
+# ── 数据表元数据覆盖层（2026-11-02）────────────────────────────────
+# 业务库只读，改过的中文名/说明存在本系统 PG；读取时覆盖值优先。
+@router.get('/meta', summary='数据表清单 + 字段说明（含已覆盖的标记）')
+def meta_list(actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import semantic
+    cat = semantic.catalog() or {}
+    tables = []
+    for t in (cat.get('tables') or []):
+        name = t.get('table_name')
+        cols = [{'column_name': c.get('column_name'),
+                 'column_cn_name': c.get('column_cn_name'),
+                 'business_desc': c.get('business_desc'),
+                 'data_type': c.get('data_type')}
+                for c in ((cat.get('cols') or {}).get(name) or {}).values()]
+        tables.append({'table_name': name,
+                       'table_cn_name': t.get('table_cn_name'),
+                       'business_desc': t.get('business_desc'),
+                       'level': t.get('level'),
+                       'count': (cat.get('counts') or {}).get(name),
+                       'columns': cols})
+    return _jr({'ok': True, 'tables': tables,
+                'overrides': cat.get('overrides') or []})
+
+
+@router.put('/meta/override', summary='改一条元数据（清空 value = 恢复业务库原值）')
+async def meta_save(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import meta_admin
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
+    res = meta_admin.save(kind=body.get('kind') or 'table',
+                          table_name=body.get('table_name') or '',
+                          field=body.get('field') or 'cn_name',
+                          value=body.get('value') if body.get('value') is not None else '',
+                          column_name=body.get('column_name') or '',
+                          user=actor.username)
+    return _jr(res, 200 if res.get('ok') else 400)

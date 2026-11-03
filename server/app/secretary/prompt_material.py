@@ -7,6 +7,9 @@
     answer 作答规则
     check  自检清单
 
+★ 2026-11-03（Fred）：主分支空壳化 —— 这四份整体关闭（见下方 `SLOTS`）。
+  文件保留：`online` 分支与将来的规则测试还要用它，删代码等于把恢复路也删了。
+
 **基础提示词不在表里**：红线 / 优先级 / 身份 / 模式做法 / 汇报口吻仍是代码常量
 （`prompt_stack.L0_REDLINES`、`agent.RULES_PRIORITY`、`prompts_data.*`），只读。
 
@@ -19,7 +22,14 @@ import time
 
 from app.secretary import pgdb
 
-SLOTS = ('fetch', 'judge', 'answer', 'check')
+# ★ 2026-11-03（Fred）：主分支做成**空壳** —— 四份规则材料整体关闭。
+#   设成 () 之后：system 里不注入任何规则材料、`get_rule` 取不到东西、
+#   提示词页面也不再显示这四份（`/prompts/material/{slot}` 一律 404）。
+#   为什么用代码开关而不是"记得别跑导入脚本"：库里只要还剩行，部署上去就又带规则了，
+#   空壳就不可复现 —— 而这次的验收就是"部署完是空的"。
+#   恢复规则：切 `online` 分支；或把这里改回 ('fetch', 'judge', 'answer', 'check')
+#   并按 docs/08-历史归档/2026-11-03-删除的提示词规则/README.md 把原文贴回去。
+SLOTS: tuple = ()
 
 SLOT_NAMES = {
     'fetch': '查数口径',

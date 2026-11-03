@@ -29,9 +29,6 @@ _FALLBACK_RULES = {
                      '材料', '报告', '稿子'],
     'data': ['多少', '多大', '几个', '几笔', '几条', '占比', '比例', '排名', '前几', '同比', '环比',
              '哪几个', '哪些', '统计', '合计', '总额', '总数', '平均', '执行率', '完成率', '差多少'],
-    # 业务主题词：写材料时命中它必须走 data（否则模型会凭空编业务情况 —— 实测过）
-    'business_topics': ['配网', '台区', '线路', '线损', '工单', '缺陷', '预算', '项目',
-                        '审批', '指标', '抢修', '停电', '售电', '供电所', '执行率', '进度'],
     'kb': ['规定', '流程', '制度', '办法', '标准', '怎么规定', '谁审批', '依据'],
     # 问概念/定义：这类问题查库也查不出来（库里没有"什么叫线损"），不要因为出现业务词
     # 就把它送进查数模式（2026-10-28 判模式回归时发现）
@@ -59,6 +56,11 @@ def load_rules() -> dict:
         base.update(prompt_text.keywords() or {})
     except Exception:                              # noqa: BLE001
         pass
+    # ★ 2026-11-03（Fred）：**业务相关的问题词表已删除**。
+    #   业务问题不再靠词表去认（开集词表补不完：「两水」一个业务词都没有），
+    #   改成「没命中直通词 → 就是业务问题」。所以就算旧配置/旧页面数据里还留着这个
+    #   key，也一律丢掉，免得又走回老路。
+    base.pop('business_topics', None)
     return base
 
 
@@ -74,14 +76,13 @@ def judge(question: str, *, has_files: bool = False, task: str | None = None,
 
     produce = any(w in q for w in r.get('produce', ()))
     has_data_word = any(w in q for w in r.get('data', ()))
-    has_biz_topic = any(w in q for w in r.get('business_topics', ()))
 
     # 1) 要文件/交付物 → office（技能包干活）
     if produce and any(w in low for w in r.get('objects_file', ())):
         return {'mode': 'office', 'reasons': ['要文件产物（动词 + PPT/文档/表格类词）']}
 
-    # 2) 要写材料 + 涉业务/数据 → data（先查再写；不查就会编业务情况，实测过）
-    if produce and (has_data_word or has_biz_topic):
+    # 2) 要写材料 + 涉数据 → data（先查再写；不查就会编业务情况，实测过）
+    if produce and has_data_word:
         return {'mode': 'data', 'reasons': ['要写材料且涉业务 → 先查再写']}
 
     # 3) 要写文字、不涉数据 → general（纯写作：总结/作文/通知/讲稿/邮件）
@@ -95,11 +96,9 @@ def judge(question: str, *, has_files: bool = False, task: str | None = None,
     if any(w in q for w in r.get('explain', ())):
         return {'mode': 'general', 'reasons': ['问概念/定义 → 直答，不查库']}
 
-    # 4) 只提业务对象、没有问数词（"某所整体情况""某县的情况怎么样"）→ 也要查库。
-    #    以前这类落到 general，而 general 模式**不给工具**，模型只能凭提示词编，
-    #    结果把"没查"写成"库里没有记录"（2026-10-28 线上：问整体情况一律答未查到）。
-    if has_biz_topic:
-        return {'mode': 'data', 'reasons': ['含业务对象（没问数词也要查）→ 先查再答']}
+    # ★ 2026-11-03：原来这里有一条「只提业务对象、没问数词 → 也要查库」，靠
+    #   business_topics 词表认业务对象。词表删了，这类问题自然落到底部兜底（也是 data），
+    #   结论一样：先查再答。
 
     if any(w in q for w in r.get('kb', ())):
         return {'mode': 'data', 'reasons': ['含制度/流程词（知识库检索在 data 模式）']}

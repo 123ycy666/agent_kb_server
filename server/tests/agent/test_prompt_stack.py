@@ -110,7 +110,8 @@ def main() -> int:
     # ── 8 装配器可用（不抛异常）────────────────────────────
     sys_text = agent_v2.system('data', agent._system, '2026-10-30',
                                priority=agent.RULES_PRIORITY,
-                               answer_format=(agent.COMMON + agent.CHECK))
+                               # 2026-11-03：COMMON/CHECK 已下线，S4 用替身正文验装配
+                               answer_format='作答格式替身')
     chk('system 装配成功且非空', len(sys_text) > 1000, str(len(sys_text)))
     chk('system 含 S1', 'S1 谁说了算' in sys_text)
     chk('system 含表清单', 'describe_table' in sys_text)

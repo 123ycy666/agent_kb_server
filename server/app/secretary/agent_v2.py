@@ -106,13 +106,17 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
         #   就能看见"这题该怎么答"的代号，可以提前 get_rule。
         rules_menu = prompt_material.block(('fetch', 'judge'),
                                            index_slots=prompt_material.SLOTS)
+        # ★ 2026-11-03（Fred）：`prompt_material.SLOTS` 已置空（主分支空壳化），
+        #   上面这行于是恒为 ''，system 里不再有任何规则材料段；`get_rule` 也取不到东西。
         # 身份 / 模式做法允许页面覆盖（prompt_text 表），没有覆盖就用代码里的默认值
         _identity = prompt_text.get('identity', prompts_data.IDENTITY)
         _modes = prompt_text.mode_texts(prompts_data.MODE_TEXTS)
         head = prompt_stack.build(
             mode=mode, identity=_identity, modes=_modes,
             priority=priority,
-            answer_format=((answer_format or '') + '\n\n' + prompts_data.ANSWER_DATA).strip(),
+            # ★ 2026-11-03：S4「作答格式」下线 —— 不再拼 prompts_data.ANSWER_DATA，
+            #   answer_format 由调用方传（空串就整段不注入）。
+            answer_format=answer_format or None,
             rules_menu=rules_menu or None,
             persona=persona, prefs=prefs)['system']
         if personal_rules:

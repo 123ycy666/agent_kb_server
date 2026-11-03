@@ -37,6 +37,10 @@ for _n, _attrs in (('prompt_text', {'get': lambda k, d=None: d,
 from app.secretary import prompt_material as pm      # noqa: E402
 from app.secretary import rule_doc                   # noqa: E402
 
+# ★ 2026-11-03：主分支空壳把 pm.SLOTS 置空（不注入规则材料）。本文件验的是
+#   「清单给代号 / 按代号取原文」这套机制，本地把四份开回来再测。
+pm.SLOTS = ('fetch', 'judge', 'answer', 'check')
+
 _checks: list[tuple[str, bool, str]] = []
 
 

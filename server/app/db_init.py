@@ -108,7 +108,10 @@ EXTRA_DDL: list[tuple[str, str]] = [
     # ── 提示词材料（2026-11-01）────────────────────────────────
     # 规则从知识库搬出来单独存：知识库只放资料，规则进这两张表。
     # slot 四种：fetch 查数口径 / judge 判定标准 / answer 作答规则 / check 自检清单。
-    # 基础提示词（红线/优先级/身份/模式做法/汇报口吻）仍是代码常量，不进表。
+    # 基础提示词（红线/优先级/身份/模式做法）仍是代码常量，不进表。
+    # ★ 2026-11-03（Fred）：主分支空壳化 —— 四份材料在 `prompt_material.SLOTS = ()`
+    #   里整体关闭，表结构保留（online 分支还要用它）；`complete_rule`（补全表）
+    #   已从链路里删除，建表语句一并去掉。
     (
         "prompt_material 表（四份提示词材料）",
         "CREATE TABLE IF NOT EXISTS prompt_material ("
@@ -128,22 +131,6 @@ EXTRA_DDL: list[tuple[str, str]] = [
         "ON prompt_material (slot, enabled, sort_no)",
     ),
     (
-        "complete_rule 表（补全表：问法 → 标准口径）",
-        "CREATE TABLE IF NOT EXISTS complete_rule ("
-        "id bigserial PRIMARY KEY, "
-        "kind varchar(16) NOT NULL DEFAULT 'norm', "
-        "match_text varchar(200) NOT NULL, "
-        "fill_text varchar(300) NOT NULL, "
-        "priority int NOT NULL DEFAULT 100, "
-        "enabled boolean NOT NULL DEFAULT true, "
-        "updated_at timestamptz NOT NULL DEFAULT now())",
-    ),
-    (
-        "complete_rule 的优先级索引",
-        "CREATE INDEX IF NOT EXISTS idx_complete_priority "
-        "ON complete_rule (enabled, priority)",
-    ),
-    (
         "prompt_material.pinned 列（必带 / 按需）",
         "ALTER TABLE prompt_material ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT true",
     ),
@@ -155,6 +142,19 @@ EXTRA_DDL: list[tuple[str, str]] = [
         "version_no int NOT NULL DEFAULT 1, "
         "updated_by varchar(64) NOT NULL DEFAULT '', "
         "updated_at timestamptz NOT NULL DEFAULT now())",
+    ),
+    (
+        "data_meta_override 表（数据表中文名/说明的页面覆盖；业务库只读，这里记差异）",
+        "CREATE TABLE IF NOT EXISTS data_meta_override ("
+        "id bigserial PRIMARY KEY, "
+        "kind varchar(8) NOT NULL, "
+        "table_name varchar(64) NOT NULL, "
+        "column_name varchar(64) NOT NULL DEFAULT '', "
+        "field varchar(16) NOT NULL, "
+        "value text NOT NULL, "
+        "updated_by varchar(64) NOT NULL DEFAULT '', "
+        "updated_at timestamptz NOT NULL DEFAULT now(), "
+        "UNIQUE (kind, table_name, column_name, field))",
     ),
 ]
 

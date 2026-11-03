@@ -35,6 +35,8 @@ def _install(name: str, **attrs) -> types.ModuleType:
 # 规则材料（真实现要查库）：换阶段 / 取本阶段材料都走替身
 _install('prompt_material',
          MARK='\n\n===== 规则材料（本阶段） =====\n',
+         # 2026-11-03：agent_v2 装配要读 SLOTS（主分支空壳下是 ()），替身也得给一个
+         SLOTS=('fetch', 'judge', 'answer', 'check'),
          block=lambda slots=None, **kw: '【本阶段规则材料替身】',
          strip_block=lambda s: s,
          sections=lambda *a, **k: [],

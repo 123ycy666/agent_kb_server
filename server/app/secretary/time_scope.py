@@ -17,9 +17,98 @@
     所以「今年」= yearToDate + 数据里最新的那个月。
 """
 import datetime
+import json
 import re
 
 from app.secretary import tools_db
+
+
+# ── 页面可改的规则（2026-11-02）──────────────────────────────────────
+# 这 6 组原来写死在下面当常量，加一个"全市"的说法都要改代码重新部署。
+# 现在：`prompt_text` 表里有覆盖值就用表里的，没有就用代码常量 —— 行为与以前完全一致。
+# 只搬**数据**（词、偏移、前后缀），不搬**逻辑**（正则、解析、比较仍在本文件里）。
+_OVERRIDE_KEYS = {
+    'time_month_rel': '_MONTH_REL',
+    'time_year_rel': '_YEAR_REL',
+    'time_year_off': '_YEAR_OFF',
+    'time_whole_city': '_WHOLE_CITY',
+    'time_strip_head': '_STRIP_HEAD',
+    'time_strip_tail': '_STRIP_TAIL',
+}
+
+
+def _ov(key):
+    """读页面覆盖值（prompt_text 表，60 秒 TTL）；没有覆盖 / 坏 JSON → None。"""
+    try:
+        from app.secretary import prompt_text
+        raw = prompt_text.get(key, '')
+        if str(raw or '').strip():
+            return json.loads(raw)
+    except Exception:                       # noqa: BLE001 - 读不到就用代码默认值
+        pass
+    return None
+
+
+def _month_rel() -> list:
+    """相对月份词 [(说法, 偏移)]，长的排前面（不然「上个月」会被「月」先吃掉）。"""
+    v = _ov('time_month_rel')
+    out = []
+    if isinstance(v, list):
+        for x in v:
+            if isinstance(x, (list, tuple)) and len(x) == 2:
+                try:
+                    out.append((str(x[0]), int(x[1])))
+                except (TypeError, ValueError):
+                    pass
+    return sorted(out or list(_MONTH_REL), key=lambda y: -len(y[0]))
+
+
+def _year_rel() -> list:
+    v = _ov('time_year_rel')
+    out = [str(x) for x in v if str(x).strip()] if isinstance(v, list) else []
+    return sorted(out or list(_YEAR_REL), key=lambda y: -len(y))
+
+
+def _year_off() -> dict:
+    v = _ov('time_year_off')
+    out = {}
+    if isinstance(v, dict):
+        for k, n in v.items():
+            try:
+                out[str(k)] = int(n)
+            except (TypeError, ValueError):
+                pass
+    return out or dict(_YEAR_OFF)
+
+
+def _whole_city() -> tuple:
+    v = _ov('time_whole_city')
+    out = tuple(str(x) for x in v if str(x).strip()) if isinstance(v, list) else ()
+    return out or tuple(_WHOLE_CITY)
+
+
+def _strip_lists() -> tuple:
+    """(前缀, 后缀) 两张表；`_apply_pack_strip_head` 的覆盖仍作为"代码默认值"。"""
+    vh, vt = _ov('time_strip_head'), _ov('time_strip_tail')
+    head = tuple(str(x) for x in vh if str(x).strip()) if isinstance(vh, list) else ()
+    tail = tuple(str(x) for x in vt if str(x).strip()) if isinstance(vt, list) else ()
+    return (head or tuple(_STRIP_HEAD)), (tail or tuple(_STRIP_TAIL))
+
+
+def rule_defaults() -> dict:
+    """给页面显示的默认值（就是当前生效的代码常量，含站点包覆盖后的样子）。"""
+    head, tail = _strip_lists()
+    return {
+        'time_month_rel': json.dumps([list(x) for x in _MONTH_REL],
+                                     ensure_ascii=False, indent=2),
+        'time_year_rel': json.dumps(list(_YEAR_REL), ensure_ascii=False, indent=2),
+        'time_year_off': json.dumps(dict(_YEAR_OFF), ensure_ascii=False, indent=2),
+        'time_whole_city': json.dumps([str(x) for x in _WHOLE_CITY],
+                                      ensure_ascii=False, indent=2),
+        'time_strip_head': json.dumps([str(x) for x in head], ensure_ascii=False, indent=2),
+        'time_strip_tail': json.dumps([str(x) for x in tail], ensure_ascii=False, indent=2),
+    }
+
 
 
 def _as_date(v):
@@ -230,7 +319,7 @@ def resolve(question, today=None, prev=None):
     """解析问题里的时间说法。返回 dict（字段见 _mk）。
 
     优先级：区间 > 具体年月 > 两位年+月 > 相对年+月 > 具体年 > 光说月份
-            > 截至X月 > 相对说法 > 季度 > **沿用上一轮** > 默认（系统当月）。
+            > 截至X月 > 相对说法 > 季度 > **沿用上一轮** > 默认（**上一个月**，2026-11-03 改）。
 
     prev = 上一轮的统计范围（同一场会话）。**只在问题完全没提时间时才生效** ——
     用户这轮说了时间就必须用他说的。
@@ -302,7 +391,7 @@ def resolve(question, today=None, prev=None):
     #     答成「今年至今」。相对年就得在这里先吃掉，否则月份必然丢。
     m = re.search(r'(今年|本年|去年|上年|前年)\s*(\d{1,2}|' + _CN_ALT + r')\s*月', q)
     if m:
-        y = cur_y + _YEAR_OFF[m.group(1)]
+        y = cur_y + _year_off().get(m.group(1), 0)
         mo = _to_int(m.group(2))
         if 1 <= mo <= 12:
             return _mk(m.group(0), '%d年%d月' % (y, mo), 'month',
@@ -368,7 +457,7 @@ def resolve(question, today=None, prev=None):
                        '%04d%02d' % (cur_y, mo), note=_note, q=q)
 
     # ④ 相对月份：上月 / 本月 / 下月
-    for word, off in sorted(_MONTH_REL, key=lambda x: -len(x[0])):
+    for word, off in _month_rel():
         if word in q:
             y, mo = cur_y, cur_m + off
             while mo <= 0:
@@ -381,7 +470,7 @@ def resolve(question, today=None, prev=None):
                        '%04d%02d' % (y, mo), q=q)
 
     # ⑤ 相对年份：今年 / 去年 / 前年
-    for word, off in sorted(_YEAR_REL, key=lambda x: -len(x[0])):
+    for word, off in _year_rel():
         if word in q:
             y = cur_y + off
             if off == 0:
@@ -425,21 +514,26 @@ def resolve(question, today=None, prev=None):
                      '**不要自己假定成今天/本月**' % _hint.group(0))
         return r
 
-    # ⑦ 一个时间词都没有 → 优先沿用上一轮，其次默认**系统当月**
+    # ⑦ 一个时间词都没有 → 优先沿用上一轮，其次默认**上一个月**
+    #    ★ 2026-11-03（Fred）：默认期间从「系统当月」改成「上一个月」——
+    #      当前 11 月、问题里没说时间 → 补 10 月。当月数据往往还没结算，
+    #      按当月查等于给一个查不到的口径；领导问「情况怎么样」，问的几乎都是上个整月。
     if prev and prev.get('period_type') and prev.get('period_key'):
         return _mk('', prev.get('time_text') or str(prev.get('period_key')),
                    prev['period_type'], prev['period_key'], is_default=True,
                    note='问题里没说时间，沿用上一轮的「%s」（多轮会话）。'
                         % (prev.get('time_text') or prev.get('period_key')), q=q)
-    return _mk('', '%d年%d月' % (cur_y, cur_m), 'month', now_key, is_default=True,
-               note='问题里没说时间，按系统当月（%d年%d月）理解。' % (cur_y, cur_m), q=q)
+    _def_y, _def_m = ((cur_y - 1, 12) if cur_m <= 1 else (cur_y, cur_m - 1))
+    return _mk('', '%d年%d月' % (_def_y, _def_m), 'month', '%04d%02d' % (_def_y, _def_m),
+               is_default=True,
+               note='问题里没说时间，按上一个月（%d年%d月）理解。' % (_def_y, _def_m), q=q)
 
 
 # 供电所/公司名单（从纠错库里取一次，按长度降序）
 _UNITS = {'list': None}
 # 简称表：把「国网随县供电公司」这类全名剥成核心「随县」，用于认出用户说的简称。
 # 只认长度 >= 2 的核心，避免「所」「站」这类一个字的核心误命中。
-_UNIT_CORES = {'list': None}
+_UNIT_CORES = {'list': None, 'key': None}
 _STRIP_HEAD = ('国网', '湖北省', '湖北省电力', '随州市', '随州', '中国')
 _STRIP_TAIL = ('供电服务站', '供电服务公司', '供电有限公司', '供电公司', '供电所', '服务站', '公司', '供电')
 
@@ -462,16 +556,20 @@ def _units():
 
 
 def _strip_unit(name):
-    """把全名剥成核心：国网随县供电公司 → 随县；环潭供电所 → 环潭。"""
+    """把全名剥成核心：国网随县供电公司 → 随县；环潭供电所 → 环潭。
+
+    前后缀表现在**可以在页面上改**（2026-11-02），所以每次现取，不再用模块常量。
+    """
     s = str(name or '').strip()
+    head, tail = _strip_lists()
     changed = True
     while changed:
         changed = False
-        for h in _STRIP_HEAD:
+        for h in head:
             if s.startswith(h) and len(s) > len(h) + 1:
                 s = s[len(h):]
                 changed = True
-        for t in _STRIP_TAIL:
+        for t in tail:
             if s.endswith(t) and len(s) > len(t) + 1:
                 s = s[:-len(t)]
                 changed = True
@@ -479,14 +577,20 @@ def _strip_unit(name):
 
 
 def _unit_cores():
-    """核心 → 全名，长的核心排前面。"""
-    if _UNIT_CORES['list'] is None:
+    """核心 → 全名，长的核心排前面。
+
+    缓存按「当前前后缀表」做 key：页面上改了前后缀，这里必须重建，
+    否则会出现「新规则 + 旧核心表」的脏读。
+    """
+    key = _strip_lists()
+    if _UNIT_CORES['list'] is None or _UNIT_CORES.get('key') != key:
         d = {}
         for nm, _k in _units():
             core = _strip_unit(nm)
             if len(core) >= 2 and core not in d:
                 d[core] = nm
         _UNIT_CORES['list'] = sorted(d.items(), key=lambda x: -len(x[0]))
+        _UNIT_CORES['key'] = key
     return _UNIT_CORES['list']
 
 
@@ -548,7 +652,7 @@ _WHOLE_CITY = ('全市', '整个市', '市局', '各区县', '各县区', '各�
 def _says_whole_city(question):
     """问题里是不是**明说**要全市范围（而不是"没说地点"）。"""
     q = str(question or '')
-    return any(w in q for w in _WHOLE_CITY)
+    return any(w in q for w in _whole_city())
 
 
 def _object_of(place):
@@ -570,7 +674,7 @@ def describe(question, fixed=None, prev=None, today=None, force_place=None):
     scope_text 是给模型看的【统计范围】说明；question 是补全后的完整问题。
         · 相对时间词（上月/本月/今年…）会被换成具体时间，写回问题里；
         · 问题里没时间、没地点 → **优先沿用上一轮**（多轮会话），
-          再没有才补默认值（**系统当月** / 全市）；沿用与默认都**不改写原问题**，
+          再没有才补默认值（**上一个月** / 全市）；沿用与默认都**不改写原问题**，
           只附说明，免得把用户的原话改得面目全非。
 
     prev = 上一轮的统计范围（同一场会话）：{period_type, period_key, time_text, place}

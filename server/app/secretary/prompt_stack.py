@@ -7,11 +7,12 @@
     S1 谁说了算（本轮问题/统计范围 > 个人规则 > 公司规则 > 通用小节 > 历史）
     L1 身份（代码常量 prompts_data.IDENTITY）
     L2 模式做法（代码常量 prompts_data.MODE_TEXTS）
-    S4 作答格式（汇报口吻 + 交卷检查 + 作答要求）
-    S6 规则目录（知识库 doc_type=rule 的主题，按需 get_rule）
     L6 个人偏好（出文档时）
     L4 会话人设（员工在某场对话里自己写）
     L5 技能说明书（命中技能时）
+
+★ 2026-11-03（Fred）：S4 作答格式（汇报口吻 + 交卷检查）、S6 规则材料 已下线。
+  `build()` 仍留着这两个入参（传空就不注入），`online` 分支恢复规则时直接传回来。
 
 ★ 2026-10-30：**取消 L3「业务口径」静态注入**。
   规则原先既写在站点包 md（L3 每轮注入），又存在知识库（向量检索 4 片，相似度 0.17~0.19）。
@@ -32,10 +33,13 @@ L0_REDLINES = (
 )
 
 CONFLICT_NOTE = ('【装配说明】以下内容按优先级排列：冲突时以序号小的为准 —— '
-                 'S0 红线 > S1 谁说了算 > L1 身份 > L2 模式 > S4 作答格式 > '
-                 'S6 规则目录 > L6 个人偏好 > L4 会话人设 > L5 技能。')
+                 'S0 红线 > S1 谁说了算 > L1 身份 > L2 模式 > '
+                 'L6 个人偏好 > L4 会话人设 > L5 技能。')
 
-ORDER = ('S0', 'S1', 'L1', 'L2', 'S4', 'S6', 'L6', 'L4', 'L5')
+# ★ 2026-11-03（Fred）：S4「作答格式（汇报口吻 + 交卷检查）」与 S6「规则材料」已下线
+#   （主分支空壳化），顺序表里不再有这两层。原文备份见
+#   docs/08-历史归档/2026-11-03-删除的提示词规则/。
+ORDER = ('S0', 'S1', 'L1', 'L2', 'L6', 'L4', 'L5')
 
 
 def _block(title: str, body: str) -> str:
@@ -69,8 +73,10 @@ def build(*, mode: str = 'data', identity: str | None = None,
         'code:prompts_data.IDENTITY')
     add('L2', 'L2 模式做法（%s）' % mode, (mode_texts or {}).get(mode, ''),
         'code:prompts_data.MODE_TEXTS')
+    # ★ 2026-11-03：这两个入参调用方现在都传空（作答格式与规则材料下线），
+    #   留着是为了 online 分支/以后恢复时一行都不用改回来。
     if answer_format:
-        add('S4', 'S4 作答格式（汇报口吻 + 交卷检查）', answer_format, 'code')
+        add('S4', 'S4 作答格式', answer_format, 'code')
     if rules_menu:
         add('S6', 'S6 规则材料（本阶段注入）', rules_menu, 'table:prompt_material')
     if prefs:

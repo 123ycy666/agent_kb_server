@@ -12,6 +12,7 @@ import {
   Popconfirm,
   Space,
   Spin,
+  Table,
   Tag,
   Typography,
 } from 'antd'
@@ -63,15 +64,27 @@ export default function Prompts() {
   const [saving, setSaving] = useState(false)
   const [importText, setImportText] = useState('')
   const [showImport, setShowImport] = useState(false)
-  const [compOpen, setCompOpen] = useState(false)
-  const [compRows, setCompRows] = useState<any[]>([])
-  const [compSaving, setCompSaving] = useState(false)
+  // ★ 2026-11-03（Fred）：补全表下线，compOpen / compRows / compSaving 一并删除。
   const [txtOpen, setTxtOpen] = useState(false)
   const [txtKey, setTxtKey] = useState('')
   const [txtName, setTxtName] = useState('')
   const [txtBody, setTxtBody] = useState('')
   const [txtOverridden, setTxtOverridden] = useState(false)
   const [txtSaving, setTxtSaving] = useState(false)
+
+  // ── 纠错词典（2026-11-02）────────────────────────────────
+  const [lexOpen, setLexOpen] = useState(false)
+  const [lexKey, setLexKey] = useState('typo')
+  const [lexCols, setLexCols] = useState<{ key: string; label: string }[]>([])
+  const [lexRows, setLexRows] = useState<any[]>([])
+  const [lexQ, setLexQ] = useState('')
+  const [lexTotal, setLexTotal] = useState(0)
+  const [lexBusy, setLexBusy] = useState(false)
+
+  // ── 数据表元数据（2026-11-02）────────────────────────────
+  const [metaOpen, setMetaOpen] = useState(false)
+  const [metaTables, setMetaTables] = useState<any[]>([])
+  const [metaBusy, setMetaBusy] = useState(false)
 
   const loadText = async (key: string, name: string) => {
     try {
@@ -127,33 +140,7 @@ export default function Prompts() {
     }
   }
 
-  const loadComplete = async () => {
-    try {
-      const r: any = await http.get('/prompts/complete')
-      setCompRows(r.rows || [])
-      setCompOpen(true)
-    } catch (e) {
-      message.error((e as Error).message)
-    }
-  }
-
-  const saveComplete = async () => {
-    setCompSaving(true)
-    try {
-      const r: any = await http.put('/prompts/complete', { rows: compRows })
-      if (r?.ok) {
-        message.success(`补全表已保存（${r.rows} 条），下一轮问答生效`)
-        setCompOpen(false)
-        await loadTree()
-      } else {
-        message.error(r?.error || '保存失败')
-      }
-    } catch (e) {
-      message.error((e as Error).message)
-    } finally {
-      setCompSaving(false)
-    }
-  }
+  // ★ 2026-11-03（Fred）：补全表下线，loadComplete / saveComplete 一并删除。
 
   const slot = current ? SLOT_KEYS[current.key] : ''
 
@@ -179,12 +166,7 @@ export default function Prompts() {
   )
 
   const openMaterial = async (m: Mat) => {
-    // 补全表走自己的编辑器（行级可改），不是只读文本
-    if (m.key === 'mat.complete') {
-      await loadComplete()
-      return
-    }
-    // 身份 / 汇报口吻 / 模式做法 / 词表：走文本编辑器（存 prompt_text，可覆盖）
+    // 身份 / 模式做法 / 业务词表：走文本编辑器（存 prompt_text，可覆盖）
     if (m.textKey) {
       await loadText(m.textKey, m.name)
       return
@@ -269,6 +251,81 @@ export default function Prompts() {
     setSections((prev) => prev.map((s, i) => (i === idx ? { ...s, body } : s)))
   }
 
+  // ── 纠错词典 ────────────────────────────────────────────
+  const loadLex = async (key = lexKey, q = lexQ) => {
+    setLexBusy(true)
+    try {
+      const r: any = await http.get(`/prompts/lexicon/${key}`, { params: { q, limit: 200 } })
+      if (r?.error) {
+        message.error(r.error)
+        return
+      }
+      setLexKey(key)
+      setLexCols(r.cols || [])
+      setLexRows(r.rows || [])
+      setLexTotal(r.total || 0)
+    } finally {
+      setLexBusy(false)
+    }
+  }
+
+  const setLexCell = (idx: number, field: string, v: string) => {
+    setLexRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: v } : r)))
+  }
+
+  const saveLexRow = async (row: any) => {
+    const body: any = {}
+    lexCols.forEach((c) => (body[c.key] = row[c.key] ?? ''))
+    const r: any = row.id
+      ? await http.put(`/prompts/lexicon/${lexKey}/${row.id}`, body)
+      : await http.post(`/prompts/lexicon/${lexKey}`, body)
+    if (r?.ok) {
+      message.success(row.id ? '已保存，60 秒内生效' : '已新增，60 秒内生效')
+      await loadLex()
+    } else message.error(r?.error || '保存失败')
+  }
+
+  const delLexRow = async (row: any) => {
+    if (!row.id) {
+      setLexRows((prev) => prev.filter((x) => x !== row))
+      return
+    }
+    const r: any = await http.delete(`/prompts/lexicon/${lexKey}/${row.id}`)
+    if (r?.ok) {
+      message.success('已删除（软删），60 秒内生效')
+      await loadLex()
+    } else message.error(r?.error || '删除失败')
+  }
+
+  const addLexRow = () => {
+    const blank: any = { id: 0 }
+    lexCols.forEach((c) => (blank[c.key] = ''))
+    setLexRows((prev) => [blank, ...prev])
+  }
+
+  // ── 数据表元数据 ────────────────────────────────────────
+  const loadMeta = async () => {
+    setMetaBusy(true)
+    try {
+      const r: any = await http.get('/prompts/meta')
+      if (r?.error) {
+        message.error(r.error)
+        return
+      }
+      setMetaTables(r.tables || [])
+    } finally {
+      setMetaBusy(false)
+    }
+  }
+
+  const saveMeta = async (kind: string, table: string, field: string, value: string,
+                          column = '') => {
+    const r: any = await http.put('/prompts/meta/override',
+      { kind, table_name: table, column_name: column, field, value })
+    if (r?.ok) message.success(value.trim() ? '已覆盖' : '已恢复业务库原值')
+    else message.error(r?.error || '保存失败')
+  }
+
   if (loading) {
     return (
       <div style={{ padding: 48, textAlign: 'center' }}>
@@ -289,7 +346,8 @@ export default function Prompts() {
         <Button icon={<ReloadOutlined />} onClick={loadTree}>
           刷新
         </Button>
-        <Button onClick={loadComplete}>补全表</Button>
+        <Button onClick={() => { setLexOpen(true); loadLex('typo', '') }}>纠错词典</Button>
+        <Button onClick={() => { setMetaOpen(true); loadMeta() }}>数据表</Button>
         <Tag color="blue">合计 {totalChars.toLocaleString()} 字</Tag>
       </Space>
 
@@ -506,60 +564,6 @@ export default function Prompts() {
       </Drawer>
 
       <Drawer
-        title="补全表（代码读，不进提示词）"
-        width={760}
-        open={compOpen}
-        onClose={() => setCompOpen(false)}
-        extra={
-          <Button type="primary" loading={compSaving} onClick={saveComplete}>
-            保存
-          </Button>
-        }
-      >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="左边是「用户可能这么问」，右边是「照哪个口径答」。这一步在判题型之前跑，只有像业务问题时才用它 —— 所以写通知、闲聊不会被它改。"
-        />
-        {compRows.map((r, i) => (
-          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <Input
-              style={{ width: 210 }}
-              value={r.match_text}
-              placeholder="用户可能这么问"
-              onChange={(e) =>
-                setCompRows((prev) =>
-                  prev.map((x, j) => (j === i ? { ...x, match_text: e.target.value } : x))
-                )
-              }
-            />
-            <Input
-              value={r.fill_text}
-              placeholder="照哪个口径答"
-              onChange={(e) =>
-                setCompRows((prev) =>
-                  prev.map((x, j) => (j === i ? { ...x, fill_text: e.target.value } : x))
-                )
-              }
-            />
-            <Button danger onClick={() => setCompRows((prev) => prev.filter((_, j) => j !== i))}>
-              删
-            </Button>
-          </div>
-        ))}
-        <Button
-          onClick={() =>
-            setCompRows((prev) => [
-              ...prev,
-              { kind: 'norm', match_text: '', fill_text: '', priority: (prev.length + 1) * 10 },
-            ])
-          }
-        >
-          加一行
-        </Button>
-      </Drawer>
-      <Drawer
         title={`${txtName}　${txtBody.length.toLocaleString()} 字`}
         width={860}
         open={txtOpen}
@@ -584,13 +588,199 @@ export default function Prompts() {
               ? '当前用的是你改过的版本（存 prompt_text 表）；点「恢复默认」回到代码里的原文。'
               : '当前用的是代码里的原文；保存后就用你改的版本，下一轮问答生效。'
           }
-          description="模式做法和词表是 JSON，改值就行；身份和汇报口吻是纯文本。"
+          description="模式做法和词表是 JSON，改值就行；身份是纯文本。"
         />
         <Input.TextArea
           value={txtBody}
           onChange={(e) => setTxtBody(e.target.value)}
           autoSize={{ minRows: 18, maxRows: 30 }}
           style={{ fontSize: 12 }}
+        />
+      </Drawer>
+
+      {/* 纠错词典 */}
+      <Drawer
+        title={`纠错词典　共 ${lexTotal} 条`}
+        width={1080}
+        open={lexOpen}
+        onClose={() => setLexOpen(false)}
+        extra={
+          <Space>
+            <Input
+              placeholder="搜错误写法 / 正确写法 / 组织"
+              value={lexQ}
+              allowClear
+              style={{ width: 220 }}
+              onChange={(e) => setLexQ(e.target.value)}
+              onPressEnter={() => loadLex(lexKey, lexQ)}
+            />
+            <Button onClick={() => loadLex(lexKey, lexQ)} loading={lexBusy}>查询</Button>
+            <Button type="primary" onClick={addLexRow}>新增一条</Button>
+          </Space>
+        }
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="这四张表在本系统库里，改完最多 60 秒生效（纠错引擎会自己发现词典变了）。删除是软删，卡片列表里不再出现。"
+          description="标准词表：首字母留空会按字表自动补；拼音码留空只按汉字+首字母匹配。"
+        />
+        <Space style={{ marginBottom: 12 }} wrap>
+          {[
+            ['typo', '错别字纠正'],
+            ['term', '术语与别名'],
+            ['ambiguous', '歧义确认'],
+            ['wordlist', '标准词表'],
+          ].map(([k, name]) => (
+            <Button
+              key={k}
+              size="small"
+              type={lexKey === k ? 'primary' : 'default'}
+              onClick={() => loadLex(k, '')}
+            >
+              {name}
+            </Button>
+          ))}
+        </Space>
+        <Table
+          size="small"
+          rowKey={(r: any, i?: number) => String(r.id || `new-${i}`)}
+          loading={lexBusy}
+          pagination={false}
+          scroll={{ y: 460, x: 'max-content' }}
+          dataSource={lexRows}
+          columns={[
+            ...lexCols.map((c) => ({
+              title: c.label,
+              dataIndex: c.key,
+              width: c.key === 'definition' ? 280 : 160,
+              render: (v: any, _r: any, i: number) => (
+                <Input
+                  size="small"
+                  value={v ?? ''}
+                  onChange={(e) => setLexCell(i, c.key, e.target.value)}
+                />
+              ),
+            })),
+            {
+              title: '操作',
+              width: 150,
+              render: (_v: any, row: any) => (
+                <Space size={4}>
+                  <Button size="small" type="link" onClick={() => saveLexRow(row)}>
+                    {row.id ? '保存' : '新增'}
+                  </Button>
+                  <Popconfirm title="确定删除这一条？" onConfirm={() => delLexRow(row)}>
+                    <Button size="small" type="link" danger>删除</Button>
+                  </Popconfirm>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Drawer>
+
+      {/* 数据表元数据 */}
+      <Drawer
+        title={`数据表　共 ${metaTables.length} 张`}
+        width={1080}
+        open={metaOpen}
+        onClose={() => setMetaOpen(false)}
+        extra={<Button onClick={loadMeta} loading={metaBusy}>刷新</Button>}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="业务库是只读的，这里改的是「覆盖值」，存在本系统库里；读取时覆盖值优先，清空就回到业务库原值。"
+          description="表级可改中文名/业务说明；点开一张表还能改每个字段的中文名与说明。改完下一轮问答生效。"
+        />
+        <Table
+          size="small"
+          rowKey="table_name"
+          loading={metaBusy}
+          pagination={{ pageSize: 20 }}
+          dataSource={metaTables}
+          expandable={{
+            expandedRowRender: (row: any) => (
+              <Table
+                size="small"
+                rowKey="column_name"
+                pagination={false}
+                dataSource={row.columns || []}
+                columns={[
+                  { title: '字段', dataIndex: 'column_name', width: 200 },
+                  { title: '类型', dataIndex: 'data_type', width: 120 },
+                  {
+                    title: '中文名',
+                    width: 220,
+                    render: (_v: any, c: any) => (
+                      <Input
+                        size="small"
+                        defaultValue={c.column_cn_name || ''}
+                        onBlur={(e) => {
+                          if (e.target.value !== (c.column_cn_name || ''))
+                            saveMeta('column', row.table_name, 'cn_name', e.target.value,
+                                     c.column_name)
+                        }}
+                      />
+                    ),
+                  },
+                  {
+                    title: '说明',
+                    render: (_v: any, c: any) => (
+                      <Input
+                        size="small"
+                        defaultValue={c.business_desc || ''}
+                        onBlur={(e) => {
+                          if (e.target.value !== (c.business_desc || ''))
+                            saveMeta('column', row.table_name, 'desc', e.target.value,
+                                     c.column_name)
+                        }}
+                      />
+                    ),
+                  },
+                ]}
+              />
+            ),
+          }}
+          columns={[
+            { title: '表名', dataIndex: 'table_name', width: 240 },
+            {
+              title: '中文名',
+              width: 240,
+              render: (_v: any, row: any) => (
+                <Input
+                  size="small"
+                  defaultValue={row.table_cn_name || ''}
+                  onBlur={(e) => {
+                    if (e.target.value !== (row.table_cn_name || ''))
+                      saveMeta('table', row.table_name, 'cn_name', e.target.value)
+                  }}
+                />
+              ),
+            },
+            {
+              title: '业务说明',
+              render: (_v: any, row: any) => (
+                <Input
+                  size="small"
+                  defaultValue={row.business_desc || ''}
+                  onBlur={(e) => {
+                    if (e.target.value !== (row.business_desc || ''))
+                      saveMeta('table', row.table_name, 'desc', e.target.value)
+                  }}
+                />
+              ),
+            },
+            {
+              title: '行数',
+              dataIndex: 'count',
+              width: 90,
+              render: (v: any) => (v == null ? '—' : v),
+            },
+          ]}
         />
       </Drawer>
     </div>

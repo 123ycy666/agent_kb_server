@@ -95,7 +95,12 @@ def main() -> int:
     import os
     os.environ['PG_DSN'] = uri
 
-    from app.secretary import complete_rules, prompt_material as pm, prompt_text
+    from app.secretary import prompt_material as pm, prompt_text
+
+    # ★ 2026-11-03（Fred）：主分支空壳 —— `prompt_material.SLOTS` 已置空，
+    #   补全表（`complete_rules`）整个删除。这个测试验的是**材料读写机制**，
+    #   所以本地把四份临时开回来（不改仓库配置）。
+    pm.SLOTS = ('fetch', 'judge', 'answer', 'check')
 
     def q(sql, params=()):
         c = psycopg.connect(uri, autocommit=True)
@@ -110,9 +115,9 @@ def main() -> int:
 
     def reset():
         c = psycopg.connect(uri, autocommit=True)
-        c.execute('DELETE FROM prompt_material; DELETE FROM prompt_text; DELETE FROM complete_rule;')
+        c.execute('DELETE FROM prompt_material; DELETE FROM prompt_text;')
         c.close()
-        pm.clear_cache(); prompt_text.clear_cache(); complete_rules.clear_cache()
+        pm.clear_cache(); prompt_text.clear_cache()
         pm.add_section('fetch', '甲、门槛', '正文甲', pinned=True)
         pm.add_section('fetch', '乙、可选', '正文乙', pinned=False)
         pm.add_section('judge', '丙、判据', '正文丙', pinned=True)
@@ -224,32 +229,18 @@ def main() -> int:
     prompt_text.save('identity', '   ')
     prompt_text.clear_cache()
     chk('文本：空白覆盖等于没覆盖', prompt_text.get('identity', 'DEF') == 'DEF')
-    chk('文本：all_texts 四个 key',
-        [x['key'] for x in prompt_text.all_texts()] ==
-        ['identity', 'answer_format', 'modes', 'keywords'])
+    # 2026-11-03：`answer_format`（汇报口吻）已下线；多出 6 个时间地点规则的 key
+    _keys = [x['key'] for x in prompt_text.all_texts()]
+    chk('文本：all_texts 的 key 清单',
+        _keys[:3] == ['identity', 'modes', 'keywords']
+        and 'answer_format' not in _keys
+        and 'time_month_rel' in _keys, str(_keys))
     chk('文本：all_texts 里 overridden 判定对',
         [x for x in prompt_text.all_texts() if x['key'] == 'identity'][0]['overridden'] is False)
 
-    # ── complete_rule（③ 号 bug）─────────────────────────────
-    complete_rules.clear_cache()
-    chk('补全：空表有提示文案', '还没配' in complete_rules.as_text())
-    chk('补全：保存两条',
-        complete_rules.save([{'kind': 'norm', 'match_text': '情况怎么样', 'fill_text': '六项指标'},
-                             {'kind': 'fill', 'match_text': '两水', 'fill_text': '两水供电所'}]).get('ok'))
-    chk('补全：读回 2 条', len(complete_rules.rows()) == 2, len(complete_rules.rows()))
-    chk('补全：空 match 的行被丢弃',
-        complete_rules.save([{'match_text': '  ', 'fill_text': 'x'},
-                             {'match_text': 'a', 'fill_text': 'b'}]).get('ok')
-        and len(q('select id from complete_rule')) == 1)
-    n0 = len(q('select id from complete_rule'))
-    res = complete_rules.save([{'match_text': 'a', 'fill_text': 'b', 'priority': '不是数字'}])
-    chk('补全：priority 非法被拒', 'error' in res, res)
-    chk('补全：priority 非法要整体回滚（不能把整表删空）',
-        len(q('select id from complete_rule')) == n0,
-        '前 %d 后 %d' % (n0, len(q('select id from complete_rule'))))
-    chk('补全：超长字段被截断而不是报错',
-        complete_rules.save([{'match_text': 'm' * 400, 'fill_text': 'f' * 500}]).get('ok')
-        and len(q('select match_text m from complete_rule')[0]['m']) == 200)
+    # ── complete_rule（③ 号 bug）已随补全表下线删除（2026-11-03）──
+    #    原文与当年那条「priority 传非数字 → 整表清空」的回归留在这里备查：
+    #    docs/08-历史归档/2026-11-03-删除的提示词规则/补全表.md
 
     # ── pgdb 兼容层（改的是全项目共用的 INSERT 处理）──────────
     from app.secretary import pgdb

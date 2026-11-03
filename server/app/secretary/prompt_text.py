@@ -2,8 +2,8 @@
 """代码里的提示词文本，允许在页面上覆盖（2026-11-01）。
 
 原来这几份只读、改要发版：
-    身份 / 汇报口吻+作答格式 / 四个模式做法 / 业务词表+题型词表
-现在表里有一条就用表里的，没有就用代码常量（`prompts_data` / `agent` / `modes`）。
+    身份 / 四个模式做法 / 业务词表+题型词表 / 时间地点规则
+现在表里有一条就用表里的，没有就用代码常量（`prompts_data` / `modes` / `time_scope`）。
 
 **红线（S0）和优先级（S1）不在这里**，那两条永远只读 —— 允许改「数字必须有出处」等于允许编数。
 
@@ -18,10 +18,26 @@ from app.secretary import pgdb
 
 TEXT_KEYS = {
     'identity': '身份',
-    'answer_format': '汇报口吻 + 作答格式',
+    # ★ 2026-11-03（Fred）：`answer_format`（汇报口吻 + 作答格式）已下线 ——
+    #   S4 整段不再注入，这个 key 留着只会让人以为改了有用。原文备份在
+    #   docs/08-历史归档/2026-11-03-删除的提示词规则/汇报口吻-自检清单-作答规则.md
     'modes': '模式做法（JSON：data / doc / general / office 四段）',
-    'keywords': '业务词表 / 题型词表（JSON：produce / data / business_topics / kb / explain / chat …）',
+    'keywords': '业务词表 / 题型词表（JSON：produce / data / kb / explain / chat …）',
+    # ── 时间地点规则（2026-11-02 搬出代码）──────────────────────────
+    # 这几组原来是 time_scope.py 里的常量，改一次要发版。现在允许页面覆盖：
+    # 表里有值就用表里的，没有就用代码常量（行为与以前完全一致）。
+    # 只搬**数据**，不搬**逻辑**：正则、解析、比较仍留在代码里。
+    'time_month_rel': '时间：相对月份词（JSON：[[说法, 偏移], …]，如 [["上个月", -1]]）',
+    'time_year_rel': '时间：本年表达（JSON：["今年以来", …]）',
+    'time_year_off': '时间：年份词偏移（JSON：{"今年": 0, "去年": -1}）',
+    'time_whole_city': '地点：明说全市的说法（JSON：["全市", "市局", …]）',
+    'time_strip_head': '地点：单位名要去掉的前缀（JSON：["国网", "随州市", …]）',
+    'time_strip_tail': '地点：单位名要去掉的后缀（JSON：["供电所", "公司", …]）',
 }
+
+# 这 6 个 key 存 JSON，保存时要能解析
+_JSON_KEYS = {'modes', 'keywords', 'time_month_rel', 'time_year_rel', 'time_year_off',
+              'time_whole_city', 'time_strip_head', 'time_strip_tail'}
 
 _TTL = 60.0
 _CACHE: dict = {}
@@ -109,16 +125,22 @@ def keywords() -> dict:
 
 def all_texts() -> list[dict]:
     """给页面：每个 key 的当前正文、是否被覆盖、字数。"""
-    from app.secretary import agent, prompts_data
+    from app.secretary import prompts_data
     defaults = {
         'identity': prompts_data.IDENTITY,
-        'answer_format': (agent.COMMON + '\n\n' + agent.CHECK).strip(),
+        # ★ 2026-11-03：`answer_format` 已下线（S4 汇报口吻 + 交卷检查不再注入）
         'modes': json.dumps(prompts_data.MODE_TEXTS, ensure_ascii=False, indent=2),
         'keywords': '',
     }
     try:
         from app.secretary import modes
         defaults['keywords'] = json.dumps(modes.load_rules(), ensure_ascii=False, indent=2)
+    except Exception:                              # noqa: BLE001
+        pass
+    # 时间地点规则的默认值就是 time_scope 里的常量
+    try:
+        from app.secretary import time_scope
+        defaults.update(time_scope.rule_defaults())
     except Exception:                              # noqa: BLE001
         pass
     rows = _all()
@@ -142,11 +164,25 @@ def save(key: str, body: str, user: str = '') -> dict:
     if key not in TEXT_KEYS:
         return {'error': '未知的提示词：%s' % key}
     body = str(body or '')
-    if key in ('modes', 'keywords') and body.strip():
+    if key in _JSON_KEYS and body.strip():
         try:
-            json.loads(body)
+            parsed = json.loads(body)
         except Exception as exc:                   # noqa: BLE001
             return {'error': 'JSON 格式不对：%s' % str(exc)[:120]}
+        # 形状校验：这两组是 JSON **对象**，其余是 JSON **数组**。
+        # ★ 2026-11-03 修：原来只放行 `time_year_off` 是对象，`modes`（四个模式做法，
+        #   本身就是 {"data": …, "doc": …}）被判成"要 JSON 数组"→ 页面保存模式做法
+        #   100% 失败。真库实测：test_prompt_crud 的「合法 JSON 能真的写进 PG」4 项全红。
+        if key in ('time_year_off', 'modes'):
+            if not isinstance(parsed, dict):
+                return {'error': '这个 key 要 JSON 对象（{"说法": 值}）'}
+        elif key == 'time_month_rel':
+            ok = isinstance(parsed, list) and all(
+                isinstance(x, (list, tuple)) and len(x) == 2 for x in parsed)
+            if not ok:
+                return {'error': '这个 key 要 JSON 数组：[["上个月", -1], …]'}
+        elif not isinstance(parsed, list):
+            return {'error': '这个 key 要 JSON 数组（["说法", …]）'}
     try:
         conn = _conn()
         try:

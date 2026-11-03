@@ -27,6 +27,9 @@ YM = time_scope._latest_ym()          # 业务已结算月：C 段用它跟系�
 _TODAY = datetime.date.today()
 CY, CM = _TODAY.year, _TODAY.month    # ★ 口径基准 = 系统日历当月（不再跟业务月走）
 NOW = '%04d%02d' % (CY, CM)
+# ★ 2026-11-03（Fred）：没说时间时默认期间 = **上一个月**（11 月问 → 补 10 月）
+_PREV_Y, _PREV_M = ((CY - 1, 12) if CM == 1 else (CY, CM - 1))
+PREV = '%04d%02d' % (_PREV_Y, _PREV_M)
 
 # (输入, 期望 period_type, 期望 period_key, 说明)
 CASES = [
@@ -109,17 +112,17 @@ def main() -> int:
                   % (q, r['period_type'], r['period_key'], want_t, want_k, why))
 
     print('\n' + '=' * 78)
-    print('E. 没说时间 → 默认**系统当月**（不是「今年至今」）')
+    print('E. 没说时间 → 默认**上一个月**（不是「今年至今」，2026-11-03 起）')
     print('=' * 78)
     for q in ('两水供电所信息', '两水供电所情况怎么样', '售电量多少'):
         r = time_scope.resolve(q, today=_TODAY)
-        if r['period_type'] == 'month' and r['period_key'] == NOW and r['is_default']:
+        if r['period_type'] == 'month' and r['period_key'] == PREV and r['is_default']:
             ok += 1
-            print('  [ OK ] %-24s -> month/%s（默认值）' % (q, NOW))
+            print('  [ OK ] %-24s -> month/%s（默认值 = 上一个月）' % (q, PREV))
         else:
             fail += 1
-            print('  [FAIL] %-24s -> %s/%s（期望 month/%s 默认值）'
-                  % (q, r['period_type'], r['period_key'], NOW))
+            print('  [FAIL] %-24s -> %s/%s（期望 month/%s 默认值 = 上一个月）'
+                  % (q, r['period_type'], r['period_key'], PREV))
 
     print('\n' + '=' * 78)
     print('F. 说了时间但没对上口径 → 不许静默降级成默认值')
