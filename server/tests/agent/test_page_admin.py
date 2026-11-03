@@ -82,7 +82,7 @@ def main() -> int:
     os.environ['PG_DSN'] = uri
     print('  PG = %s' % uri.rsplit('@', 1)[-1])
 
-    from app.secretary import lex_admin, meta_admin, prompt_text, time_scope
+    from app.secretary import lex_admin, meta_admin, prompt_text
 
     meta_admin.ensure()                                   # 覆盖表由它自己建（幂等）
 
@@ -164,39 +164,9 @@ def main() -> int:
     chk('概览四张表都在', sorted(ov) == ['ambiguous', 'term', 'typo', 'wordlist'], sorted(ov))
     chk('概览行数正确', ov['typo']['rows'] == 1, ov['typo'])
 
-    # ── 5 时间地点规则：页面覆盖立即生效
-    reset()
-    chk('默认 whole_city 不含新词', '整个随州' not in time_scope._whole_city(),
-        time_scope._whole_city()[:3])
-    r = prompt_text.save('time_whole_city', json.dumps(['全市', '整个随州'], ensure_ascii=False))
-    chk('网页保存时间地点规则成功', r.get('ok'), r)
-    prompt_text.clear_cache()
-    chk('保存后立刻认新说法', time_scope._says_whole_city('整个随州怎么样') is True)
-    chk('原有的词还在', time_scope._says_whole_city('全市怎么样') is True)
-    chk('不相干的仍不认', time_scope._says_whole_city('曾都供电所') is False)
-
-    r = prompt_text.save('time_strip_head', json.dumps(['随州环潭'], ensure_ascii=False))
-    chk('保存前后缀成功', r.get('ok'), r)
-    prompt_text.clear_cache()
-    chk('前后缀改了、剥核心跟着变',
-        time_scope._strip_unit('随州环潭供电所') == '供电所'.replace('供电所', '') or
-        time_scope._strip_unit('随州环潭供电所') == '供电所',
-        time_scope._strip_unit('随州环潭供电所'))
-
-    chk('坏 JSON 被拒绝', 'error' in prompt_text.save('time_whole_city', '["全市"'))
-    chk('类型不对被拒绝', 'error' in prompt_text.save('time_whole_city', '{"a":1}'))
-    chk('month_rel 形状校验',
-        'error' in prompt_text.save('time_month_rel', '["上个月"]'))
-    chk('合法的 month_rel 能存',
-        prompt_text.save('time_month_rel', '[["上个月", -1], ["上两个月", -2]]').get('ok'))
-    prompt_text.clear_cache()
-    chk('月份词覆盖生效', ('上两个月', -2) in time_scope._month_rel(), time_scope._month_rel()[:3])
-
-    prompt_text.reset('time_whole_city')
-    prompt_text.reset('time_strip_head')
-    prompt_text.reset('time_month_rel')
-    prompt_text.clear_cache()
-    chk('reset 后回退代码常量', '整个随州' not in time_scope._whole_city())
+    # ── 5 时间地点规则：**已整体删除**（2026-11-03），页面与 prompt_text 里不再有 time_* 键
+    chk('time_* 键已删除', not any(k.startswith('time_') for k in prompt_text.TEXT_KEYS),
+        sorted(prompt_text.TEXT_KEYS))
 
     # ── 6 数据表元数据覆盖层
     reset()

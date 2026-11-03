@@ -3,7 +3,7 @@
 
 原来这几份只读、改要发版：
     身份 / 四个模式做法 / 业务词表+题型词表 / 时间地点规则
-现在表里有一条就用表里的，没有就用代码常量（`prompts_data` / `modes` / `time_scope`）。
+现在表里有一条就用表里的，没有就用代码常量（`prompts_data` / `modes`）。
 
 **红线（S0）和优先级（S1）不在这里**，那两条永远只读 —— 允许改「数字必须有出处」等于允许编数。
 
@@ -34,20 +34,12 @@ TEXT_KEYS = {
     'intent': '① 要不要走预处理（空 = 全部走：纠错+补全+补时间地点）',
     'confirm': '⑥ 问题确定（空 = 不归整，原样往下传）',
     # ── 时间地点规则（2026-11-02 搬出代码）──────────────────────────
-    # 这几组原来是 time_scope.py 里的常量，改一次要发版。现在允许页面覆盖：
     # 表里有值就用表里的，没有就用代码常量（行为与以前完全一致）。
     # 只搬**数据**，不搬**逻辑**：正则、解析、比较仍留在代码里。
-    'time_month_rel': '时间：相对月份词（JSON：[[说法, 偏移], …]，如 [["上个月", -1]]）',
-    'time_year_rel': '时间：本年表达（JSON：["今年以来", …]）',
-    'time_year_off': '时间：年份词偏移（JSON：{"今年": 0, "去年": -1}）',
-    'time_whole_city': '地点：明说全市的说法（JSON：["全市", "市局", …]）',
-    'time_strip_head': '地点：单位名要去掉的前缀（JSON：["国网", "随州市", …]）',
-    'time_strip_tail': '地点：单位名要去掉的后缀（JSON：["供电所", "公司", …]）',
 }
 
-# 这 6 个 key 存 JSON，保存时要能解析
-_JSON_KEYS = {'modes', 'keywords', 'time_month_rel', 'time_year_rel', 'time_year_off',
-              'time_whole_city', 'time_strip_head', 'time_strip_tail'}
+# 这些 key 存 JSON，保存时校验结构和可计算的值。
+_JSON_KEYS = {'modes', 'keywords'}
 
 _TTL = 60.0
 _CACHE: dict = {}
@@ -152,12 +144,6 @@ def all_texts() -> list[dict]:
         defaults['keywords'] = json.dumps(modes.load_rules(), ensure_ascii=False, indent=2)
     except Exception:                              # noqa: BLE001
         pass
-    # 时间地点规则的默认值就是 time_scope 里的常量
-    try:
-        from app.secretary import time_scope
-        defaults.update(time_scope.rule_defaults())
-    except Exception:                              # noqa: BLE001
-        pass
     rows = _all()
     out = []
     for k, name in TEXT_KEYS.items():
@@ -188,14 +174,9 @@ def save(key: str, body: str, user: str = '') -> dict:
         # ★ 2026-11-03 修：原来只放行 `time_year_off` 是对象，`modes`（四个模式做法，
         #   本身就是 {"data": …, "doc": …}）被判成"要 JSON 数组"→ 页面保存模式做法
         #   100% 失败。真库实测：test_prompt_crud 的「合法 JSON 能真的写进 PG」4 项全红。
-        if key in ('time_year_off', 'modes'):
+        if key == 'modes':
             if not isinstance(parsed, dict):
                 return {'error': '这个 key 要 JSON 对象（{"说法": 值}）'}
-        elif key == 'time_month_rel':
-            ok = isinstance(parsed, list) and all(
-                isinstance(x, (list, tuple)) and len(x) == 2 for x in parsed)
-            if not ok:
-                return {'error': '这个 key 要 JSON 数组：[["上个月", -1], …]'}
         elif not isinstance(parsed, list):
             return {'error': '这个 key 要 JSON 数组（["说法", …]）'}
     try:

@@ -62,9 +62,10 @@ def main() -> int:
     # 3/4/5 ── 配置开关
     chk("PAGE_ON 为 False（页面生成关闭）", getattr(config, "PAGE_ON", None) is False,
         str(getattr(config, "PAGE_ON", "<缺失>")))
-    chk("NUMBER_GUARD_ON 为 True", getattr(config, "NUMBER_GUARD_ON", None) is True,
+    # ★ 2026-11-03 定稿「守卫先全关」：数字闸默认关、单题时间预算默认不限。
+    chk("NUMBER_GUARD_ON 默认关", getattr(config, "NUMBER_GUARD_ON", "缺失") is False,
         str(getattr(config, "NUMBER_GUARD_ON", "<缺失>")))
-    chk("QUESTION_BUDGET_S = 240", getattr(config, "QUESTION_BUDGET_S", None) == 240.0,
+    chk("QUESTION_BUDGET_S 默认不限", getattr(config, "QUESTION_BUDGET_S", None) == 0,
         str(getattr(config, "QUESTION_BUDGET_S", "<缺失>")))
     chk("KB_TIMEOUT 存在", isinstance(getattr(config, "KB_TIMEOUT", None), int),
         str(getattr(config, "KB_TIMEOUT", "<缺失>")))
@@ -88,7 +89,7 @@ def main() -> int:
 
     # 8 ── 不许留裸兄弟模块 import
     sibling = ("agent|config|gaps|lex_source|name_fix|qa_log|report|semantic|session_summary|"
-               "time_scope|tools_asr|tools_db|tools_kb|alerts|alert_rules|alert_scope|"
+               "tools_asr|tools_db|tools_kb|alerts|alert_rules|alert_scope|"
                "alert_wording|kb_adapter|pgdb")
     pat = re.compile(r"^[ \t]*import[ \t]+(%s)[ \t]*$" % sibling, re.M)
     offenders = []

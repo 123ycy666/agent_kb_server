@@ -74,15 +74,6 @@ def _fake_fix(q):
             'areas': [], 'hint': '', 'unresolved': [], 'ms': 0}
 
 
-def _fake_describe(question, fixed=None, prev=None, today=None, force_place=None):
-    return {'question': question,
-            'time': {'matched': '', 'time_text': '2025年', 'period_type': 'year',
-                     'period_key': '2025', 'is_default': True, 'note': '替身口径'},
-            'place': '全市', 'place_default': True,
-            'inherited': {'time': False, 'place': False},
-            'scope_text': '期间：2025年（全年）\n范围：全市'}
-
-
 def _fake_exec(calls):
     out = []
     for c in calls:
@@ -128,7 +119,6 @@ def main() -> int:
 
     # 替身装上（越早越好：都在问句处理之前调用）
     agent.name_fix.fix = _fake_fix
-    agent.time_scope.describe = _fake_describe
     agent._exec_calls = _fake_exec
     agent.gaps.is_gap = lambda *a, **k: False
     agent.gaps.record = lambda *a, **k: None

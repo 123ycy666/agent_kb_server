@@ -21,7 +21,7 @@ NODES = [
         ],
     },
     {
-        'id': 'p2', 'no': 2, 'name': '要不要走预处理', 'desc': '走 = 纠错 + 补全 + 补时间地点；不走直接去干活',
+        'id': 'p2', 'no': 2, 'name': '要不要走预处理', 'desc': '走 = 纠错 + 补全（补问法 / 查补全表）；不走直接去干活',
         'materials': [
             {'key': 'base.intent', 'name': '① 要不要走预处理', 'editable': True},
         ],
@@ -36,38 +36,34 @@ NODES = [
     {
         'id': 'p4', 'no': 4, 'name': '补问法 + 查补全表', 'desc': '补默认问法；拿原问题和补后问题去表里找命中（只查不改）',
         'materials': [
-            {'key': 'mat.complete', 'name': '④ 补全表', 'editable': True},
+            {'key': 'mat.complete', 'name': '③ 补全表（时间地点也在这里配）', 'editable': True},
         ],
     },
     {
-        'id': 'p5', 'no': 5, 'name': '算时间地点', 'desc': '上个月 → 2026年10月；没说就默认上一个月 / 全市',
+        'id': 'p5', 'no': 5, 'name': '问题确定', 'desc': '把前面几步揉成四行定稿：要什么 / 时间 / 范围 / 其它要求',
         'materials': [
-            # ★ 2026-11-03（Fred 现场要求）：时间地点规则要能实时改（六个键，保存即生效）
-            {'key': 'time.scope', 'name': '⑤ 时间地点规则', 'editable': True},
+            {'key': 'base.confirm', 'name': '④ 问题确定', 'editable': True},
         ],
     },
     {
-        'id': 'p6', 'no': 6, 'name': '问题确定', 'desc': '把前面几步揉成四行定稿：要什么 / 时间 / 范围 / 其它要求',
+        'id': 'p6', 'no': 6, 'name': '干活（主循环）', 'desc': '拿定稿自己决定查字段 / 查知识库 / 查数 / 写文档；信息不够就反问用户',
         'materials': [
-            {'key': 'base.confirm', 'name': '⑥ 问题确定', 'editable': True},
-        ],
-    },
-    {
-        'id': 'p7', 'no': 7, 'name': '干活（主循环）', 'desc': '拿定稿自己决定查字段 / 查知识库 / 查数 / 写文档；信息不够就反问用户',
-        'materials': [
-            {'key': 'mat.fetch', 'name': '⑦ 查数口径', 'editable': True},
+            {'key': 'mat.fetch', 'name': '⑤ 查数口径', 'editable': True},
             {'key': 'semantic.tables', 'name': '数据表清单', 'editable': False},
             {'key': 'semantic.columns', 'name': '字段说明', 'editable': False},
             {'key': 'semantic.codes', 'name': '字典表', 'editable': False},
         ],
     },
     {
-        'id': 'p8', 'no': 8, 'name': '回答', 'desc': '拿查回来的信息，按回答规则写成回答',
+        'id': 'p7', 'no': 7, 'name': '回答', 'desc': '拿查回来的信息，按回答规则写成回答',
         'materials': [
-            {'key': 'mat.answer', 'name': '⑧ 回答规则', 'editable': True},
+            {'key': 'mat.answer', 'name': '⑥ 回答规则', 'editable': True},
         ],
     },
 ]
+
+# ★ 2026-11-03（Fred）：第 5 步「算时间地点」整块删除 —— 代码不再换算月份/年份，也不补默认。
+#   要补什么由 Fred 在「补全表」（第 4 步）里自己配，命中后交给第 5 步「问题确定」判断怎么用。
 
 
 
@@ -118,13 +114,6 @@ def _code_text(key: str) -> str:
         import json as _json
         from app.secretary import modes
         return _json.dumps(modes.load_rules(), ensure_ascii=False, indent=2)
-    if key == 'time.scope':
-        return ('【时间地点补全规则】（代码实现，只读展示；改说法在页面的时间地点规则里）\n'
-                '· 相对时间词换成具体期间：上个月 / 今年 / 9 月 → 具体年月\n'
-                '· 本轮没提时间 → **默认上一个月**（2026-11-03 改；不再沿用上一轮，\n'
-                '  是否沿用由第 6 步「问题确定」判断）\n'
-                '· 地点：从问题里的所 / 县 / 台区名取；没有 → 全市\n'
-                '· 表在不同表里写法不同（「广水市供电公司」vs「广水」）→ 统一按名称清单换')
     return ''
 
 
@@ -195,7 +184,6 @@ WHEN = {
     'semantic.codes': '干活循环里（业务码表）',
     'nc.typo': '预处理：代码读；页面可增删改，60 秒内生效',
     'mat.complete': '预处理：代码查表，不进提示词；命中只作参考',
-    'time.scope': '预处理：代码算；六个键在页面上可改，保存即生效',
     'modes.keywords': '已不参与链路（词表匹配已删）',
 }
 

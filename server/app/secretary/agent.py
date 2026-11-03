@@ -3,7 +3,7 @@
 
 分工：**信息补全由本服务自己做**（字面纠错与名称归一 → 时间与地点补全），
 问题补全走知识库的补全规则，再查口径、取数、作答。
-上游那个补全应用已不在链路里，时间与地点同样由本服务补（见 time_scope.py）。
+上游那个补全应用已不在链路里；时间与地点补全已整体删除（2026-11-03），由补全表配。
 全部在一个模型循环里由模型自己排顺序，代码不写业务流程。
 """
 import concurrent.futures
@@ -25,7 +25,6 @@ from app.secretary import evidence_gate
 from app.secretary import gaps
 from app.secretary import name_fix
 from app.secretary import semantic
-from app.secretary import time_scope
 from app.secretary import tools_db
 from app.secretary import tools_kb
 
@@ -1042,7 +1041,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     trace = []
     raw_question = question
     # 上游（业务系统）指定的数据范围：提问人是谁、在哪个页面只有上游知道，所以它**强制**。
-    # 必须先存下来：下面 time_scope 的结果也叫 scope，直接 scope = … 会把形参吞掉
+    # 上游强制的数据范围（业务系统传的，只记录、不再注入提示词）
     # （曾经的 bug：传了范围却全按「全市」作答，证据 output/test_results/…/EV-0003）。
     force_scope = (scope or '').strip() or None
     # 检索范围**只走 kb_adapter 的线程上下文**（路由层 set_scope 登记）。
@@ -1063,13 +1062,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         except Exception as e:                      # noqa: BLE001
             print('[agent] 读取多轮上下文失败（按无上下文继续）：%s: %s'
                   % (type(e).__name__, e), flush=True)
-    prev_scope = None
-    if history:
-        last = history[-1]
-        prev_scope = {'period_type': last.get('period_type'),
-                      'period_key': last.get('period_key'),
-                      'time_text': last.get('time_text'),
-                      'place': last.get('place')}
+    # ★ 2026-11-03：`prev_scope`（上一轮的时间地点）**不再需要** —— 时间地点补全整块删除，
+    #   沿用与否由第 6 步「问题确定」按上下文判断。
     allow_refine = _pre.gate(question, history,
                              ask=lambda _s, _u: _ask_short(_s, _u, model))
     trace.append({'seq': len(trace) + 1, 'kind': 'intent', 'tool': 'intent',
@@ -1139,33 +1133,22 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                       % (type(e).__name__, e), flush=True)
                 sum_skip = '读取摘要出错'
     sum_upto = int(sess_sum.get('upto_seq') or 0)
-    # ⓪·5 时间与范围补全：相对时间词换成具体期间；没说的优先沿用上一轮，再没有才补默认值。
-    #       这种换算是确定性的（「上月」是几月取决于今天），交给代码，不留给模型去猜日期。
-    t_scope = time.time()
-    scope = time_scope.describe(question, fixed, prev=prev_scope, today=today,
-                               force_place=force_scope)
-    if allow_refine and scope['question'] and scope['question'] != question:
-        question = scope['question']
-    trace.append({'seq': len(trace) + 1, 'kind': 'scope', 'tool': 'time_scope',
-                  'ms': int((time.time() - t_scope) * 1000),
-                  'result': {'matched': scope['time']['matched'],
-                             'time': scope['time']['time_text'],
-                             'period_type': scope['time']['period_type'],
-                             'period_key': scope['time']['period_key'],
-                             'time_is_default': scope['time']['is_default'],
-                             'place': scope['place'],
-                             'place_is_default': scope['place_default'],
-                             'history_turns': len(history),
-                             'time_inherited': scope['inherited']['time'],
-                             'place_inherited': scope['inherited']['place'],
-                             # ★ 2026-11-02：true = 本轮没认出地点，范围没定下来，
-                             # 模型要按原话 + 维表确认（不再静默套上一轮）。
-                             'place_confirm': bool(scope.get('place_confirm')),
-                             'hint': scope['time']['note']}})
+    # ★ 2026-11-03（Fred）：**时间地点补全整块删除** —— 不由代码换算、不补默认年月和全市。
+    #   要补什么由 Fred 在「补全表」里自己配（第 4 步命中后交给第 6 步判断）。
+    #   这里只留一个空骨架，让 result['scope'] / trace 的结构对内网接口保持兼容。
+    scope = {'question': question,
+             'time': {'matched': '', 'time_text': '', 'period_type': '', 'period_key': '',
+                      'is_default': False, 'note': ''},
+             'place': '', 'place_default': False,
+             'inherited': {'time': False, 'place': False},
+             'scope_text': '', 'place_confirm': False}
+    trace.append({'seq': len(trace) + 1, 'kind': 'scope', 'tool': 'scope_removed',
+                  'result': {'skipped': True,
+                             'reason': '时间地点补全已删除，改由补全表配置'}})
     # **不预检索、不预注入判据**：按问题检索判据挑"该用哪条标准"实测不稳（会把相邻技能的标准当成本题的标准，
     # 例如把「项目执行进度异常」当成「审批积压」）。判据改成让模型在循环里用 kb_search 工具自己查 ——
     # 需要判断就去查，查不到就不下判断（见回答契约第 7 条）。
-    # 问题也不改写：补全只补地名/名称/时间（上面的 name_fix 与 time_scope）。
+    # 问题不改写：原话 + 纠错 + 补问法 + 补全表命中，一路往下传。
     t_loop = time.time()
     # ── ⑥ 问题确定：把前面几步揉成一份定稿，第 7 步只拿这份 ────────────────
     #    判据在页面框 `confirm`（空 = 不归整，参考资料原样下传）。
@@ -1479,7 +1462,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         page_token = ''
         # 页面缓存键：同一业务日 + 同一个问题 + 同一个范围 = 同一张页面
         pkey = 'q=%s|d=%s|s=%s' % (question, today or time.strftime('%Y-%m-%d'),
-                                   force_scope or scope['place'])
+                                   force_scope or '')
         if page_async:
             # 异步：先把答案返回，页面在后台生成，避免 30–55s 的页面把回答堵住。
             page_token = render_page_async(answer, extra=extra, model=model, cache_key=pkey)

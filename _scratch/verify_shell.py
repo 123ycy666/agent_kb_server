@@ -96,13 +96,19 @@ def main():
     ln = confirm.lines('要什么：看两水装表\n时间：2026年10月\n范围：两水供电所\n其它要求：简略')
     chk('四行能解析', ln['要什么'] == '看两水装表' and ln['其它要求'] == '简略', ln)
 
-    print('[6] 节点树 = 八步')
+    print('[6] 节点树 = 七步（时间地点补全整块删除）')
     nodes = prompt_tree.tree()
-    chk('八个节点', len(nodes) == 8, len(nodes))
+    chk('七个节点', len(nodes) == 7, len(nodes))
+    chk('没有「算时间地点」节点', all('时间地点' not in (n.get('name') or '') for n in nodes),
+        [n.get('name') for n in nodes])
     mats = [m['key'] for n in nodes for m in n['materials']]
     for k in ('base.intent', 'base.confirm', 'mat.complete', 'mat.fetch', 'mat.answer'):
         chk('材料里有 %s' % k, k in mats, mats)
     chk('不再有 base.format（汇报口吻已删）', 'base.format' not in mats)
+    chk('不再有 time.scope（时间地点规则已删）', 'time.scope' not in mats)
+    for k in ('time_month_rel', 'time_year_rel', 'time_year_off',
+              'time_whole_city', 'time_strip_head', 'time_strip_tail', 'time_ytd'):
+        chk('prompt_text 不再有 %s' % k, k not in set(prompt_text.TEXT_KEYS), sorted(prompt_text.TEXT_KEYS))
     for m in [m for n in nodes for m in n['materials']]:
         chk('材料 %s 能取到正文' % m['key'], isinstance(m['body'], str))
 
