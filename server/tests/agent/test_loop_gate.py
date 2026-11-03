@@ -171,20 +171,22 @@ def main() -> int:
             for t in res['trace']), str([t.get('kind') for t in res['trace']]))
     chk('场景2 最后查到了数', res['db_query_count'] == 1, str(res['db_query_count']))
 
-    # ── 场景 3：死活不查、两次都给断言 → 恰好 2 次模型调用后拦住（不死循环）
+    # ── 场景 3：死活不查、两次都给断言 → 提醒一次后**放行**（2026-11-03 取消 block）
     res, fm = run('全市情况怎么样', [
         {'content': '全市预算执行率105.64%。'},
         {'content': '按系统口径全市数据缺失，无法作答。'},
         {'content': '（不该被调用）'},
     ])
-    chk('场景3 被拦下', res['unverified'] is True, str(res['unverified']))
-    chk('场景3 回答是拦截话术', res['answer'].startswith('【未核实，不予作答】'), res['answer'][:30])
+    chk('场景3 不再拦死（不返回"未核实不予作答"）',
+        res.get('unverified') is not True
+        and not res['answer'].startswith('【未核实，不予作答】'), res['answer'][:40])
     chk('场景3 只调了 2 次模型（没死循环）', len(fm.calls) == 2, str(len(fm.calls)))
-    chk('场景3 闸门留痕 nudge→block',
-        [g['act'] for g in res['evidence_gate']] == [eg.ACT_NUDGE, eg.ACT_BLOCK],
+    chk('场景3 闸门留痕 nudge→pass（不再有 block）',
+        [g['act'] for g in res['evidence_gate']] == [eg.ACT_NUDGE, eg.ACT_PASS],
         str(res['evidence_gate']))
-    chk('场景3 拦下理由写进了 trace',
-        '没有工具结果支撑' in str(res['trace']), str(kinds(res)))
+    chk('场景3 理由写进了 trace',
+        any('没有工具结果支撑' in str(t.get('content') or '') for t in res['trace']),
+        str(kinds(res)))
 
     # ── 场景 4：纯问候 → 一次放行，不 nudge、不查库
     res, fm = run('你好', [{'content': '你好，我可以帮你查数据或写材料。'}])

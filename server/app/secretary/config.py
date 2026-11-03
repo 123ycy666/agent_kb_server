@@ -284,7 +284,8 @@ COMPLETION_APP_ID = os.environ.get('SECRETARY_COMPLETION_APP', 'e207644fd37247af
 COMPLETION_URL = (LLM_BASE.split('/compatible-mode')[0] +
                   '/api/v1/apps/' + COMPLETION_APP_ID + '/completion')
 
-# 是否在系统提示**最前面**加一段「规则优先级声明」（内容见 agent.RULES_PRIORITY，默认开）。
+# ★ 2026-11-03 已废弃：`agent.RULES_PRIORITY` 常量删除，优先级改为页面 key `priority`
+# （不填就不注入）。这个开关保留只为兼容老 .env，读到也不起作用。
 # 为什么需要：system 里的通用规则会和 user 段【统计范围】撞车 —— 典型是
 # `business_rules【时间处理】`写着"未指定年份时默认使用当前年份"，而代码在多轮会话里
 # 会按"沿用上一轮"给出**别的**年份；原文任何地方都没声明谁优先。

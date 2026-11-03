@@ -50,14 +50,20 @@ def evidence_reason(answer: str) -> str:
     return ''
 
 
+def claims(answer: str) -> list[str]:
+    """答案里所有「需要工具支撑」的断言片段（数字+单位、百分之X）。"""
+    return _CLAIM.findall(answer or '')
+
+
 def decide(*, used_tool: bool, nudged: bool, answer: str,
-           mode: str = 'data') -> tuple[str, str]:
+           mode: str = 'data', history_ok: bool = False) -> tuple[str, str]:
     """返回 (动作, 理由)。
 
     · 查过工具 → pass（照旧另起一次「写汇报」）
     · 没查工具、答案里也没有具体断言 → pass（问候/写字/解释概念这类本来不该查库）
     · 没查工具、属于查数模式（mode='data'）→ 先 nudge 一次：不把查数题当闲聊答完
-    · 没查工具、但答案里有具体断言 → 先 nudge；已经 nudge 过还敢说 → block
+    · 没查工具、但答案里有具体断言 → 先 nudge；再犯**不再 block**
+      （2026-11-03：同会话此前查过的数据要能用；历史证据命中时直接 pass）
       **只有 data 模式才拦**：写通知/写汇报里的「3 项要求」「12 个乡镇」是正文内容，
       不是查数结论；拦掉等于让领导交不了差（这类由提示词去管，代码别替它判）。
     """
@@ -68,8 +74,11 @@ def decide(*, used_tool: bool, nudged: bool, answer: str,
         if mode == 'data' and not nudged:
             return ACT_NUDGE, '查数题这一轮没调工具，先给一次核实机会（并补上工具）'
         return ACT_PASS, '答案里没有需要工具支撑的具体断言'
+    # ★ 2026-11-03（Fred）：**同会话此前查到过、答案里的数对得上 → 放行**。
+    #   旧行为是"本轮没调工具 + 有断言 + 已提醒过 → block"，把上一轮查出来的答案
+    #   当成"没核实"，直接把智能体锁死。这不是安全守卫，是限制能力。
+    if history_ok:
+        return ACT_PASS, why + '（同会话此前查过，按历史结果作答，放行）'
     if not nudged:
         return ACT_NUDGE, why
-    if mode == 'data':
-        return ACT_BLOCK, why
-    return ACT_PASS, why + '（非查数模式：提醒过就不再拦，按时限出材料）'
+    return ACT_PASS, why + '（提醒过一次仍没查：按智能体放行，不再拦死）'

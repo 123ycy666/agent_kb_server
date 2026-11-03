@@ -6,7 +6,9 @@
 并把「地点：两水供电所」**钉死**进【统计范围】。旧代码里那句"如果本轮提到别的地点以
 问题为准"的附注压不过钉死的范围，所以加提示没用。
 
-现在：认不出 → 口径写「本轮范围未定」+ 条件指引 + 维表表名，让模型按原话确认。
+现在（2026-11-03 再改）：认不出 → 有上一轮就写「沿用上一轮：X」，没有就写
+「按全市取数」并给维表确认办法。**不再说"本轮范围未定"** —— 那句话会让模型反问，
+反而答不出来；旧版更糟：没有上一轮时写「沿用上一轮：全市」，是一句假话。
 
 运行：py -X utf8 server/tests/agent/test_place_scope.py（不连数据库、不调模型）
 """
@@ -52,7 +54,8 @@ def main() -> int:
         d = describe(q, prev=_PREV)
         t = d['scope_text']
         chk('认不出「%s」→ place_confirm=True' % q, d['place_confirm'] is True, d['place_confirm'])
-        chk('认不出「%s」→ 口径写本轮范围未定' % q, '本轮范围未定' in t, t[:80])
+        chk('认不出「%s」→ 口径不再说"范围未定"、且给了确认办法' % q,
+            '本轮范围未定' not in t and ('按全市取数' in t or '沿用上一轮' in t), t[:80])
         chk('认不出「%s」→ 口径里没有「地点：两水供电所」' % q, '地点：两水供电所' not in t, t[:80])
         chk('认不出「%s」→ 给出维表让人确认' % q,
             't_power_supply_company' in t and 't_power_company' in t, t[:80])
@@ -81,7 +84,9 @@ def main() -> int:
     chk('无上轮 + 认不出 → place_confirm=True', d['place_confirm'] is True, d['place_confirm'])
     chk('无上轮 + 认不出 → 机器默认全市', d['place'] == '全市' and d['place_default'] is True,
         '%s/%s' % (d['place'], d['place_default']))
-    chk('无上轮 + 认不出 → 口径仍是未定', '本轮范围未定' in d['scope_text'], d['scope_text'][:80])
+    chk('无上轮 + 认不出 → 按全市取数（不是"未定"，也不是假的"沿用")',
+        '按全市取数' in d['scope_text'] and '沿用上一轮' not in d['scope_text'],
+        d['scope_text'][:120])
 
     # ── 5 上游强制范围：照旧
     d = describe('曾都供电所情况怎么样', prev=_PREV, force_place='广水市供电公司')

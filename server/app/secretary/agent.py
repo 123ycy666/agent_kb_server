@@ -744,33 +744,10 @@ def rule_slices(query, top_k=None, limit=700):
 # 兜底：字典/提示词读不到时才用（正常情况下系统提示全部来自数据库）
 _FALLBACK = '你是随州供电公司的项目管理秘书，负责回答业务问题。'
 
-# ---------------------------------------------------------------------------
-# 规则优先级声明（2026-09-22 加，纯新增，不删任何原有规则）
-#
-# 为什么需要：system 里的通用规则会和 user 段【统计范围】撞车 —— 典型是
-# `business_rules【时间处理】`写着"未指定年份时默认使用当前年份"，而代码在多轮会话里
-# 会按"沿用上一轮"给出**别的**年份。原文任何地方都没声明谁优先，模型只能自己猜，
-# 表现就是"回答被带偏"。
-#
-# ★ 措辞必须与真实链路一致：user 段里**没有**"用户原话"！第一行是**代码做过
-#   名称纠错 + 时间地点补全之后**的问题（见 ask() 开头的 raw_question → question）。
-#   写成"以用户原话为准"会让模型去找一个**提示词里根本不存在**的参照物。
-#   这也是刻意不为原话单独开一段的原因：那会造出"同一件事两个版本"，正是要避免的病。
-#
-# 可用 SECRETARY_RULES_PRIORITY=0 关掉。
-# ---------------------------------------------------------------------------
-RULES_PRIORITY = (
-    '========== 规则优先级（冲突时一律按此顺序，前面覆盖后面） ==========\n'
-    '① 本轮问题 +【统计范围】+【名称归一说明】—— 这三样都由代码确定，**是唯一权威**：\n'
-    '   问题里的时间、地点、名称都不要再改动，不要自己推算日期，不要另立一套口径。\n'
-    '   （问题已按词典纠正过名称，请直接用它的写法，不要再改回去）\n'
-    '② 本轮检索到的业务规则切片（【补全参考】里那些）—— 它**只是参考**。\n'
-    '③ 本 system 里的各节通用规则（下面所有【】开头的小节）—— 与前两条冲突时让位。\n'
-    '④ 【本场会话摘要】与【对话历史】—— 只用来理解"本轮在问什么"，\n'
-    '   **既不是数据来源、也不是结论来源**，里面的数字和结论一律不得直接引用。\n'
-    '\n'
-    '冲突时**直接按前者执行**：不要"综合两者"，也不要在回答里出现两个版本。\n'
-)
+# ★ 2026-11-03（Fred）：RULES_PRIORITY（S1 谁说了算）常量已删除 ——
+#   它每轮都进 system、页面又改不了，属于「我不填也生效的字」。
+#   要恢复就在页面 `priority` 这个 key 里写（原文在
+#   docs/08-历史归档/2026-11-03-删除的提示词规则/红线-优先级-装配说明-原文.md）。
 
 
 def _system(today=None):
@@ -782,13 +759,7 @@ def _system(today=None):
     只有一处来源：站点包文件；这里只剩"身份 + 日期 + 码表 + 表目录"。
     """
     head = _FALLBACK
-    if config.RULES_PRIORITY:
-        head = RULES_PRIORITY + '\n' + head
-    try:
-        head += ('\n\n今天的日期是 %s。所有「停留天数 / 截至今天」一律按这一天算，'
-                 '不要拿数据里的时间当今天。' % (today or time.strftime('%Y-%m-%d')))
-    except Exception:                               # noqa: BLE001
-        pass
+    # ★ 2026-11-03：兜底装配里的「今天的日期是…」也去掉（要日期在页面上自己写）。
     try:
         _codes = semantic.codes_menu()
         if _codes:
@@ -1211,11 +1182,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             hl.append('   系统：%s' % (h.get('answer') or '').replace('\n', ' '))
             hl.append('   当时口径：%s / %s' % (h.get('time_text') or '-', h.get('place') or '-'))
         user_content += (
-            '\n\n【对话历史】（同一场会话最近的 %d 轮，**只用来判断本轮问题在问什么、省略了什么**）\n%s\n'
-            '注意三点：① 历史里的数字是按**当时的口径**算出来的，不能当成本轮答案；'
-            '本轮必须按下面【统计范围】重新查数。'
-            '② 本轮的统计口径已在上面的【统计范围】里定好，**不要**因为历史而改变它。'
-            '③ 不要在回答里复述或提及这段历史。' % (len(hist_detail), '\n'.join(hl)))
+            '\n\n【对话历史】（同一场会话最近的 %d 轮，用来判断本轮在问什么、省略了什么）\n%s\n'
+            '注意三点：① 历史里的数字是按**当时的口径**算的；本轮口径没变时，'
+            '**可以直接沿用历史查到的数**，不必为了"必须重新查"再跑一遍。'
+            '② 本轮口径以上面【统计范围】为准；口径变了就按新口径重查。'
+            '③ 不要在回答里复述或提及这段历史本身。' % (len(hist_detail), '\n'.join(hl)))
     # ⓪·6 规则：**目录常驻 + 按需精确取**（2026-10-30 改）
     #     原来是"拿问题去向量检索《判据规则》切片，只留 4 片"，线上实测那 4 片的相似度
     #     只有 0.17~0.19 —— 是不是该用的那条规则全看运气，而且还会把相邻题的标准套错。
@@ -1252,10 +1223,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #   它们是"每次都适用的纪律"，性质与红线相同；塞在用户消息里等于每轮都当用户输入，
     #   而且和 system 里的通用规则分成两处、谁也不管谁。
     # ★ 规则不再预注入切片：目录在 system（S6），要判定就让模型 get_rule 取那一条。
-    user_content += ('\n\n【判断标准从哪来】要做判断（是否异常/逾期/超阈/合理、该先办哪个）之前，'
-                     '**先用 get_rule(主题) 取 system 里「规则目录」对应的那一条**；'
-                     '取不到就只报事实，并写明「系统里没有这条判定标准」。'
-                     '不许拿别的主题的标准套到本题上，也不许自己编标准。')
+    # ★ 2026-11-03：原来这里塞了一段「判断标准从哪来…先用 get_rule 取规则」。
+    #   规则材料已从链路删除，这句话只会让模型去取一个不存在的东西 —— 去掉。
     if profile:
         user_content += ('\n\n【提问人身份与数据范围】（判断标准与关注重点按它来，不要因此扩大问题范围）：\n' + profile)
     # ⓪·7 用户上传的文件（2026-10-19 加）：这是本轮回答的**事实来源**。
@@ -1299,13 +1268,18 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         except Exception as _exc:                  # noqa: BLE001 - 个人规则读不到不影响问答
             print('[agent] 个人规则读取失败（忽略）：%s: %s'
                   % (type(_exc).__name__, str(_exc)[:120]), flush=True)
+    try:
+        from app.secretary import prompt_text as _pt
+        _priority = _pt.get('priority', '') or ''
+    except Exception:                              # noqa: BLE001
+        _priority = ''
     messages = [{'role': 'system',
                  'content': agent_v2.system(
                      _mode, _system, today,
                      persona=_persona, prefs=_prefs,
-                     # S1「谁说了算」：V2 装配曾把这段丢掉，导致【统计范围】与
-                     # system 里【时间处理】撞车时没有裁判。用同一份常量，不另写一份。
-                     priority=(RULES_PRIORITY if config.RULES_PRIORITY else ''),
+                     # S1「谁说了算」：2026-11-03 起从页面取（prompt_text.priority），
+                     # 没填就是空 —— 空壳里不再有代码自带的优先级声明。
+                     priority=_priority,
                      # ★ 2026-11-03（Fred）：S4「作答格式」（汇报口吻 + 交卷检查）已下线，
                      #   不再注入。原文备份见 docs/08-历史归档/2026-11-03-删除的提示词规则/。
                      answer_format='',
@@ -1360,8 +1334,15 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             # 内网「全市情况怎么样」没命中任何业务词 → 判 general → 不给工具 → 模型写
             # "数据缺失"，而这句话没有数字 → 当通用问答放行；同一句若写了数字反被拦。
             # 判据必须落在答案侧，问题怎么问都不影响。
+            # ★ 2026-11-03：历史证据也算出处 —— 上一轮查出来的数，这一轮直接引用
+            #   不该被判"没核实"。答案里的断言都能在历史回答里找到时放行。
+            _hist_text = ' '.join(str(x.get('answer') or '') for x in (history or []))
+            _now_claims = evidence_gate.claims(answer)
+            _hist_claims = set(evidence_gate.claims(_hist_text))
+            _history_ok = bool(_now_claims) and set(_now_claims) <= _hist_claims
             act, why = evidence_gate.decide(used_tool=used_tool, nudged=nudged,
-                                            answer=answer, mode=_mode)
+                                            answer=answer, mode=_mode,
+                                            history_ok=_history_ok)
             gate_log.append({'act': act, 'why': why, 'mode': _mode,
                              'tools_given': bool(agent_v2.use_tools(_mode) or _tool_unlocked)})
             if act == evidence_gate.ACT_NUDGE:
@@ -1387,14 +1368,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                                  '不要在回答里提到这条提示，也不要复述你的工具调用过程。'
                                  + extra})
                 continue
-            if act == evidence_gate.ACT_BLOCK:
-                blocked = True
-                trace.append({'seq': len(trace) + 1, 'kind': 'blocked', 'model_ms': llm_ms,
-                              'content': '未调用任何工具即下结论，已拦下（%s）。模型原文：%s'
-                                         % (why, answer[:300])})
-                answer = ('【未核实，不予作答】这一轮没有调用任何工具去核对事实，结论不可信，已拦下。'
-                          '请重试，或把问题问得更具体一些。')
-                break
+            # ★ 2026-11-03：`ACT_BLOCK`（锁死）整段删除 —— 守卫只提醒一次，不再拦死。
             if not used_tool:
                 if not answer:
                     # 空正文（实测 12 题里 1 次）：**不许把空白交给领导**，另起一次要正文
@@ -1416,11 +1390,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         keep = {'role': 'assistant', 'content': msg.get('content') or '', 'tool_calls': calls}
         messages.append(keep)
         # 不设步数上限，改用周期性软提醒，防止一直翻表不收手
-        if step in (2, 4, 6, 8):
-            messages.append({'role': 'user', 'content':
-                             '第 %d 轮了。**够了就收手**：手上的数能支撑结论就直接给结论；'
-                             '只有结论离不开的那一项还缺，才再查一项。不要为了"把各项凑齐"继续翻表，'
-                             '也不要重复查已经查过的数。不要在回答里提到本条提示。' % step})
+        # ★ 2026-11-03：删掉每 2 轮一句的「够了就收手」催促 —— 那是代码替模型管节奏。
         # finish 是收尾信号：同轮里真实查询先跑完，再另起一次「写汇报」调用
         fins = [c for c in calls if ((c.get('function') or {}).get('name')) == 'finish']
         live = [c for c in calls if ((c.get('function') or {}).get('name')) != 'finish']
@@ -1453,13 +1423,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         # ⚠️ 必须放在**全部 tool 回填之后**：OpenAI 兼容协议要求 assistant(tool_calls) 后
         #    紧跟每个 tool_call_id 的 tool 消息。原来插在两者之间，qwen 能容忍，
         #    deepseek-v4.1 直接 400（"insufficient tool messages following tool_calls message"）。
-        if not fins and step in (2, 4, 6, 8):
-            messages.append({'role': 'user', 'content':
-                             '第 %d 轮了。**现在对照【各类问题的必答项】逐项点一遍手上的数据**：'
-                             '要分类计数的（各类各几个、分别是谁）、要每类判定数据的（条数/卡在哪个节点/停留几天）、'
-                             '要多期数值或同期对比的、要预计完工时间或预计指标的 —— **缺哪一项就再查哪一项**，'
-                             '不要拿"大概齐"的数据去凑。都齐了就直接给结论（不要再重复查已经查过的数）。'
-                             '不要在回答里提到本条提示。' % step})
+        # ★ 2026-11-03：这里原来每 2 轮塞一句「对照【各类问题的必答项】逐项点一遍」——
+        #   必答项随规则一起删了，这句在指空；代码也不再替模型管节奏。
         if fins:
             # 模型自己说「数据够了」→ 由系统另起一次调用写正文（不用它这轮的 content，那是散文草稿）
             answer = _final_answer(_swap_materials(messages, ('answer', 'check')), model,
@@ -1477,6 +1442,15 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     _queried = any(isinstance(t, dict) and t.get('tool') == 'run_sql' for t in trace)
     if config.NUMBER_GUARD_ON and _queried and not blocked:
         _pool = _num_pool(trace)
+        # ★ 2026-11-03：上一轮查到的金额也算有出处（否则复用历史结论会被逼着重写）。
+        for _h in (history or []):
+            for _m in _MONEY_RE.finditer(str(_h.get('answer') or '')):
+                try:
+                    _x = float(_m.group(1))
+                except (TypeError, ValueError):
+                    continue
+                _pool.add(round(_x, 2))
+                _pool.add(round(_x / 10000.0, 2))
         _bad1 = _untraceable_money(answer, _pool)
         if _bad1:
             _msgs = list(messages) + [

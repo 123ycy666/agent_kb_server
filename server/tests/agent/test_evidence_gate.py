@@ -81,8 +81,9 @@ def main() -> int:
         chk('不认断言：' + label, why == '', why)
 
     # ── 3 三动作矩阵（笛卡尔积 16 组 + 查过工具 2 组）
-    #    规则：断言 + 提醒过 → **只有 data 模式拦**。写材料/带文件里的数字是正文内容，
-    #    拦掉会让领导交不了差（这条边界是测出来的，不是想出来的）。
+    #    ★ 2026-11-03（Fred）改：**取消 block**。上一轮查到的数这轮直接引用被判
+    #      「没核实」然后锁死，是拿查数工具的安全阀套智能体。现在只提醒一次，
+    #      提醒过就放行；同会话历史证据命中时直接 pass。
     has = '完成率98.6%'
     no = '好的，我明白了。'
     for mode in ('data', 'general', 'doc', 'office'):
@@ -94,7 +95,8 @@ def main() -> int:
                     else:
                         exp = eg.ACT_NUDGE if mode == 'data' else eg.ACT_PASS
                 elif an_tag == '有断言':
-                    exp = eg.ACT_BLOCK if mode == 'data' else eg.ACT_PASS
+                    # 2026-11-03：提醒过就不再拦（原来 data 模式是 block）
+                    exp = eg.ACT_PASS
                 else:
                     exp = eg.ACT_PASS
                 got, why = eg.decide(used_tool=False, nudged=nudged,
@@ -108,8 +110,19 @@ def main() -> int:
         '没有工具结果支撑' in eg.decide(used_tool=False, nudged=False, answer=has)[1])
     chk('非查数模式：提醒过就不拦（写材料能出得去）',
         eg.decide(used_tool=False, nudged=True, answer=has, mode='general')[0] == eg.ACT_PASS)
-    chk('查数模式：提醒过仍编数 → 拦',
-        eg.decide(used_tool=False, nudged=True, answer=has, mode='data')[0] == eg.ACT_BLOCK)
+    chk('查数模式：提醒过也不再拦死（2026-11-03 取消 block）',
+        eg.decide(used_tool=False, nudged=True, answer=has, mode='data')[0] == eg.ACT_PASS)
+    chk('同一句永远不再返回 block',
+        all(eg.decide(used_tool=False, nudged=True, answer=has, mode=m)[0] != eg.ACT_BLOCK
+            for m in ('data', 'general', 'doc', 'office')))
+    # 历史证据：上一轮查过的数，这一轮直接引用要放行（不提醒、不拦）
+    chk('历史查过 → 直接放行',
+        eg.decide(used_tool=False, nudged=False, answer=has, mode='data',
+                  history_ok=True)[0] == eg.ACT_PASS
+        and '同会话此前查过' in eg.decide(used_tool=False, nudged=False, answer=has,
+                                          mode='data', history_ok=True)[1])
+    chk('claims() 能取出断言片段', eg.claims('完成率98.6%，共12条') == ['98.6%', '12条'],
+        eg.claims('完成率98.6%，共12条'))
 
     # ── 4 内网三条真实 trace 走状态机：必须能自己救回来
     real = [

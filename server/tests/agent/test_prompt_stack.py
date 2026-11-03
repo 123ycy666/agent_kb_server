@@ -35,12 +35,17 @@ def main() -> int:
     print('提示词装配验收（无站点包）')
 
     # ── 1 分层：general 与 data 的差异 ───────────────────────
+    # ★ 2026-11-03：S0 红线不再写死在代码里 —— 传 redlines 才有，不传就没有（空壳）
     g = prompt_stack.build(mode='general', answer_format='作答格式X')
     d = prompt_stack.build(mode='data', answer_format='作答格式X',
                            rules_menu='- 主题A ｜ 说明', priority='优先级X')
+    z = prompt_stack.build(mode='data', redlines='红线X')
     g_ids, d_ids = prompt_stack.layer_ids(g), prompt_stack.layer_ids(d)
-    chk('general 层：S0/L1/L2/S4', g_ids == ['S0', 'L1', 'L2', 'S4'], str(g_ids))
-    chk('data 层：多出 S1 与 S6', d_ids == ['S0', 'S1', 'L1', 'L2', 'S4', 'S6'], str(d_ids))
+    chk('general 层（没传红线）：L1/L2/S4', g_ids == ['L1', 'L2', 'S4'], str(g_ids))
+    chk('data 层：多出 S1 与 S6', d_ids == ['S1', 'L1', 'L2', 'S4', 'S6'], str(d_ids))
+    chk('传了红线才有 S0', prompt_stack.layer_ids(z)[:1] == ['S0'], str(prompt_stack.layer_ids(z)))
+    chk('不传就没有装配说明', '装配说明' not in g['system'])
+    chk('不传就没有 S0', 'S0' not in g['system'])
     chk('任何模式都没有 L3 静态口径', 'L3' not in g_ids and 'L3' not in d_ids)
     chk('S1 文本进了 system', '优先级X' in d['system'])
     chk('S6 规则目录进了 system', '主题A' in d['system'])
@@ -109,11 +114,16 @@ def main() -> int:
 
     # ── 8 装配器可用（不抛异常）────────────────────────────
     sys_text = agent_v2.system('data', agent._system, '2026-10-30',
-                               priority=agent.RULES_PRIORITY,
+
                                # 2026-11-03：COMMON/CHECK 已下线，S4 用替身正文验装配
                                answer_format='作答格式替身')
     chk('system 装配成功且非空', len(sys_text) > 1000, str(len(sys_text)))
-    chk('system 含 S1', 'S1 谁说了算' in sys_text)
+    # ★ 2026-11-03：S0 红线 / S1 优先级常量已删（改成页面 key，默认空）
+    chk('system 不含 S1（空壳）', 'S1 谁说了算' not in sys_text)
+    chk('system 不含 S0（空壳）', 'S0 诚信与安全红线' not in sys_text)
+    chk('system 不含装配说明', '以下是内容按优先级' not in sys_text and 'S0 红线 >' not in sys_text)
+    chk('system 不含硬编码日期句', '今天的日期是' not in sys_text)
+    chk('system 仍含身份（保留）', '随州' in sys_text)
     chk('system 含表清单', 'describe_table' in sys_text)
     chk('system 不含全量字段样例', '（例:' not in sys_text)
     chk('system 长度 < 15000', len(sys_text) < 15000, str(len(sys_text)))

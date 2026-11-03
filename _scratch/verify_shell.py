@@ -115,6 +115,36 @@ for bad in ('S4 作答格式', '规则材料', '【汇报口吻与格式】', '�
     chk('system 不含「%s」' % bad, bad not in sysmsg)
 chk('装配层里没有 S4 / S6', ('S4' not in ids) and ('S6' not in ids), ids)
 
+# ── ⑥′ 空壳：代码里不许再有"我不填也生效"的业务文本 ──────────────────
+for bad in ('S0 诚信与安全红线', 'S1 谁说了算', '以下内容按优先级排列', 'S0 红线 >',
+            '今天的日期是', '【判断标准从哪来】', '第 2 轮了'):
+    chk('system 不含「%s」' % bad, bad not in sysmsg)
+
+from app.secretary import prompt_text as pt, evidence_gate as eg   # noqa: E402
+chk('红线/优先级是页面 key（默认空）',
+    pt.TEXT_KEYS.get('redlines') is not None and pt.TEXT_KEYS.get('priority') is not None
+    and pt.get('redlines', '') == '' and pt.get('priority', '') == '',
+    [pt.get('redlines', ''), pt.get('priority', '')])
+
+# ── ⑥″ 地点：没认出来、也没有上一轮 → 说"按全市取数"，不许说假的沿用 ──
+_sc = time_scope.describe('情况怎么样', today=datetime.date(2026, 11, 5))
+chk('没认地点+无上一轮 → 按全市取数', '按全市取数' in _sc['scope_text'], _sc['scope_text'][:60])
+chk('不说假的「沿用上一轮」', '沿用上一轮' not in _sc['scope_text'])
+_prev = {'period_type': 'month', 'period_key': '202609', 'time_text': '2026年9月',
+         'place': '两水供电所'}
+_sc2 = time_scope.describe('情况怎么样', today=datetime.date(2026, 11, 5), prev=_prev)
+chk('有上一轮就说沿用（并给出改口办法）',
+    '沿用上一轮：两水供电所' in _sc2['scope_text'], _sc2['scope_text'][:60])
+
+# ── ⑥‴ 闸门：不再锁死；历史查过直接放行 ──────────────────────────
+_ans = '完成率98.6%，共12条'
+chk('闸门永不返回 block',
+    all(eg.decide(used_tool=False, nudged=True, answer=_ans, mode=m)[0] != eg.ACT_BLOCK
+        for m in ('data', 'general', 'doc', 'office')))
+chk('历史查过 → 直接放行',
+    eg.decide(used_tool=False, nudged=False, answer=_ans, mode='data',
+              history_ok=True)[0] == eg.ACT_PASS)
+
 # ── ⑦ 路由：补全表接口已下线 ────────────────────────────────────────
 from app.api.v1 import prompts as prompts_api        # noqa: E402
 paths = sorted({getattr(r, 'path', '') for r in prompts_api.router.routes})

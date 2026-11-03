@@ -114,6 +114,8 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
         head = prompt_stack.build(
             mode=mode, identity=_identity, modes=_modes,
             priority=priority,
+            # ★ 2026-11-03：红线也搬到页面（prompt_text.redlines，默认空）
+            redlines=(prompt_text.get('redlines', '') or ''),
             # ★ 2026-11-03：S4「作答格式」下线 —— 不再拼 prompts_data.ANSWER_DATA，
             #   answer_format 由调用方传（空串就整段不注入）。
             answer_format=answer_format or None,
@@ -121,8 +123,10 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
             persona=persona, prefs=prefs)['system']
         if personal_rules:
             head += '\n\n' + personal_rules
-        head += ('\n\n今天的日期是 %s。所有「停留天数 / 截至今天」一律按这一天算，'
-                 '不要拿数据里的时间当今天。' % (today or time.strftime('%Y-%m-%d')))
+        # ★ 2026-11-03（Fred）：硬编码的「今天的日期是…」不再注入 ——
+        #   它是"我不填也生效的字"。要日期就在页面上自己写。
+        if (os.environ.get('SECRETARY_INJECT_DATE') or '').strip() == '1':
+            head += ('\n\n今天的日期是 %s。' % (today or time.strftime('%Y-%m-%d')))
         # 通用模式**不塞**业务码表与数据表目录：那是查数专用上下文，
         # 塞进去会把「写个工作总结」拽回业务轨道 —— 这正是要解开的锁。
         # 反过来，判成 general 之后才发现它要查数的（2026-11-02 内网实测），

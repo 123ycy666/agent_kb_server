@@ -21,6 +21,11 @@ TEXT_KEYS = {
     # ★ 2026-11-03（Fred）：`answer_format`（汇报口吻 + 作答格式）已下线 ——
     #   S4 整段不再注入，这个 key 留着只会让人以为改了有用。原文备份在
     #   docs/08-历史归档/2026-11-03-删除的提示词规则/汇报口吻-自检清单-作答规则.md
+    # ★ 2026-11-03（Fred）：红线与优先级原来写死在代码里，现在搬到页面（默认空 =
+    #   不注入）。原文备份见 docs/08-历史归档/2026-11-03-删除的提示词规则/
+    #   红线-优先级-装配说明-原文.md —— 想要就自己贴回来。
+    'redlines': '红线（S0，纯文本；不填就不注入）',
+    'priority': '谁说了算（S1，纯文本；不填就不注入）',
     'modes': '模式做法（JSON：data / doc / general / office 四段）',
     'keywords': '业务词表 / 题型词表（JSON：produce / data / kb / explain / chat …）',
     # ── 时间地点规则（2026-11-02 搬出代码）──────────────────────────
@@ -128,6 +133,8 @@ def all_texts() -> list[dict]:
     from app.secretary import prompts_data
     defaults = {
         'identity': prompts_data.IDENTITY,
+        'redlines': '',          # 2026-11-03 起默认空（代码原文已移到 docs 备份）
+        'priority': '',          # 同上
         # ★ 2026-11-03：`answer_format` 已下线（S4 汇报口吻 + 交卷检查不再注入）
         'modes': json.dumps(prompts_data.MODE_TEXTS, ensure_ascii=False, indent=2),
         'keywords': '',

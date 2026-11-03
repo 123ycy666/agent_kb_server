@@ -20,8 +20,8 @@ NODES = [
         'id': 'p1', 'no': 1, 'name': '提问', 'desc': '用户原话',
         'materials': [
             {'key': 'base.identity', 'name': '身份', 'editable': True},
-            {'key': 'base.redlines', 'name': '红线', 'editable': False, 'always': True},
-            {'key': 'base.priority', 'name': '优先级', 'editable': False, 'always': True},
+            {'key': 'base.redlines', 'name': '红线', 'editable': True},
+            {'key': 'base.priority', 'name': '优先级', 'editable': True},
         ],
     },
     {
@@ -112,11 +112,12 @@ def _code_text(key: str) -> str:
         from app.secretary import prompt_text, prompts_data
         return prompt_text.get('identity', prompts_data.IDENTITY)
     if key == 'base.redlines':
-        from app.secretary import prompt_stack
-        return prompt_stack.L0_REDLINES
+        # 2026-11-03：代码常量已删，改成页面 key（默认空 → 页面显示"（空）"）
+        from app.secretary import prompt_text
+        return prompt_text.get('redlines', '') or '（空：页面上填了才注入）'
     if key == 'base.priority':
-        from app.secretary import agent
-        return agent.RULES_PRIORITY
+        from app.secretary import prompt_text
+        return prompt_text.get('priority', '') or '（空：页面上填了才注入）'
     if key == 'modes.text':
         import json as _json
         from app.secretary import prompt_text, prompts_data
@@ -202,6 +203,8 @@ WHEN = {
 # 这几份正文存在 prompt_text 表里（页面可改，没有覆盖就用代码常量）
 TEXT_KEY = {
     'base.identity': 'identity',
+    'base.redlines': 'redlines',
+    'base.priority': 'priority',
     'modes.text': 'modes',
     'modes.keywords': 'keywords',
 }
