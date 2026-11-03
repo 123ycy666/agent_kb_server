@@ -29,7 +29,8 @@ NODES = [
     {
         'id': 'p3', 'no': 3, 'name': '纠错', 'desc': '错别字 / 单位 / 站名改成库里的标准名',
         'materials': [
-            {'key': 'nc.typo', 'name': '② 纠错词典', 'editable': False},
+            # ★ 2026-11-03（Fred 现场要求）：纠错词典要能实时改 —— 点进去就是增删改查
+            {'key': 'nc.typo', 'name': '② 纠错词典', 'editable': True},
         ],
     },
     {
@@ -41,7 +42,8 @@ NODES = [
     {
         'id': 'p5', 'no': 5, 'name': '算时间地点', 'desc': '上个月 → 2026年10月；没说就默认上一个月 / 全市',
         'materials': [
-            {'key': 'time.scope', 'name': '⑤ 时间地点规则', 'editable': False},
+            # ★ 2026-11-03（Fred 现场要求）：时间地点规则要能实时改（六个键，保存即生效）
+            {'key': 'time.scope', 'name': '⑤ 时间地点规则', 'editable': True},
         ],
     },
     {
@@ -191,9 +193,9 @@ WHEN = {
     'semantic.tables': '干活循环里（工具目录）',
     'semantic.columns': '不进提示词：describe_table 按需取',
     'semantic.codes': '干活循环里（业务码表）',
-    'nc.typo': '预处理：代码读，不进提示词',
-    'mat.complete': '预处理：代码读，不进提示词',
-    'time.scope': '预处理：代码算，不进提示词',
+    'nc.typo': '预处理：代码读；页面可增删改，60 秒内生效',
+    'mat.complete': '预处理：代码查表，不进提示词；命中只作参考',
+    'time.scope': '预处理：代码算；六个键在页面上可改，保存即生效',
     'modes.keywords': '已不参与链路（词表匹配已删）',
 }
 

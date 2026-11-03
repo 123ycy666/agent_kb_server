@@ -187,6 +187,56 @@ export default function Prompts() {
   const setCompCell = (i: number, k: string, val: any) =>
     setCompRows((v) => v.map((row, idx) => (idx === i ? { ...row, [k]: val } : row)))
 
+  // ── 时间地点规则（2026-11-03 现场要求：要能实时改）────────────────
+  // 六个键存在 prompt_text 里（time_*），页面直接编辑 + 保存，代码只留正则/解析。
+  const [timeOpen, setTimeOpen] = useState(false)
+  const [timeItems, setTimeItems] = useState<any[]>([])
+  const [timeSaving, setTimeSaving] = useState(false)
+
+  const loadTimeRules = async () => {
+    try {
+      const r: any = await http.get('/prompts/texts')
+      const items = (r.items || []).filter((x: any) => String(x.key).startsWith('time_'))
+      setTimeItems(items)
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const saveTimeRules = async () => {
+    setTimeSaving(true)
+    let ok = 0
+    try {
+      for (const it of timeItems) {
+        const r: any = await http.put(`/prompts/texts/${it.key}`, { body: it.body })
+        if (r?.ok) ok += 1
+        else message.error(`${it.name}：${r?.error || '保存失败'}`)
+      }
+      if (ok) message.success(`已保存 ${ok} 项，下一轮问答生效`)
+      await loadTree()
+      await loadTimeRules()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTimeSaving(false)
+    }
+  }
+
+  const resetTimeRule = async (it: any) => {
+    try {
+      const r: any = await http.delete(`/prompts/texts/${it.key}`)
+      if (r?.ok) {
+        message.success('已恢复默认')
+        await loadTimeRules()
+        await loadTree()
+      } else {
+        message.error(r?.error || '恢复失败')
+      }
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
   const slot = current ? SLOT_KEYS[current.key] : ''
 
   const loadTree = async () => {
@@ -211,6 +261,18 @@ export default function Prompts() {
   )
 
   const openMaterial = async (m: Mat) => {
+    // 纠错词典：走词典抽屉（增删改查，60 秒生效）
+    if (m.key === 'nc.typo') {
+      setLexOpen(true)
+      loadLex('typo', '')
+      return
+    }
+    // 时间地点规则：六个键实时编辑
+    if (m.key === 'time.scope') {
+      setTimeOpen(true)
+      await loadTimeRules()
+      return
+    }
     // 补全表：单独的抽屉（整表编辑 + 保存）
     if (m.key === 'mat.complete') {
       setCompOpen(true)
@@ -895,6 +957,50 @@ export default function Prompts() {
             </Space>
           </Card>
         ))}
+      </Drawer>
+
+      <Drawer
+        title="时间地点规则（保存即生效）"
+        width={880}
+        open={timeOpen}
+        onClose={() => setTimeOpen(false)}
+        extra={
+          <Button type="primary" loading={timeSaving} onClick={saveTimeRules}>
+            保存全部
+          </Button>
+        }
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="六项都是 JSON：前三个管时间（怎么说 = 偏移几个月），后三个管地点（哪些说法算全市 / 单位名要去掉的头尾）。代码只负责解析和比较。"
+        />
+        {timeItems.map((it, i) => (
+          <Card
+            key={it.key}
+            size="small"
+            style={{ marginBottom: 10 }}
+            title={`${it.name}${it.overridden ? '' : '（当前用代码默认值）'}`}
+            extra={
+              <Space>
+                <Button size="small" onClick={() => resetTimeRule(it)}>
+                  恢复默认
+                </Button>
+              </Space>
+            }
+          >
+            <Input.TextArea
+              value={it.body}
+              autoSize={{ minRows: 3, maxRows: 12 }}
+              style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+              onChange={(e) =>
+                setTimeItems((v) => v.map((x, idx) => (idx === i ? { ...x, body: e.target.value } : x)))
+              }
+            />
+          </Card>
+        ))}
+        {timeItems.length === 0 && <Empty description="没有读到时间地点规则的键" />}
       </Drawer>
     </div>
   )
