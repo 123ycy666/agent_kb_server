@@ -56,12 +56,9 @@ TOOLS = [
         'parameters': {'type': 'object', 'properties': {'keyword': {'type': 'string'}}, 'required': ['keyword']}}},
     {'type': 'function', 'function': {
         'name': 'run_sql',
-        'description': '在只读业务库执行一条 SELECT（只允许业务字典里的表；不支持分号与注释，最多返回 200 行）。'
-                       '★ 要查多个互不依赖的数时，请在**同一次回复里一次发出多条 run_sql**'
-                       '（系统会并发执行，一轮就全拿到）；不要一条一条分多轮来 —— 每多一轮就多花几秒。'
-                       '★ 调工具的那几轮**只给工具调用，不要写任何说明文字**（不复述在查什么、不解释下一步、'
-                       '不描述结果）。**数据查够后就不要再写了，只回一句「数据已查全」** —— '
-                       '最终汇报会另外让你写；自己在这轮写汇报会白烧十几秒，而且系统不用那段文字。',
+        'description': '在只读业务库执行 SELECT（只允许业务字典里的表；不支持分号与注释，最多返回 200 行）。'
+                       '★ sql 可以传**字符串或字符串数组**：互不依赖的查询一次全传进来，框架内部并发跑。'
+                       '★ 调工具的那几轮**只给工具调用，不要写任何说明文字**；数据查够后就只回一句「数据已查全」。',
         'parameters': {'type': 'object', 'properties': {'sql': {'type': 'string'}}, 'required': ['sql']}}},
     # ★ 2026-10-30：字段明细与规则条目改成"按需取"，不再全塞进 system。
     {'type': 'function', 'function': {
@@ -793,6 +790,19 @@ def _clean_answer(text):
 
 
 
+def _one_sql(sql):
+    """跑一条查询；0 行时把「空集就是答案」说死（模型会摘条件凑数，见下）。"""
+    r = tools_db.run_sql(sql or '')
+    try:
+        if not r.get('error') and not (r.get('rows') or []):
+            r = dict(r)
+            r['空集提示'] = ('这是 0 行 = 空集，空集就是答案。不许摘掉时间 / 状态 / 范围条件再查一遍凑数字；'
+                            '确实要改条件，必须在回答里写明改了什么、为什么。')
+    except Exception:                              # noqa: BLE001
+        pass
+    return r
+
+
 def execute(name, args):
     if name == 'kb_search':
         return tools_kb.kb_search(args.get('query', ''), int(args.get('top_k') or 3))
@@ -805,17 +815,26 @@ def execute(name, args):
         # 2026-10-30：规则不再靠向量检索《判据规则》，改成按主题/别名精确取。
         return get_rule(args.get('topic', ''), args.get('key', ''))
     if name == 'run_sql':
-        r = tools_db.run_sql(args.get('sql', ''))        # 0 行 = 空集。模型拿到空结果会忍不住摘掉时间/状态条件再查一遍凑数
-        # （实测：带年份查出 0 行 → 去掉年份 → 148.07 万 → 负余额）。
-        # 在它**正想放宽的那一刻**把话说死，比写在几百行外的规则文档里管用。
-        try:
-            if not r.get('error') and not (r.get('rows') or []):
-                r = dict(r)
-                r['空集提示'] = ('这是 0 行 = 空集，空集就是答案。不许摘掉时间 / 状态 / 范围条件再查一遍凑数字；'
-                                '确实要改条件，必须在回答里写明改了什么、为什么。')
-        except Exception:                           # noqa: BLE001
-            pass
-        return r
+        # 2026-11-05：sql 允许传数组 —— 一次调用带多条互不依赖的查询，框架内部并发跑。
+        # 为什么要这样：模型经常一条一条发（每轮一条），8 轮问数就是这么来的；
+        # 数组参数让"一次查全"不依赖它发多个 tool_call。
+        _sql = args.get('sql')
+        # 模型常把数组当成 JSON 字符串传（'["SELECT …","SELECT …"]'）——这里认下来，
+        # 不然它一次想发多条会被当成一条非法 SQL 报"只允许 SELECT 查询"。
+        if isinstance(_sql, str) and _sql.strip().startswith('['):
+            try:
+                _sql = json.loads(_sql)
+            except Exception:                      # noqa: BLE001 - 解析不了就按单条 SQL 处理
+                pass
+        if isinstance(_sql, list):
+            import concurrent.futures as _cf
+            _items = [str(x) for x in _sql if str(x or '').strip()][:8]
+            if not _items:
+                return {'error': 'sql 数组是空的'}
+            with _cf.ThreadPoolExecutor(max_workers=min(6, len(_items))) as _ex:
+                _outs = list(_ex.map(_one_sql, _items))
+            return {'multi': True, 'count': len(_outs), 'results': _outs}
+        return _one_sql(_sql)
     # ── 文件类（2026-11-05）────────────────────────────────────────────
     if name == 'read_file':
         from app.secretary import tools_file
@@ -1590,6 +1609,22 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # （实测 dsv4 禁不掉，只能代码层兜）。**必须在 qtype 与页面之前** —— 页面是从 answer 生成的，
     # 洗晚了页面里还是脏的。
     answer = _clean_answer(answer)
+    # 简洁闸（2026-11-05）：问数轮按「一两句话汇报」的规则落地 —— 超长就压一次。
+    # 规则在页面上（answer 材料），但实测模型会无视长度要求，这里兜一道。
+    if _route['use_db'] and len(re.sub(r'\s', '', answer or '')) > 200:
+        _bmsgs = [{'role': 'system', 'content': _answer_system(messages, _slots)},
+                  {'role': 'assistant', 'content': answer},
+                  {'role': 'user', 'content':
+                   '太长了。按汇报格式压到 120 字以内：先用一句话给结论（带关键数字），'
+                   '最多再补一句提醒；不要分节、不要编号、不要复述口径。只输出正文。'}]
+        try:
+            _short = _final_answer(_bmsgs, model, max_tokens=400, trace=None)
+        except Exception:                                  # noqa: BLE001
+            _short = ''
+        if _short and len(re.sub(r'\s', '', _short)) < len(re.sub(r'\s', '', answer)):
+            answer = _clean_answer(_short)
+            trace.append({'seq': len(trace) + 1, 'kind': 'brevity_guard',
+                          'result': {'kept': 'rewrite', 'chars': len(answer)}})
     # 数字闸（对账）：回答里的金额必须能在**本轮** SQL 结果或其确定性派生里找到出处。
     # 找不到就带着清单重问一次；第二次仍对不上就保留「错得更少」的那版，并把对账结果记进 trace。
     _queried = any(isinstance(t, dict) and t.get('tool') == 'run_sql' for t in trace)

@@ -24,6 +24,23 @@ DESK = Path(os.path.expanduser('~')) / 'Desktop' / '测试'
 DESK2 = Path(os.path.expanduser('~')) / 'Desktop' / '转正报告'
 OUT = ROOT / 'output'
 UID = 1
+LLM: list = []          # 每次模型调用的耗时/参数，报告用
+
+
+def install_timer() -> None:
+    """包一层 _chat，记下每次模型调用的耗时与提示词字数。"""
+    orig = agent._chat
+
+    def timed(msgs, model, **kw):
+        t0 = time.time()
+        r = orig(msgs, model, **kw)
+        LLM.append({'ms': int((time.time() - t0) * 1000),
+                    'use_tools': bool(kw.get('use_tools')),
+                    'max_tokens': kw.get('max_tokens'),
+                    'prompt_chars': sum(len(str(m.get('content') or '')) for m in msgs)})
+        return r
+
+    agent._chat = timed
 
 
 def upload(path: Path) -> dict:
@@ -56,8 +73,11 @@ def tool_calls(trace) -> list[dict]:
     out = []
     for t in trace or []:
         if isinstance(t, dict) and t.get('kind') == 'tool':
+            res = t.get('result') or {}
             out.append({'tool': t.get('tool'), 'args': t.get('args') or {},
-                        'ms': t.get('ms'), 'summary': _sum(t.get('result') or {})})
+                        'ms': t.get('ms'), 'summary': _sum(res),
+                        'ok': not bool(res.get('error')),
+                        'error': res.get('error')})
     return out
 
 
@@ -91,6 +111,7 @@ def run_one(sc: dict) -> dict:
             return {'id': sc['id'], 'title': sc['title'],
                     'error': '上传失败 %s: %s' % (name, exc)}
     t0 = time.time()
+    LLM.clear()
     try:
         r = agent.ask(sc['q'], user_id=UID, user_code='admin',
                       session_id='live_%s_%d' % (sc['id'], int(time.time())),
@@ -106,11 +127,13 @@ def run_one(sc: dict) -> dict:
     return {'id': sc['id'], 'title': sc['title'], 'input': sc['q'], 'files': ups,
             'route': route, 'tools_given': toolset, 'system': sysinfo,
             'calls': tool_calls(tr), 'elapsed_s': round(time.time() - t0, 1),
+            'llm': list(LLM),
             'answer': r.get('answer') or '', 'steps': r.get('steps')}
 
 
 def main() -> int:
     OUT.mkdir(exist_ok=True)
+    install_timer()
     rows = []
     for sc in SCEN:
         print('[run]', sc['id'], flush=True)
