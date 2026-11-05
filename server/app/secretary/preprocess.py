@@ -116,8 +116,7 @@ def complete(question: str) -> dict:
     else:
         out['text'] = q + _DEFAULT_ASK
     out['changed'] = True
-    # 原问题和补后问题都去表里找（第 4 步：两个都查，命中原样返回）
-    out['hits'] = hits(q) + [h for h in hits(out['text'])
-                             if (h['kind'], h['match'], h['fill']) not in
-                             {(x['kind'], x['match'], x['fill']) for x in hits(q)}]
+    # 只拿**原话**查表（2026-11-04）：补问法后那句是代码造的，用它去命中等于自己给自己下套
+    # ——「上个月线损率」被补成「…线损率情况怎么样」，就命中「情况怎么样」那条兜底。
+    out['hits'] = hits(q)
     return out

@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import re
+
 NODES = [
     {
         'id': 'p1', 'no': 1, 'name': '接手这句话', 'desc': '用户原话 + 最近几轮问答',
@@ -201,12 +203,15 @@ TEXT_KEY = {
 
 
 def tree() -> list[dict]:
-    """节点树 + 每份材料的字数/时机，直接给前端渲染。"""
+    """节点树 + 每份材料的字数/时机/节数，直接给前端渲染。"""
+    from app.secretary import prompt_material
     out = []
     for node in NODES:
         mats = []
         for m in node.get('materials') or []:
             body = material_body(m['key'])
+            slot = m['key'].split('.', 1)[1] if m['key'].startswith('mat.') else ''
+            cnt = prompt_material.counts(slot) if slot in prompt_material.SLOTS else {}
             mats.append({
                 'key': m['key'],
                 'name': m['name'],
@@ -216,8 +221,191 @@ def tree() -> list[dict]:
                 'textKey': TEXT_KEY.get(m['key'], ''),
                 'chars': len(body or ''),
                 'body': body or '',
+                # 2026-11-05：页面要显示「N 节 / 必带 M 节 / 已删 K 节」
+                'slot': slot,
+                'sections': cnt.get('sections', 0),
+                'pinned': cnt.get('pinned', 0),
+                'deleted': cnt.get('deleted', 0),
             })
         item = dict(node)
         item['materials'] = mats
         out.append(item)
     return out
+
+
+def _esc(body: str) -> str:
+    """正文里以 # 开头的行前面加反斜杠 —— 否则导出后会被当成新的节/块（2026-11-05）。"""
+    return '\n'.join(('\\' + ln) if ln.startswith('#') else ln
+                     for ln in str(body or '').split('\n'))
+
+
+def _cell(v) -> str:
+    """表格单元格：换行和竖线要转义，否则一行被截断、数据丢失。"""
+    return (str(v or '').replace('\\', '\\\\').replace('\n', '\\n').replace('|', '\\|'))
+
+
+def _uncell(v: str) -> str:
+    return (str(v or '').replace('\\n', '\n').replace('\\|', '|')
+            .replace('\\\\', '\\'))
+
+
+def export_markdown(slot: str = '', only_group: bool = False) -> str:
+    """把提示词导成 markdown（2026-11-05）。
+
+    slot 为空 = 全部材料 + 全部文本键；给 slot 就只导那一份。
+    必带节标「（必带）」，按需取标「（按需取）」—— 导出去给人看时，一眼知道哪些会真进提示词。
+    """
+    from app.secretary import prompt_material, prompt_text
+    slots = [slot] if slot in prompt_material.SLOTS else list(prompt_material.SLOTS)
+    out = []
+    for s in slots:
+        rows = prompt_material.sections(s)
+        if not rows:
+            continue
+        out.append('# %s' % prompt_material.SLOT_NAMES.get(s, s))
+        out.append('')
+        for r in rows:
+            mark = '（必带）' if r.get('pinned') else '（按需取）'
+            out.append('## %s %s' % (str(r.get('section') or '').strip(), mark))
+            out.append('')
+            out.append(_esc(str(r.get('body') or '').strip()))
+            out.append('')
+    if not only_group:
+        for it in prompt_text.all_texts():
+            body = str(it.get('body') or '')
+            if not body.strip():
+                continue
+            out.append('# %s（%s）' % (it.get('name') or it.get('key'), it.get('key')))
+            out.append('')
+            out.append(_esc(body.strip()))
+            out.append('')
+        from app.secretary import complete_rules
+        rows = complete_rules.rows()
+        if rows:
+            out.append('# 补全表')
+            out.append('')
+            out.append('| 类型 | 匹配 | 补成 | 优先级 |')
+            out.append('|---|---|---|---|')
+            for r in rows:
+                kind = '归一' if str(r.get('kind')) == 'norm' else '补缺'
+                out.append('| %s | %s | %s | %s |' % (
+                    kind, _cell(r.get('match_text')), _cell(r.get('fill_text')),
+                    r.get('priority') or 0))
+            out.append('')
+    return ('\n'.join(out).strip() + '\n') if out else ''
+
+
+def import_markdown(text: str, user: str = 'import') -> dict:
+    """把 markdown 导回库（2026-11-05）。格式与 `export_markdown` 完全对称：
+
+        # 查数口径 / 判定标准 / 作答规则 / 自检清单   → 材料，`## 标题 （必带）」分节
+        # 身份（identity）                        → 文本键，整块正文
+        # 补全表                                  → markdown 表格，类型/匹配/补成/优先级
+
+    只覆盖文件里出现的块，没出现的块一行不动。返回每块写了什么。
+    """
+    from app.secretary import complete_rules, prompt_material, prompt_text
+    lines = str(text or '').replace('\r\n', '\n').split('\n')
+    blocks = []
+    cur = None
+    for ln in lines:
+        if ln.startswith('# '):
+            cur = {'title': ln[2:].strip(), 'lines': []}
+            blocks.append(cur)
+        elif cur is not None:
+            cur['lines'].append(ln)
+    if not blocks:
+        return {'error': '没找到以 "#" 开头的块，格式见导出的文件'}
+    slot_by_name = {v: k for k, v in prompt_material.SLOT_NAMES.items()}
+    res = {'materials': {}, 'texts': [], 'complete': 0, 'skipped': []}
+
+    def _norm_title(t: str) -> str:
+        """去掉开头的「⑤」「3.」这类序号，材料标题才对得上。"""
+        return re.sub(r'^[①②③④⑤⑥⑦⑧⑨⑩\s\d.、]+', '', str(t or '')).strip()
+
+
+    def _un(ln: str) -> str:
+        return ln[1:] if ln.startswith('\\#') else ln
+
+    for b in blocks:
+        title, body_lines = b['title'], b['lines']
+        key = ''
+        if title.endswith('）') and '（' in title:
+            key = title[title.rfind('（') + 1:-1].strip()
+        if key and key in prompt_text.TEXT_KEYS:
+            body = '\n'.join(_un(x) for x in body_lines).strip()
+            if not body:
+                res['skipped'].append(title + '（空）')
+                continue
+            got = prompt_text.save(key, body, user=user)
+            if got.get('ok'):
+                res['texts'].append(key)
+            else:
+                res['skipped'].append('%s：%s' % (title, got.get('error')))
+            continue
+        if title in slot_by_name or _norm_title(title) in slot_by_name:
+            slot_code = slot_by_name.get(title) or slot_by_name[_norm_title(title)]
+            rows, sec = [], None
+            for ln in body_lines:
+                if ln.startswith('## '):
+                    head = ln[3:].strip()
+                    pinned = '（按需取）' not in head
+                    sec = {'section': head.replace('（必带）', '').replace('（按需取）', '').strip(),
+                           'body': '', 'pinned': pinned}
+                    rows.append(sec)
+                elif sec is not None:
+                    sec['body'] += _un(ln) + '\n'
+            rows = [{'section': r['section'], 'body': r['body'].strip(),
+                     'sort_no': i, 'pinned': r['pinned']} for i, r in enumerate(rows)]
+            rows = [r for r in rows if r['body']]
+            if not rows:
+                res['skipped'].append(title + '（空）')
+                continue
+            # 同名的节原地更新（id 不变），不然每导一次就多出一堆软删行（2026-11-05）。
+            have = {str(r.get('section') or '').strip(): r.get('id')
+                    for r in prompt_material.sections(slot_code)}
+            for r in rows:
+                r['id'] = have.get(r['section'])
+            got = prompt_material.replace_slot(slot_code, rows, user=user)
+            if got.get('ok'):
+                res['materials'][slot_code] = len(rows)
+            else:
+                res['skipped'].append('%s：%s' % (title, got.get('error')))
+            continue
+        if title.startswith('补全表'):
+            items = []
+            for ln in body_lines:
+                s = ln.strip()
+                if not s.startswith('|'):
+                    continue
+                cells = [c.strip() for c in
+                         s.strip('|').replace('\\|', '\u0001').split('|')]
+                cells = [c.replace('\u0001', '\\|') for c in cells]
+                if len(cells) < 3 or '匹配' in cells[1]:
+                    continue
+                if set(cells[0]) <= set('-: '):
+                    continue
+                pri = 0
+                try:
+                    pri = int(cells[3]) if len(cells) > 3 else 0
+                except ValueError:
+                    pri = 0
+                items.append({'kind': 'norm' if cells[0] in ('归一', 'norm') else 'fill',
+                              'match_text': _uncell(cells[1]), 'fill_text': _uncell(cells[2]),
+                              'priority': pri or (len(items) + 1) * 10})
+            if not items:
+                res['skipped'].append('补全表（空）')
+                continue
+            # 同一句话的条目原地更新，不每导一次就多出三条软删行（2026-11-05）。
+            have = {str(r.get('match_text') or '').strip(): r.get('id')
+                    for r in complete_rules.rows()}
+            for it in items:
+                it['id'] = have.get(it['match_text'].strip())
+            got = complete_rules.save(items)
+            if got.get('ok'):
+                res['complete'] = len(items)
+            else:
+                res['skipped'].append('补全表：%s' % got.get('error'))
+            continue
+        res['skipped'].append(title + '（认不出是什么块）')
+    return {'ok': True, **res}

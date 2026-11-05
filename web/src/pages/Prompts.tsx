@@ -10,6 +10,7 @@ import {
   Input,
   InputNumber,
   message,
+  Modal,
   Popconfirm,
   Select,
   Space,
@@ -19,7 +20,7 @@ import {
   Typography,
 } from 'antd'
 import { EditOutlined, LockOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons'
-import { http } from '../api/client'
+import { http, getToken } from '../api/client'
 
 const { Title, Text } = Typography
 
@@ -30,6 +31,10 @@ type Mat = {
   always?: boolean
   when?: string
   textKey?: string
+  slot?: string
+  sections?: number
+  pinned?: number
+  deleted?: number
   chars: number
   body: string
 }
@@ -63,6 +68,8 @@ export default function Prompts() {
   const [open, setOpen] = useState(false)
   const [current, setCurrent] = useState<Mat | null>(null)
   const [sections, setSections] = useState<Section[]>([])
+  const [deadSections, setDeadSections] = useState<Section[]>([])
+  const [secQ, setSecQ] = useState('')
   const [saving, setSaving] = useState(false)
   const [importText, setImportText] = useState('')
   const [showImport, setShowImport] = useState(false)
@@ -70,6 +77,7 @@ export default function Prompts() {
   //   这张表就是用户体验，直接在页面上迭代。
   const [compOpen, setCompOpen] = useState(false)
   const [compRows, setCompRows] = useState<any[]>([])
+  const [compDel, setCompDel] = useState<any[]>([])
   const [compSaving, setCompSaving] = useState(false)
   const [txtOpen, setTxtOpen] = useState(false)
   const [txtKey, setTxtKey] = useState('')
@@ -151,14 +159,24 @@ export default function Prompts() {
     try {
       const r: any = await http.get('/prompts/complete')
       setCompRows((r.rows || []).map((x: any) => ({
+        id: x.id,
         kind: x.kind || 'norm',
         match_text: x.match_text || '',
         fill_text: x.fill_text || '',
         priority: x.priority ?? 0,
       })))
+      setCompDel(r.deleted || [])
     } catch (e) {
       message.error((e as Error).message)
     }
+  }
+
+  const restoreComp = async (row: any) => {
+    const r: any = await http.post(`/prompts/complete/${row.id}/restore`)
+    if (r?.ok) {
+      message.success('已恢复')
+      await loadComplete()
+    } else message.error(r?.error || '恢复失败')
   }
 
   const saveComplete = async () => {
@@ -205,10 +223,50 @@ export default function Prompts() {
     loadTree()
   }, [])
 
+  const [importOpen, setImportOpen] = useState(false)
+  const [importBody, setImportBody] = useState('')
+  const [importing, setImporting] = useState(false)
+
+  const doImportAll = async () => {
+    if (!importBody.trim()) return
+    setImporting(true)
+    try {
+      const r: any = await http.post('/prompts/import', { text: importBody })
+      if (r?.ok) {
+        const parts = [
+          ...Object.entries(r.materials || {}).map(([k, v]) => `${k} ${v} 节`),
+          ...(r.texts || []).map((k: string) => `文本键 ${k}`),
+          r.complete ? `补全表 ${r.complete} 条` : '',
+          ...(r.skipped || []).map((x: string) => `跳过：${x}`),
+        ].filter(Boolean)
+        message.success(`已导入：${parts.join('，') || '没有变化'}`)
+        setImportOpen(false)
+        setImportBody('')
+        await loadTree()
+      } else message.error(r?.error || '导入失败')
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const pickFile = (file: File | null) => {
+    if (!file) return
+    const fr = new FileReader()
+    fr.onload = () => setImportBody(String(fr.result || ''))
+    fr.readAsText(file, 'utf-8')
+  }
+
   const totalChars = useMemo(
     () => nodes.reduce((s, n) => s + n.materials.reduce((a, m) => a + m.chars, 0), 0),
     [nodes]
   )
+
+  const pinnedCount = sections.filter((s) => s.pinned !== false).length
+  const pinnedChars = sections
+    .filter((s) => s.pinned !== false)
+    .reduce((a, s) => a + (s.body || '').length, 0)
 
   const openMaterial = async (m: Mat) => {
     // 纠错词典：走词典抽屉（增删改查，60 秒生效）
@@ -232,17 +290,22 @@ export default function Prompts() {
     setOpen(true)
     setShowImport(false)
     setImportText('')
+    setSecQ('')
     const key = SLOT_KEYS[m.key]
     if (key) {
       try {
         const r: any = await http.get(`/prompts/material/${key}`)
         setSections(r.sections || [])
+        const dd: any = await http.get(`/prompts/material/${key}/deleted`)
+        setDeadSections(dd.rows || [])
       } catch (e) {
         setSections([])
+        setDeadSections([])
         message.error((e as Error).message)
       }
     } else {
       setSections([])
+      setDeadSections([])
     }
   }
 
@@ -268,16 +331,21 @@ export default function Prompts() {
     if (!slot || !importText.trim()) return
     setSaving(true)
     try {
-      const r: any = await http.post(`/prompts/material/${slot}/import`, { text: importText })
+      const text = importText.trim().startsWith('#')
+        ? importText
+        : `# ${current?.name || slot}\n\n${importText}`
+      const r: any = await http.post('/prompts/import', { text })
       if (r?.ok) {
-        message.success(`已按标题切成 ${r.sections} 节并覆盖`)
+        message.success(`已导入 ${r.materials?.[slot] ?? 0} 节`)
         const rr: any = await http.get(`/prompts/material/${slot}`)
         setSections(rr.sections || [])
+        const dd: any = await http.get(`/prompts/material/${slot}/deleted`)
+        setDeadSections(dd.rows || [])
         setShowImport(false)
         setImportText('')
         await loadTree()
       } else {
-        message.error(r?.error || '导入失败')
+        message.error(r?.skipped?.join('；') || r?.error || '导入失败')
       }
     } catch (e) {
       message.error((e as Error).message)
@@ -297,8 +365,59 @@ export default function Prompts() {
         }
       }
       setSections((prev) => prev.filter((_, j) => j !== i))
-      message.success('已删除（真删，get_rule 也取不到了）')
+      message.success('已删除（软删，可在「已删除」里恢复）')
+      if (slot) {
+        const dd: any = await http.get(`/prompts/material/${slot}/deleted`)
+        setDeadSections(dd.rows || [])
+      }
       await loadTree()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const restoreSection = async (s: Section) => {
+    if (!s.id) return
+    const r: any = await http.post(`/prompts/material/section/${s.id}/restore`)
+    if (r?.ok) {
+      message.success('已恢复')
+      if (slot) {
+        const rr: any = await http.get(`/prompts/material/${slot}`)
+        setSections(rr.sections || [])
+        const dd: any = await http.get(`/prompts/material/${slot}/deleted`)
+        setDeadSections(dd.rows || [])
+      }
+      await loadTree()
+    } else message.error(r?.error || '恢复失败')
+  }
+
+  const moveSection = (i: number, dir: -1 | 1) => {
+    const j = i + dir
+    if (j < 0 || j >= sections.length) return
+    setSections((prev) => {
+      const next = [...prev]
+      const [x] = next.splice(i, 1)
+      next.splice(j, 0, x)
+      return next
+    })
+  }
+
+  const exportMd = async (which = '') => {
+    try {
+      const url = `/api/v1/prompts/export${which ? `?slot=${which}` : ''}`
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${getToken() || ''}` } })
+      if (!res.ok) {
+        message.error('导出失败')
+        return
+      }
+      const text = await res.text()
+      const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `提示词${which ? `-${which}` : ''}.md`
+      a.click()
+      URL.revokeObjectURL(a.href)
+      message.success('已导出')
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -406,6 +525,8 @@ export default function Prompts() {
         <Button onClick={() => { setLexOpen(true); loadLex('typo', '') }}>纠错词典</Button>
         <Button onClick={() => { setCompOpen(true); loadComplete() }}>补全表</Button>
         <Button onClick={() => { setMetaOpen(true); loadMeta() }}>数据表</Button>
+        <Button onClick={() => exportMd()}>导出 md</Button>
+        <Button onClick={() => { setImportBody(''); setImportOpen(true) }}>导入 md</Button>
         <Tag color="blue">合计 {totalChars.toLocaleString()} 字</Tag>
       </Space>
 
@@ -454,6 +575,8 @@ export default function Prompts() {
                       </Button>
                       <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
                         {m.when || '—'}
+                        {m.sections ? `　｜ ${m.sections} 节（必带 ${m.pinned}）` : ''}
+                        {m.deleted ? `　｜ 已删 ${m.deleted}` : ''}
                       </div>
                     </span>
                   ))}
@@ -487,6 +610,7 @@ export default function Prompts() {
         extra={
           slot ? (
             <Space>
+              <Button onClick={() => exportMd(slot)}>导出 md</Button>
               <Button onClick={() => setShowImport((v) => !v)} icon={<UploadOutlined />}>
                 上传 md 覆盖
               </Button>
@@ -539,7 +663,7 @@ export default function Prompts() {
               </Card>
             )}
 
-            <Space style={{ marginBottom: 12 }}>
+            <Space style={{ marginBottom: 12 }} wrap>
               <Button
                 onClick={() =>
                   setSections((prev) => [
@@ -550,8 +674,16 @@ export default function Prompts() {
               >
                 新增一节
               </Button>
+              <Input
+                size="small"
+                placeholder="搜标题或正文"
+                value={secQ}
+                allowClear
+                onChange={(e) => setSecQ(e.target.value)}
+                style={{ width: 200 }}
+              />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                自己加判断类型（如「十三、新的审批条件」），填完点右上角「保存」
+                共 {sections.length} 节，必带 {pinnedCount} 节；必带合计 {pinnedChars.toLocaleString()} 字（这些会真进提示词）
               </Text>
             </Space>
 
@@ -559,9 +691,17 @@ export default function Prompts() {
               <Empty description="这一份还是空的，可以上传 md 或直接在这里写" />
             ) : null}
 
-            {sections.map((s, i) => (
+            {sections
+              .map((s, i) => ({ s, i }))
+              .filter(({ s }) => !secQ.trim()
+                || s.section.includes(secQ.trim()) || s.body.includes(secQ.trim()))
+              .map(({ s, i }) => (
               <div key={i} style={{ marginBottom: 16 }}>
                 <Space align="center" wrap>
+                  <Button size="small" type="text" disabled={i === 0}
+                          onClick={() => moveSection(i, -1)}>↑</Button>
+                  <Button size="small" type="text" disabled={i === sections.length - 1}
+                          onClick={() => moveSection(i, 1)}>↓</Button>
                   <Input
                     size="small"
                     value={s.section}
@@ -588,7 +728,7 @@ export default function Prompts() {
                   </Checkbox>
                   <Popconfirm
                     title="删除这一节？"
-                    description={`删了就没了：正文、标题一起删，get_rule 也取不到「${s.section}」。`}
+                    description={`删掉后不再进提示词、get_rule 也取不到「${s.section}」，但不会真删，可在下方「已删除」里恢复。`}
                     okText="确定删除"
                     okButtonProps={{ danger: true }}
                     cancelText="再想想"
@@ -607,6 +747,20 @@ export default function Prompts() {
                 />
               </div>
             ))}
+
+            {deadSections.length > 0 && (
+              <Card size="small" title={`已删除（${deadSections.length} 节，可恢复）`}
+                    style={{ marginTop: 12, opacity: 0.9 }}>
+                {deadSections.map((s) => (
+                  <Space key={s.id} style={{ display: 'flex', marginBottom: 6 }} wrap>
+                    <Text delete type="secondary" style={{ fontSize: 12 }}>
+                      {s.section}　{s.body.length} 字
+                    </Text>
+                    <Button size="small" onClick={() => restoreSection(s)}>恢复</Button>
+                  </Space>
+                ))}
+              </Card>
+            )}
           </>
         ) : (
           <>
@@ -628,6 +782,10 @@ export default function Prompts() {
         onClose={() => setTxtOpen(false)}
         extra={
           <Space>
+            <Button onClick={() => {
+              setImportBody(`# ${txtName}（${txtKey}）\n\n${txtBody}`)
+              setImportOpen(true)
+            }}>导入</Button>
             <Button onClick={resetText} disabled={!txtOverridden}>
               恢复默认
             </Button>
@@ -849,6 +1007,10 @@ export default function Prompts() {
         onClose={() => setCompOpen(false)}
         extra={
           <Space>
+            <Button onClick={() => {
+              setImportBody('# 补全表\n\n| 类型 | 匹配 | 补成 | 优先级 |\n|---|---|---|---|\n| 归一 | 情况 | 预算分配总额，预算执行率 | 10 |\n')
+              setImportOpen(true)
+            }}>导入</Button>
             <Button onClick={addCompRow}>加一行</Button>
             <Button type="primary" loading={compSaving} onClick={saveComplete}>
               保存
@@ -860,7 +1022,7 @@ export default function Prompts() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="匹配到这一条，就把它作为「参考资料」交给第 6 步，不会替用户改问题。条数多、不沾边的由第 6 步自己取舍。"
+          message="匹配到这一条，就把它作为「参考资料」交给第 6 步，不会替用户改问题。删掉是软删，下方「已删除」里能恢复。"
         />
         {compRows.length === 0 && (
           <Empty description="还没有补全条目（空表 = 第 4 步什么都不返回，正常跑）" />
@@ -901,7 +1063,51 @@ export default function Prompts() {
             </Space>
           </Card>
         ))}
+
+        {compDel.length > 0 && (
+          <Card size="small" title={`已删除（${compDel.length} 条，可恢复）`}
+                style={{ marginTop: 12, opacity: 0.9 }}>
+            {compDel.map((r: any) => (
+              <Space key={r.id} style={{ display: 'flex', marginBottom: 6 }} wrap>
+                <Text delete type="secondary" style={{ fontSize: 12 }}>
+                  {r.match_text} → {r.fill_text}
+                </Text>
+                <Button size="small" onClick={() => restoreComp(r)}>恢复</Button>
+              </Space>
+            ))}
+          </Card>
+        )}
       </Drawer>
+
+      <Modal
+        title="导入 markdown"
+        open={importOpen}
+        onCancel={() => setImportOpen(false)}
+        onOk={doImportAll}
+        okText="导入"
+        confirmLoading={importing}
+        width={860}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="格式跟导出的文件一致：材料用「# 查数口径」加「## 节标题 （必带）」分节；文本键用「# 名称（key）」整段覆盖；补全表用「# 补全表」加表格。只覆盖文件里出现的块，没出现的一行不动。"
+        />
+        <input
+          type="file"
+          accept=".md,.txt,text/markdown,text/plain"
+          style={{ marginBottom: 8 }}
+          onChange={(e) => pickFile(e.target.files?.[0] || null)}
+        />
+        <Input.TextArea
+          rows={16}
+          value={importBody}
+          onChange={(e) => setImportBody(e.target.value)}
+          placeholder={'# 查数口径\n\n## 一、表说明 （必带）\n\n正文…'}
+          style={{ fontSize: 12 }}
+        />
+      </Modal>
 
     </div>
   )

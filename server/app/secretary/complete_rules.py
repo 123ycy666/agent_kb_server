@@ -67,7 +67,10 @@ def as_text() -> str:
 
 
 def save(items: list[dict]) -> dict:
-    """整表覆盖保存。items = [{kind, match_text, fill_text, priority}]
+    """保存整张表。items = [{id?, kind, match_text, fill_text, priority}]
+
+    带 id 的行原地更新，新行插入，页面没提交的行**软删**（enabled=false，可恢复；
+    2026-11-05 Fred）—— 原来整表 DELETE，误删就找不回来了。
 
     ★ 2026-11-02 真库实测修的一次**数据丢失**：原来是「先 DELETE 全表、再逐行 INSERT」+
       autocommit —— priority 传了非数字时 `int()` 抛异常，而 DELETE 已经提交：
@@ -77,7 +80,8 @@ def save(items: list[dict]) -> dict:
     items = [x for x in (items or []) if str(x.get('match_text') or '').strip()
              and str(x.get('fill_text') or '').strip()]
     try:
-        args = [(str(x.get('kind') or 'norm')[:16], str(x.get('match_text'))[:200],
+        args = [((int(x['id']) if x.get('id') else None),
+                 str(x.get('kind') or 'norm')[:16], str(x.get('match_text'))[:200],
                  str(x.get('fill_text'))[:300],
                  int(x.get('priority') if x.get('priority') is not None else (i + 1) * 10))
                 for i, x in enumerate(items)]
@@ -88,11 +92,24 @@ def save(items: list[dict]) -> dict:
         conn = pgdb.connect(autocommit=False)
         cur = conn.cursor()
         try:
-            cur.execute('DELETE FROM complete_rule')
-            for a in args:
+            keep = []
+            for rid, kind, match, fill, pri in args:
+                if rid:
+                    cur.execute(
+                        'UPDATE complete_rule SET kind=%s, match_text=%s, fill_text=%s, '
+                        'priority=%s, enabled=true, updated_at=now() WHERE id=%s',
+                        (kind, match, fill, pri, rid))
+                    if cur.rowcount:
+                        keep.append(rid)
+                        continue
                 cur.execute(
-                    'INSERT INTO complete_rule (kind, match_text, fill_text, priority, enabled) '
-                    'VALUES (%s,%s,%s,%s,true)', a)
+                    'INSERT INTO complete_rule (kind, match_text, fill_text, priority, '
+                    'enabled) VALUES (%s,%s,%s,%s,true) RETURNING id',
+                    (kind, match, fill, pri))
+                # ⚠️ pgdb 的 execute 把 RETURNING 那行吃掉存进 lastrowid，fetchone() 是 None。
+                keep.append(int(cur.lastrowid or 0))
+            cur.execute('UPDATE complete_rule SET enabled=false, updated_at=now() '
+                        'WHERE NOT (id = ANY(%s))', (keep or [0],))
         finally:
             cur.close()
         conn.commit()
@@ -113,3 +130,51 @@ def save(items: list[dict]) -> dict:
                 conn.close()
         except Exception:                          # noqa: BLE001
             pass
+
+
+def deleted() -> list[dict]:
+    """已软删的条目（页面「已删除」区用）。"""
+    sql = ('SELECT id, kind, match_text, fill_text, priority FROM complete_rule '
+           'WHERE NOT enabled ORDER BY priority, id')
+    try:
+        conn = pgdb.connect(autocommit=True)
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql)
+                return [dict(r) for r in (cur.fetchall() or [])]
+            finally:
+                cur.close()
+        finally:
+            try:
+                conn.close()
+            except Exception:                      # noqa: BLE001
+                pass
+    except Exception as exc:                       # noqa: BLE001
+        print('[complete_rules] 读已删除失败：%s: %s' % (type(exc).__name__, str(exc)[:120]),
+              flush=True)
+        return []
+
+
+def restore(rid: int) -> dict:
+    """恢复一条软删的补全条目。"""
+    try:
+        conn = pgdb.connect(autocommit=True)
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute('UPDATE complete_rule SET enabled=true, updated_at=now() '
+                            'WHERE id=%s AND NOT enabled', (int(rid),))
+                if not cur.rowcount:
+                    return {'error': '没有可恢复的条目：%s' % rid}
+                clear_cache()
+                return {'ok': True, 'id': int(rid), 'restored': True}
+            finally:
+                cur.close()
+        finally:
+            try:
+                conn.close()
+            except Exception:                      # noqa: BLE001
+                pass
+    except Exception as exc:                       # noqa: BLE001
+        return {'error': '恢复失败：%s' % str(exc)[:200]}

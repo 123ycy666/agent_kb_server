@@ -51,15 +51,20 @@ def _cached(key, loader):
     return val
 
 
-def sections(slot: str) -> list[dict]:
-    """某一份的全部小节：[{id, section, body, sort_no, version_no, pinned}]（按顺序）。"""
+def sections(slot: str, include_disabled: bool = False) -> list[dict]:
+    """某一份的小节：[{id, section, body, sort_no, version_no, pinned, enabled}]（按顺序）。
+
+    include_disabled=True 连已软删的一起给（页面「已删除」区用）。
+    """
     slot = (slot or '').strip()
     if slot not in SLOTS:
         return []
 
     def load():
-        sql = ('SELECT id, section, body, sort_no, version_no, pinned FROM prompt_material '
-               'WHERE slot = %s AND enabled ORDER BY sort_no, id')
+        sql = ('SELECT id, section, body, sort_no, version_no, pinned, enabled '
+               'FROM prompt_material WHERE slot = %s'
+               + ('' if include_disabled else ' AND enabled')
+               + ' ORDER BY sort_no, id')
         try:
             conn = _conn()
             try:
@@ -79,7 +84,16 @@ def sections(slot: str) -> list[dict]:
                   % (slot, type(exc).__name__, str(exc)[:120]), flush=True)
             return []
 
-    return _cached('slot:' + slot, load)
+    return _cached('slot:%s:%s' % (slot, int(bool(include_disabled))), load)
+
+
+def counts(slot: str) -> dict:
+    """页面用：可用几节 / 其中必带几节 / 已删几节。"""
+    live = sections(slot)
+    dead = sections(slot, include_disabled=True)
+    return {'sections': len(live),
+            'pinned': len([r for r in live if r.get('pinned')]),
+            'deleted': len(dead) - len(live)}
 
 
 def text(slot: str, pinned_only: bool = True) -> str:
@@ -307,23 +321,28 @@ def add_section(slot: str, section: str, body: str = '', pinned: bool = True,
         return {'error': '新增失败：%s' % str(exc)[:200]}
 
 
-def delete_section(sec_id: int) -> dict:
-    """真删一节（不是软删 —— 软删还占位置、还会出现在清单里）。
+def delete_section(sec_id: int, soft: bool = True) -> dict:
+    """删一节。默认**软删**（enabled=false，可恢复，2026-11-05 Fred）。
 
-    前端有二次确认；删的是这一行，`get_rule` 之后也取不到它。
+    soft=False 才真删（页面「彻底删除」用）。软删后 `sections()` 不返回它，
+    `get_rule` 清单里也不再出现；页面「已删除」区能看见了再恢复。
     """
     try:
         conn = _conn()
         try:
             cur = conn.cursor()
             try:
-                cur.execute('DELETE FROM prompt_material WHERE id = %s', (int(sec_id),))
+                if soft:
+                    cur.execute('UPDATE prompt_material SET enabled = false, '
+                                'version_no = version_no + 1 WHERE id = %s', (int(sec_id),))
+                else:
+                    cur.execute('DELETE FROM prompt_material WHERE id = %s', (int(sec_id),))
                 # 2026-11-02 真库实测：删不存在的 id 影响 0 行，原来也当成功返回，
                 # 页面上就显示"已删除"而实际什么也没发生。看 rowcount。
                 if not cur.rowcount:
                     return {'error': '小节不存在：%s' % sec_id}
                 clear_cache()
-                return {'ok': True, 'id': int(sec_id), 'deleted': True}
+                return {'ok': True, 'id': int(sec_id), 'deleted': True, 'soft': bool(soft)}
             finally:
                 cur.close()
         finally:
@@ -333,6 +352,31 @@ def delete_section(sec_id: int) -> dict:
                 pass
     except Exception as exc:                       # noqa: BLE001
         return {'error': '删除失败：%s' % str(exc)[:200]}
+
+
+def restore_section(sec_id: int) -> dict:
+    """把软删的一节恢复回来。"""
+    try:
+        conn = _conn()
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute('UPDATE prompt_material SET enabled = true, '
+                            'version_no = version_no + 1 WHERE id = %s AND NOT enabled',
+                            (int(sec_id),))
+                if not cur.rowcount:
+                    return {'error': '没有可恢复的小节：%s' % sec_id}
+                clear_cache()
+                return {'ok': True, 'id': int(sec_id), 'restored': True}
+            finally:
+                cur.close()
+        finally:
+            try:
+                conn.close()
+            except Exception:                      # noqa: BLE001
+                pass
+    except Exception as exc:                       # noqa: BLE001
+        return {'error': '恢复失败：%s' % str(exc)[:200]}
 
 
 def replace_slot(slot: str, rows: list[dict], user: str = 'import') -> dict:
@@ -355,7 +399,8 @@ def replace_slot(slot: str, rows: list[dict], user: str = 'import') -> dict:
     try:
         args = []
         for i, r in enumerate(rows):
-            args.append((slot, str(r.get('section') or '')[:160], str(r.get('body') or ''),
+            args.append(((int(r['id']) if r.get('id') else None),
+                         str(r.get('section') or '')[:160], str(r.get('body') or ''),
                          int(r.get('sort_no') if r.get('sort_no') is not None else i),
                          bool(r.get('pinned', True)),
                          int(r.get('version_no') or 1), str(user or '')[:64]))
@@ -366,12 +411,29 @@ def replace_slot(slot: str, rows: list[dict], user: str = 'import') -> dict:
         conn = _conn(autocommit=False)
         cur = conn.cursor()
         try:
-            cur.execute('DELETE FROM prompt_material WHERE slot = %s', (slot,))
-            for a in args:
+            keep = []
+            for rid, sec, body, sort_no, pinned, ver, who in args:
+                if rid:
+                    # 带 id 的原地更新（2026-11-05）：整份保存不再「软删一堆 + 重新插一行」
+                    cur.execute(
+                        'UPDATE prompt_material SET section=%s, body=%s, sort_no=%s, '
+                        'pinned=%s, version_no=%s, updated_by=%s, updated_at=now(), enabled=true '
+                        'WHERE id=%s AND slot=%s',
+                        (sec, body, sort_no, pinned, ver, who, rid, slot))
+                    if cur.rowcount:
+                        keep.append(rid)
+                        continue
                 cur.execute(
                     'INSERT INTO prompt_material (slot, section, body, sort_no, '
                     'enabled, pinned, version_no, updated_by) '
-                    'VALUES (%s,%s,%s,%s,true,%s,%s,%s)', a)
+                    'VALUES (%s,%s,%s,%s,true,%s,%s,%s) RETURNING id',
+                    (slot, sec, body, sort_no, pinned, ver, who))
+                # ⚠️ pgdb 的 execute 会把 RETURNING 的那行吃掉存进 lastrowid，fetchone() 拿到 None。
+                keep.append(int(cur.lastrowid or 0))
+            # 页面没提交的行 = 删了 → 软删（可恢复），不物理删
+            cur.execute('UPDATE prompt_material SET enabled = false '
+                        'WHERE slot = %s AND NOT (id = ANY(%s))',
+                        (slot, keep or [0]))
         finally:
             cur.close()
         conn.commit()

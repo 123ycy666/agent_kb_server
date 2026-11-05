@@ -385,6 +385,83 @@ def _swap_materials(messages, slots):
         return messages
 
 
+_FACTS_RULE = ('把这一轮已经查到的事实列成清单，一条一行，只写〔口径〕=〔数值〕（来自哪张表）；'
+               '查过但没数据的那条就写「无数据」。不要写结论、不要写建议、不要写过程。')
+
+
+def _collect_facts(messages, model, trace=None) -> str:
+    """第 7 步收尾：只把查到的事实列成清单，不给工具、不要结论。
+
+    2026-11-04：原来收尾直接拿全部工具结果写回答，数据一多模型就照抄，回答规则管不住。
+    改成先落一份清单，第 8 步只看这份清单。
+    """
+    msgs = list(messages) + [{'role': 'user', 'content': _FACTS_RULE}]
+    try:
+        resp = _chat(msgs, model, use_tools=False, max_tokens=1200, think=False)
+        out = str(resp['choices'][0]['message'].get('content') or '').strip()
+    except Exception as exc:                       # noqa: BLE001 - 列不出清单就退回原做法
+        print('[agent] 列事实清单失败（退回全部工具结果）：%s: %s'
+              % (type(exc).__name__, str(exc)[:120]), flush=True)
+        return ''
+    if trace is not None:
+        trace.append({'seq': len(trace) + 1, 'kind': 'facts', 'chars': len(out),
+                      'content': out[:800]})
+    return out
+
+
+def _answer_system(messages) -> str:
+    """收尾那次的 system：基础提示词 + 回答材料（把查数口径整段换掉）。"""
+    sys_txt = str((messages[0] or {}).get('content') or '') if messages else ''
+    try:
+        from app.secretary import prompt_material
+        return prompt_material.strip_block(sys_txt) + (prompt_material.block(('answer',)) or '')
+    except Exception:                              # noqa: BLE001
+        return sys_txt
+
+
+def _write_answer(messages, model, user_content, trace=None) -> dict:
+    """第 8 步：先列事实清单，再只拿清单写正文。返回 {'answer', 'facts'}。
+
+    列不出清单（模型不可用等）就退回原做法：把全部工具结果交给它。
+    """
+    facts = _collect_facts(messages, model, trace=trace)
+    if facts:
+        msgs = [{'role': 'system', 'content': _answer_system(messages)},
+                {'role': 'user', 'content': user_content},
+                {'role': 'user', 'content': '【这一轮查到的事实（数字只用这些）】\n' + facts}]
+        return {'answer': _final_answer(msgs, model, allow_rule=True, trace=trace),
+                'facts': facts}
+    return {'answer': _final_answer(_swap_materials(messages, ('answer',)), model,
+                                    allow_rule=True, trace=trace),
+            'facts': ''}
+
+
+def _facts_pool(text):
+    """事实清单里的数值池（万元 + 两两和差比），对账用。清单一条一行，好抽。"""
+    vals = set()
+    body = str(text or '')
+    for m in re.finditer(r'(-?\d[\d,]*(?:\.\d+)?)\s*万元', body):
+        try:
+            vals.add(round(float(m.group(1).replace(',', '')), 2))
+        except ValueError:
+            continue
+    for m in re.finditer(r'(-?\d[\d,]*(?:\.\d+)?)', body):
+        try:
+            raw = float(m.group(1).replace(',', ''))
+        except ValueError:
+            continue
+        if abs(raw) >= 10000:
+            vals.add(round(raw / 10000.0, 2))
+    base = sorted(vals)
+    for i, a in enumerate(base):
+        for b in base[i + 1:]:
+            vals.add(round(a + b, 2))
+            vals.add(round(abs(a - b), 2))
+            if b:
+                vals.add(round(a / b, 4))
+    return vals
+
+
 _TOOL_RESULT_CHARS = 4000      # 单个工具结果给模型的字符上限（可用 config 覆盖）
 
 
@@ -1082,16 +1159,18 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                  'names': [], 'areas': [], 'hint': '', 'unresolved': [], 'ms': 0}
     if fixed['used']:
         question = fixed['text']
-        trace.append({'seq': len(trace) + 1, 'kind': 'namefix', 'tool': 'name_fix',
-                      'ms': fixed['ms'],
-                      'args': {'input': raw_question},
-                      'result': {'fixed': fixed['text'],
-                                 'word_fixes': fixed['word_fixes'],
-                                 'name_fixes': fixed['name_fixes'],
-                                 'names': fixed['names'],
-                                 'areas': fixed['areas'],
-                                 'unresolved': fixed.get('unresolved', []),
-                                 'hint': fixed['hint']}})
+    # 2026-11-04：改没改都记一条，带 used —— 否则页面上看不出这一步跑没跑、动不动手。
+    trace.append({'seq': len(trace) + 1, 'kind': 'namefix', 'tool': 'name_fix',
+                  'ms': fixed['ms'],
+                  'args': {'input': raw_question},
+                  'result': {'used': bool(fixed['used']),
+                             'fixed': fixed['text'] if fixed['used'] else '',
+                             'word_fixes': fixed['word_fixes'],
+                             'name_fixes': fixed['name_fixes'],
+                             'names': fixed['names'],
+                             'areas': fixed['areas'],
+                             'unresolved': fixed.get('unresolved', []),
+                             'hint': fixed['hint']}})
     namefix_ms = int((time.time() - t_fix) * 1000)
     # ⓪·3 补全（2026-11-01）：只有像业务问题才补 —— 只说了对象没问啥，补默认问法。
     comp = {'changed': False, 'hits': []}
@@ -1162,6 +1241,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         _conf = {'used': False, 'text': '', 'block': ''}
     trace.append({'seq': len(trace) + 1, 'kind': 'confirm', 'tool': 'confirm',
                   'result': {'used': bool(_conf.get('used')),
+                             'passed': 'model' if _conf.get('used') else 'raw',
                              'text': str(_conf.get('text') or '')[:800]}})
     if _conf.get('used'):
         user_content = ('【本轮要办的事】（第 6 步归整后的定稿，按它办）\n' + _conf['text'])
@@ -1279,6 +1359,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     blocked = False
     gate_log: list = []     # 保留字段（落库结果里内网在用），本轮恒为空
     step = 0
+    facts_text = ''
     while True:
         step += 1
         _over_step = bool(max_steps) and step > max_steps
@@ -1321,9 +1402,10 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                               'content': answer[:600], 'note': '未查业务库'})
                 break
-            # 查过了：另起一次调用写正文（不让它继续查，也不让过程话术当答案）。
-            answer = _final_answer(_swap_materials(messages, ('answer',)), model,
-                                   trace=trace)
+            # 查过了：先落事实清单，再只拿清单写正文（不让它继续查，也不让过程话术当答案）。
+            _wa = _write_answer(messages, model, user_content, trace=trace)
+            answer = _wa['answer']
+            facts_text = _wa['facts']
             llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                           'content': answer[:600]})
@@ -1370,9 +1452,10 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         # ★ 2026-11-03：这里原来每 2 轮塞一句「对照【各类问题的必答项】逐项点一遍」——
         #   必答项随规则一起删了，这句在指空；代码也不再替模型管节奏。
         if fins:
-            # 模型自己说「数据够了」→ 由系统另起一次调用写正文（不用它这轮的 content，那是散文草稿）
-            answer = _final_answer(_swap_materials(messages, ('answer',)), model,
-                                    allow_rule=True, trace=trace)
+            # 模型自己说「数据够了」→ 先落事实清单，再由系统按清单写正文
+            _wa = _write_answer(messages, model, user_content, trace=trace)
+            answer = _wa['answer']
+            facts_text = _wa['facts']
             llm_ms = int((time.time() - t0) * 1000)
             trace.append({'seq': len(trace) + 1, 'kind': 'answer', 'model_ms': llm_ms,
                           'content': answer[:600], 'note': '模型调用 finish，已另起一次写汇报'})
@@ -1385,7 +1468,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 找不到就带着清单重问一次；第二次仍对不上就保留「错得更少」的那版，并把对账结果记进 trace。
     _queried = any(isinstance(t, dict) and t.get('tool') == 'run_sql' for t in trace)
     if config.NUMBER_GUARD_ON and _queried and not blocked:
-        _pool = _num_pool(trace)
+        # ★ 2026-11-04：有事实清单就以清单为准（第 8 步只看清单，重写也不许把工具原文塞回来）。
+        _pool = _facts_pool(facts_text) if facts_text else _num_pool(trace)
         # ★ 2026-11-03：上一轮查到的金额也算有出处（否则复用历史结论会被逼着重写）。
         for _h in (history or []):
             for _m in _MONEY_RE.finditer(str(_h.get('answer') or '')):
@@ -1397,11 +1481,18 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 _pool.add(round(_x / 10000.0, 2))
         _bad1 = _untraceable_money(answer, _pool)
         if _bad1:
-            _msgs = list(messages) + [
+            if facts_text:
+                _base = [{'role': 'system', 'content': _answer_system(messages)},
+                         {'role': 'user', 'content': user_content},
+                         {'role': 'user',
+                          'content': '【这一轮查到的事实（数字只用这些）】\n' + facts_text}]
+            else:
+                _base = list(messages)
+            _msgs = _base + [
                 {'role': 'assistant', 'content': answer},
                 {'role': 'user', 'content':
                  '对账不通过：回答里这些金额在你本轮查询结果里找不到出处 —— %s 万元。'
-                 '请只使用你本轮查到的数（合计/均值取结果里的 summary），逐条改正后重写正文；'
+                 '请只使用上面事实清单里的数，逐条改正后重写正文；'
                  '不要改口径、不要新增没查过的数，也不要提这条提示。' % '、'.join(str(x) for x in _bad1[:8])}]
             try:
                 _ans2 = _final_answer(_swap_materials(_msgs, ('answer',)), model,

@@ -147,6 +147,14 @@ def _ensure():
     return _cache
 
 
+def catalog() -> dict:
+    """页面「数据表」抽屉用：表 / 字段 / 码值 / 覆盖层整份目录（2026-11-05 恢复这个入口）。
+
+    之前 /prompts/meta 调的就是 `catalog`，某次重构把它删了却没改调用方，抽屉一直 500。
+    """
+    return _ensure()
+
+
 def reload():
     global _cache
     _cache = None

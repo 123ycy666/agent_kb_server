@@ -18,6 +18,7 @@ from __future__ import annotations
 from fastapi.encoders import jsonable_encoder
 
 import re
+import time
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -210,11 +211,58 @@ async def add_section(slot: str, request: Request,
         bool(body.get('pinned', True)), user=actor.username))
 
 
-@router.delete('/material/section/{sec_id}', summary='删一节')
-def delete_section(sec_id: int, actor: CurrentActor = Depends(get_current_actor)):
+@router.delete('/material/section/{sec_id}', summary='删一节（默认软删，可恢复）')
+def delete_section(sec_id: int, hard: int = 0,
+                   actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import prompt_material
-    res = prompt_material.delete_section(sec_id)
+    res = prompt_material.delete_section(sec_id, soft=not bool(hard))
     return _jr(res, 200 if res.get('ok') else 500)
+
+
+@router.post('/material/section/{sec_id}/restore', summary='恢复软删的一节')
+def restore_section(sec_id: int, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import prompt_material
+    res = prompt_material.restore_section(sec_id)
+    return _jr(res, 200 if res.get('ok') else 500)
+
+
+@router.get('/material/{slot}/deleted', summary='某一份里已软删的节')
+def deleted_sections(slot: str, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import prompt_material
+    if slot not in prompt_material.SLOTS:
+        return _jr({'error': '未知 slot：%s' % slot}, 404)
+    rows = [r for r in prompt_material.sections(slot, include_disabled=True)
+            if not r.get('enabled')]
+    return _jr({'ok': True, 'slot': slot, 'rows': rows})
+
+
+@router.post('/import', summary='导入 markdown（格式与 /export 对称，只覆盖文件里出现的块）')
+async def import_md(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import prompt_tree
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
+    text = str(body.get('text') or '')
+    if not text.strip():
+        return _jr({'error': '内容为空'}, 400)
+    res = prompt_tree.import_markdown(text, user=actor.username)
+    return _jr(res, 200 if res.get('ok') else 400)
+
+
+@router.get('/export', summary='导出 markdown（slot 为空 = 全部材料 + 文本键 + 补全表）')
+def export_md(slot: str = '', actor: CurrentActor = Depends(get_current_actor)):
+    from urllib.parse import quote
+
+    from fastapi.responses import PlainTextResponse
+
+    from app.secretary import prompt_tree
+    text = prompt_tree.export_markdown(slot)
+    if not text:
+        return _jr({'error': '没有可导出的内容'}, 404)
+    name = '提示词%s-%s.md' % ('-' + slot if slot else '', time.strftime('%Y%m%d'))
+    return PlainTextResponse(text, media_type='text/markdown; charset=utf-8',
+                             headers={'Content-Disposition':
+                                      "attachment; filename*=UTF-8''%s" % quote(name)})
 
 
 @router.get('/texts', summary='代码里的提示词（身份 / 汇报口吻 / 模式做法 / 词表）')
@@ -244,11 +292,19 @@ def reset_text(key: str, actor: CurrentActor = Depends(get_current_actor)):
 # ── 补全表（2026-11-03 恢复）────────────────────────────────────────
 # 第 4 步拿「原问题 + 补后问题」来这张表里找命中条目，**只查不改**。
 # Fred 在页面上迭代这张表（用户体验就靠它）：整表覆盖保存，失败回滚、一行不少。
-@router.get('/complete', summary='补全表全部条目')
+@router.get('/complete', summary='补全表全部条目（含已软删的）')
 def complete_list(actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import complete_rules
     return _jr({'ok': True, 'rows': [dict(r) for r in complete_rules.rows()],
+                'deleted': [dict(r) for r in complete_rules.deleted()],
                 'preview': complete_rules.as_text()})
+
+
+@router.post('/complete/{rid}/restore', summary='恢复一条软删的补全条目')
+def complete_restore(rid: int, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import complete_rules
+    res = complete_rules.restore(rid)
+    return _jr(res, 200 if res.get('ok') else 500)
 
 
 @router.put('/complete', summary='整表覆盖保存补全表')

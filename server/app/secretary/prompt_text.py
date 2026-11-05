@@ -177,6 +177,10 @@ def save(key: str, body: str, user: str = '') -> dict:
         if key == 'modes':
             if not isinstance(parsed, dict):
                 return {'error': '这个 key 要 JSON 对象（{"说法": 值}）'}
+        elif key == 'keywords':
+            # 词表既是 {"说法": ["…"]} 的对象，也可以直接给数组 —— 两种都收（2026-11-05）。
+            if not isinstance(parsed, (dict, list)):
+                return {'error': '这个 key 要 JSON 对象或数组'}
         elif not isinstance(parsed, list):
             return {'error': '这个 key 要 JSON 数组（["说法", …]）'}
     try:
