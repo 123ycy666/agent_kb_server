@@ -33,6 +33,11 @@ def set_actor(actor) -> None:
     _actor_var.set(actor)
 
 
+def current_actor():
+    """取当前请求的登录身份（工具执行时用，如 kb_read 的权限过滤）。"""
+    return _actor_var.get()
+
+
 def set_scope(kb_ids) -> None:
     """问答入口调用：登记本次请求要检索的知识库范围。
 

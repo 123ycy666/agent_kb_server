@@ -26,6 +26,7 @@ from app.secretary import gaps
 from app.secretary import name_fix
 from app.secretary import semantic
 from app.secretary import tools_db
+from app.secretary import tools_file
 from app.secretary import tools_kb
 
 # 闸门判定（"这句答案能不能直接交出去"）已搬到 evidence_gate.py（2026-11-02）：
@@ -86,6 +87,45 @@ TOOLS = [
         'description': '数据已经查够、可以写汇报了，就调用它收尾（不要再写任何文字）。',
         'parameters': {'type': 'object', 'properties': {
             'plan': {'type': 'string', 'description': '一句话说明你打算怎么答'}}, 'required': ['plan']}}},
+    # ── 文件类（2026-11-05）：读 / 取知识库 / 出文件 / 跑脚本 ───────────────
+    {'type': 'function', 'function': {
+        'name': 'read_file',
+        'description': '读本轮用户上传的文件。一次读一段，返回块（段落号、章节、正文）；'
+                       'next_offset 为 null 表示读完。长文件要接着读，不要只读开头就下结论。',
+        'parameters': {'type': 'object', 'properties': {
+            'file_id': {'type': 'string', 'description': '文件 id（见【本轮带来的文件】）'},
+            'offset': {'type': 'integer', 'description': '从第几块开始，默认 0'},
+            'limit': {'type': 'integer', 'description': '读多少块，默认 40'}},
+            'required': ['file_id']}}},
+    {'type': 'function', 'function': {
+        'name': 'kb_read',
+        'description': '取知识库里一篇文档的正文（按块顺序，带章节）。'
+                       '动手前要先取「做法」「规定」这类原文时用它；kb_search 只回切片，不够。',
+        'parameters': {'type': 'object', 'properties': {
+            'doc_id': {'type': 'integer', 'description': '文档 id（kb_search 结果里有）'},
+            'doc_name': {'type': 'string', 'description': '或按标题模糊找'},
+            'offset': {'type': 'integer', 'description': '从第几块开始，默认 0'},
+            'limit': {'type': 'integer', 'description': '读多少块，默认 40'}},
+            'required': []}}},
+    {'type': 'function', 'function': {
+        'name': 'make_file',
+        'description': '生成文件并交付下载。kind=docx 给 {title, sections:[[小节,正文]]}；'
+                       'kind=pptx 给 {title, slides:[{layout:cover|section|bullets|end,title,bullets}]}；'
+                       'kind=xlsx 给 {sheets:[{name, rows:[[...]]}]}。生成后自动过自检，不通过不给文件。'
+                       '★ 内容要精简：一份文件一次给完，别超过 20 页/12 行；超了分两次调用。',
+        'parameters': {'type': 'object', 'properties': {
+            'kind': {'type': 'string', 'enum': ['docx', 'pptx', 'xlsx']},
+            'spec': {'type': 'object', 'description': '按上面的形状给内容'},
+            'self_check': {'type': 'boolean', 'description': '是否过自检，默认 true'}},
+            'required': ['kind', 'spec']}}},
+    {'type': 'function', 'function': {
+        'name': 'run_code',
+        'description': '在沙箱里跑一段 python（docx/pptx/openpyxl 可用，产物从 out/ 取）。'
+                       '只在结构化参数表达不了时用：能用 make_file 就别写脚本。',
+        'parameters': {'type': 'object', 'properties': {
+            'code': {'type': 'string', 'description': 'python 源码'},
+            'timeout': {'type': 'integer', 'description': '秒，默认 60'}},
+            'required': ['code']}}},
 ]
 
 _ctx = ssl.create_default_context()
@@ -409,29 +449,31 @@ def _collect_facts(messages, model, trace=None) -> str:
     return out
 
 
-def _answer_system(messages) -> str:
-    """收尾那次的 system：基础提示词 + 回答材料（把查数口径整段换掉）。"""
+def _answer_system(messages, slots=('answer',)) -> str:
+    """收尾那次的 system：基础提示词 + 本轮动作对应的回答材料。"""
     sys_txt = str((messages[0] or {}).get('content') or '') if messages else ''
     try:
         from app.secretary import prompt_material
-        return prompt_material.strip_block(sys_txt) + (prompt_material.block(('answer',)) or '')
+        return (prompt_material.strip_block(sys_txt)
+                + (prompt_material.block(tuple(slots)) or ''))
     except Exception:                              # noqa: BLE001
         return sys_txt
 
 
-def _write_answer(messages, model, user_content, trace=None) -> dict:
-    """第 8 步：先列事实清单，再只拿清单写正文。返回 {'answer', 'facts'}。
+def _write_answer(messages, model, user_content, trace=None, need_facts=True,
+                  slots=('answer',)) -> dict:
+    """第 8 步：查数轮先列事实清单再写正文；读文件/出文件轮直接按清单规则写。
 
     列不出清单（模型不可用等）就退回原做法：把全部工具结果交给它。
     """
-    facts = _collect_facts(messages, model, trace=trace)
+    facts = _collect_facts(messages, model, trace=trace) if need_facts else ''
     if facts:
-        msgs = [{'role': 'system', 'content': _answer_system(messages)},
+        msgs = [{'role': 'system', 'content': _answer_system(messages, slots)},
                 {'role': 'user', 'content': user_content},
                 {'role': 'user', 'content': '【这一轮查到的事实（数字只用这些）】\n' + facts}]
         return {'answer': _final_answer(msgs, model, allow_rule=True, trace=trace),
                 'facts': facts}
-    return {'answer': _final_answer(_swap_materials(messages, ('answer',)), model,
+    return {'answer': _final_answer(_swap_materials(messages, tuple(slots)), model,
                                     allow_rule=True, trace=trace),
             'facts': ''}
 
@@ -763,8 +805,7 @@ def execute(name, args):
         # 2026-10-30：规则不再靠向量检索《判据规则》，改成按主题/别名精确取。
         return get_rule(args.get('topic', ''), args.get('key', ''))
     if name == 'run_sql':
-        r = tools_db.run_sql(args.get('sql', ''))
-        # 0 行 = 空集。模型拿到空结果会忍不住摘掉时间/状态条件再查一遍凑数
+        r = tools_db.run_sql(args.get('sql', ''))        # 0 行 = 空集。模型拿到空结果会忍不住摘掉时间/状态条件再查一遍凑数
         # （实测：带年份查出 0 行 → 去掉年份 → 148.07 万 → 负余额）。
         # 在它**正想放宽的那一刻**把话说死，比写在几百行外的规则文档里管用。
         try:
@@ -775,6 +816,22 @@ def execute(name, args):
         except Exception:                           # noqa: BLE001
             pass
         return r
+    # ── 文件类（2026-11-05）────────────────────────────────────────────
+    if name == 'read_file':
+        from app.secretary import tools_file
+        return tools_file.read_file(args.get('file_id', ''), args.get('offset') or 0,
+                                    args.get('limit') or 40)
+    if name == 'kb_read':
+        from app.secretary import tools_file
+        return tools_file.kb_read(args.get('doc_id'), args.get('doc_name') or '',
+                                  args.get('offset') or 0, args.get('limit') or 40)
+    if name == 'make_file':
+        from app.secretary import tools_file
+        return tools_file.make_file(args.get('kind', ''), args.get('spec') or {},
+                                    self_check=bool(args.get('self_check', True)))
+    if name == 'run_code':
+        from app.secretary import tools_file
+        return tools_file.run_code(args.get('code', ''), args.get('timeout') or 60)
     return {'error': 'unknown tool ' + str(name)}
 
 
@@ -863,10 +920,16 @@ def _system(today=None):
 
 def _one_call(tc):
     name = tc['function']['name']
+    _raw = tc['function'].get('arguments') or '{}'
     try:
-        args = json.loads(tc['function'].get('arguments') or '{}')
+        args = json.loads(_raw)
     except Exception:
-        args = {}
+        # 参数被截断（出文件时 spec 太长最常见）—— 必须回给模型一句人话，
+        # 否则它只看到「缺参数」，会一遍遍重发同一份大参数。
+        return {'name': name, 'args': {}, 'ms': 0,
+                'result': {'error': '工具参数不是合法 JSON（多半是被长度截断）：%s。'
+                                    '请把内容压缩后重发（出文件时分两次、每次不超过 20 页）。'
+                                    % str(_raw)[-120:]}}
     t1 = time.time()
     try:
         res = execute(name, args)
@@ -1141,12 +1204,18 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                   % (type(e).__name__, e), flush=True)
     # ★ 2026-11-03：`prev_scope`（上一轮的时间地点）**不再需要** —— 时间地点补全整块删除，
     #   沿用与否由第 6 步「问题确定」按上下文判断。
-    allow_refine = _pre.gate(question, history,
-                             ask=lambda _s, _u: _ask_short(_s, _u, model))
+    # ── ① 分流（2026-11-05）：三个是/否 → 第 7 步按它给工具子集 ────────────
+    #    查库 / 读文件 / 出文件。物理规则：本轮带了文件 → 读文件一律为是。
+    _route = _pre.route(question, history, has_files=bool(doc_files),
+                        ask=lambda _s, _u: _ask_short(_s, _u, model))
+    tools_file.set_ctx(user_id=user_id,
+                       out_dir='data/agent_out/%s' % (session_id or 'anon'))
     trace.append({'seq': len(trace) + 1, 'kind': 'intent', 'tool': 'intent',
-                  'result': {'go': '走' if allow_refine else '不走',
+                  'result': {'use_db': _route['use_db'], 'use_file': _route['use_file'],
+                             'make_file': _route['make_file'], 'reason': _route['reason'],
                              'history_turns': len(history)}})
-    # ⓪ 字面纠错 + 名称归一（阶段①的「字面」部分，在问题补全之前）。
+    # 只有「要查库」才进 2–6 预处理块；聊天和文件处理直接跳到第 7 步。
+    allow_refine = bool(_route['use_db'])    # ⓪ 字面纠错 + 名称归一（阶段①的「字面」部分，在问题补全之前）。
     #    必须先做：字没改对，后面检索知识库、补全、写 SQL 全是白费。
     #    ★ 闸放行之外还有一条路：**问题里有业务对象名称**（「两水」「环潭」这种光杆所名）
     #      也算业务问题 —— 「两水」两个字里一个业务词都没有，光看词表会被判成闲聊
@@ -1295,7 +1364,22 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # ⓪·7 用户上传的文件（2026-10-19 加）：这是本轮回答的**事实来源**。
     #      省时间的使用场景就是"读 20 页文件" —— 所以纪律要写死在这里：
     #      文件里没有的就写「文件中未提及」，**不许用外部常识或业务库补**（领导要的是文件说了什么）。
-    if doc_context:
+    if doc_files:
+        # ★ 2026-11-05：不再把文件正文/节选灌进 user 消息（长文只给 8 段，第 9 页往后看不见）。
+        #   只给清单 + file_id，正文由模型自己 read_file 分页读。
+        _fl = []
+        for _i, _f in enumerate(doc_files, start=1):
+            _fl.append('【文件%d】《%s》 约 %s 字，%s，file_id=%s'
+                       % (_i, _f.get('name'), _f.get('chars'), _f.get('mode') or '',
+                          _f.get('file_id')))
+            _secs = _f.get('cited_sections') or []
+            if _secs:
+                _fl.append('  目录：' + ' / '.join(str(s) for s in _secs[:12]))
+        user_content += (
+            '\n\n【本轮带来的文件】（正文用 read_file(file_id) 分页读；读完再用，不要凭印象）\n'
+            + '\n'.join(_fl) +
+            '\n\n纪律：只依据读到的文件内容回答；文件里没有的写「文件中未提及」，不许用常识或业务库补。')
+    elif doc_context:
         user_content += (
             '\n\n【用户上传的文件】（本轮回答的**事实来源**，优先级高于知识库与业务库）\n'
             + doc_context +
@@ -1351,9 +1435,40 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                      #   不再注入。原文备份见 docs/08-历史归档/2026-11-03-删除的提示词规则/。
                      answer_format='',
                      # S7 我的规则（个人库 type=rule）
-                     personal_rules=(_pkb.get('text') or ''))},
+                     personal_rules=(_pkb.get('text') or ''),
+                     # 查数口径只在「要查业务库」时注入（2026-11-05）
+                     with_rules=bool(_route['use_db']))},
                 {'role': 'user', 'content': user_content}]
+    # 装配结果记一条：system 多少字、带没带查数口径（测试与排障要看这个）
+    trace.append({'seq': len(trace) + 1, 'kind': 'system', 'tool': 'system',
+                  'result': {'chars': len(messages[0]['content']),
+                             'has_caliber': '===== 规则材料' in messages[0]['content']}})
     answer = ''
+    # ── 第 7 步装配（2026-11-05）：按三个布尔给工具子集 ──────────────────
+    # 规则：有 file_id → read_file 必给；选了知识库 → kb_search 必给；
+    #      查数口径与查数手只在 use_db 时给；改库的手还没接（P2）。
+    _want = []
+    if _route['use_db']:
+        _want += ['kb_search', 'describe_table', 'find_column', 'run_sql', 'finish']
+    if _route['use_file']:
+        _want += ['kb_search', 'kb_read', 'read_file', 'run_code']
+    if _route['make_file']:
+        _want += ['kb_search', 'make_file', 'run_code']
+    _want = list(dict.fromkeys(_want))
+    tools = [t for t in TOOLS if t['function']['name'] in _want]
+    trace.append({'seq': len(trace) + 1, 'kind': 'tools', 'tool': 'toolset',
+                  'result': {'tools': [t['function']['name'] for t in tools],
+                             'use_db': _route['use_db'], 'use_file': _route['use_file'],
+                             'make_file': _route['make_file']}})
+    # 第 8 步材料：按本轮动作拼（查数→作答规则；读文件→清单规则；出文件→产物规则）
+    _slots = []
+    if _route['use_db'] or not (_route['use_file'] or _route['make_file']):
+        _slots.append('answer')
+    if _route['use_file']:
+        _slots.append('list')
+    if _route['make_file']:
+        _slots.append('file')
+    _slots = tuple(_slots)
     # ★ 2026-11-03 定稿「守卫先全关」：不再有"催一次""锁死"两种处置。
     #   模型没调工具也一样放行；出问题再按现象一个个开回来（旧逻辑见 git 历史）。
     blocked = False
@@ -1382,9 +1497,12 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content': _why + '，强制出正文'})
             break
         t0 = time.time()
-        # 第 7 步 · 干活循环。工具**一律给**（该查数、该查知识库、该写文档由模型判断），
+        # 第 7 步 · 干活循环。工具按分流子集给；没给工具就直接要正文。
         # 查数轮关思考：实测同一轮开思考会写 240~3400 字过程散文（一轮 10~17s）。
-        resp = _chat(messages, model, think=False, max_tokens=600, use_tools=True)
+        # 出文件那轮要给足输出额度 —— make_file 的 spec 是整份内容，600 token 会被截断成空参数。
+        _mt = 4000 if 'make_file' in _want else 600
+        resp = _chat(messages, model, think=False, max_tokens=_mt,
+                     use_tools=bool(tools), tools=tools or None)
         llm_ms = int((time.time() - t0) * 1000)
         msg = resp['choices'][0]['message']
         calls = msg.get('tool_calls') or []
@@ -1403,7 +1521,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                               'content': answer[:600], 'note': '未查业务库'})
                 break
             # 查过了：先落事实清单，再只拿清单写正文（不让它继续查，也不让过程话术当答案）。
-            _wa = _write_answer(messages, model, user_content, trace=trace)
+            _wa = _write_answer(messages, model, user_content, trace=trace,
+                                need_facts=_route['use_db'], slots=_slots)
             answer = _wa['answer']
             facts_text = _wa['facts']
             llm_ms = int((time.time() - t0) * 1000)
@@ -1453,7 +1572,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         #   必答项随规则一起删了，这句在指空；代码也不再替模型管节奏。
         if fins:
             # 模型自己说「数据够了」→ 先落事实清单，再由系统按清单写正文
-            _wa = _write_answer(messages, model, user_content, trace=trace)
+            _wa = _write_answer(messages, model, user_content, trace=trace,
+                                need_facts=_route['use_db'], slots=_slots)
             answer = _wa['answer']
             facts_text = _wa['facts']
             llm_ms = int((time.time() - t0) * 1000)

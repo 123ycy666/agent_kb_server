@@ -65,7 +65,8 @@ def judge_mode(question: str, has_files: bool = False) -> str:
 
 def system(mode: str, legacy, today=None, persona: str | None = None,
            prefs: dict | None = None, priority: str | None = None,
-           answer_format: str | None = None, personal_rules: str | None = None) -> str:
+           answer_format: str | None = None, personal_rules: str | None = None,
+           with_rules: bool = True) -> str:
     """该模式的 system 提示词。
 
     legacy 是 agent._system（旧装配），用于回退——签名 legacy(today)。
@@ -84,6 +85,10 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
         #   就能看见"这题该怎么答"的代号，可以提前 get_rule。
         rules_menu = prompt_material.block(('fetch', 'judge'),
                                            index_slots=prompt_material.SLOTS)
+        # ★ 2026-11-05：查数口径/判定标准只在「要查业务库」的轮次注入。
+        #   聊天和文件处理轮带着这几万字，既占上下文又干扰回答。
+        if not with_rules:
+            rules_menu = ''
         # ★ 2026-11-03（Fred）：`prompt_material.SLOTS` 已置空（主分支空壳化），
         #   上面这行于是恒为 ''，system 里不再有任何规则材料段；`get_rule` 也取不到东西。
         # 身份 / 模式做法允许页面覆盖（prompt_text 表），没有覆盖就用代码里的默认值

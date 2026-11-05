@@ -36,6 +36,72 @@ _DEFAULT_ASK = '情况怎么样'
 
 NOT_GO = '不走'
 
+# 页面框 `intent` 空着时用的默认判据（机制说明，不含业务词 —— 业务判据请写到页面上）。
+# 输出三个是/否：查库 / 读文件 / 出文件。第 7 步按这三个给工具子集。
+_ROUTE_RULE = (
+    '只回答四行，不要解释、不要展开：\n'
+    '查库=是 或 否\n'
+    '读文件=是 或 否\n'
+    '出文件=是 或 否\n'
+    '理由=一句话\n'
+    '判法：\n'
+    '- 要业务数字、口径、台账、排名、占比、进度 → 查库=是；\n'
+    '- 本轮带了文件，或要求看 / 审 / 改 / 转某份文件 → 读文件=是；\n'
+    '- 要求产出 Word / PPT / Excel / 成文报告这类文件 → 出文件=是；\n'
+    '- 三样都不像（闲聊、问概念、让我写一段文字但不要求存成文件）→ 全否。'
+)
+
+_YES = ('是', 'YES', 'Y', 'TRUE', '1')
+
+
+def _bool_of(text: str, key: str, default: bool) -> bool:
+    import re as _re
+    m = _re.search(key + r'\s*[=:：]\s*([^\s，。、；]+)', str(text or ''))
+    if not m:
+        return default
+    return m.group(1).strip().upper() in _YES or '是' in m.group(1)
+
+
+def route(question: str, history=None, has_files: bool = False, ask=None) -> dict:
+    """第 1 步：三个是/否（2026-11-05）。
+
+    判据来自页面框 `intent`；框空就用 `_ROUTE_RULE`。判不出、调用失败 →
+    退成「只查库」（等于现在的行为，问数不受影响）。
+
+    物理规则压过模型：本轮带了文件 → 读文件一律为是。
+    """
+    out = {'use_db': True, 'use_file': bool(has_files), 'make_file': False,
+           'reason': '默认（没判）'}
+    try:
+        from app.secretary import prompt_text
+        rule = (prompt_text.get('intent', '') or '').strip() or _ROUTE_RULE
+    except Exception:                              # noqa: BLE001 - 读不到框就用默认判据
+        rule = _ROUTE_RULE
+    if ask is None or not str(question or '').strip():
+        return out
+    lines = []
+    for h in list(history or [])[-3:]:
+        lines.append('用户：%s' % (h.get('raw_question') or ''))
+        lines.append('系统：%s' % str(h.get('answer') or '').replace('\n', ' ')[:120])
+    user = ('最近几轮：\n%s\n\n本轮原话：%s\n本轮带了文件：%s'
+            % ('\n'.join(lines) if lines else '（没有）', question, '是' if has_files else '否'))
+    try:
+        got = str(ask(rule, user) or '').strip()
+    except Exception as exc:                       # noqa: BLE001 - 判不了按默认
+        print('[preprocess] 分流判断失败（按只查库）：%s: %s'
+              % (type(exc).__name__, str(exc)[:120]), flush=True)
+        return out
+    out['use_db'] = _bool_of(got, '查库', True)
+    out['make_file'] = _bool_of(got, '出文件', False)
+    if has_files:
+        out['use_file'] = True                     # 物理事实，模型改不了
+    else:
+        out['use_file'] = _bool_of(got, '读文件', False)
+    import re as _re
+    m = _re.search(r'理由\s*[=:：]\s*(.+)', got)
+    out['reason'] = (m.group(1).strip() if m else '')[:120]
+    return out
+
 
 def gate(question: str, history=None, ask=None) -> bool:
     """第 1 步：要不要走预处理。True = 走（纠错 + 补全 + 补时间地点）。

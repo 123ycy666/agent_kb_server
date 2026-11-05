@@ -250,7 +250,12 @@ function usePreset(btn){
   document.getElementById('q').value=btn.getAttribute('data-q')||'';
   ask();
 }
-function tagCls(t){return t==='kb_search'?'t-kb':(t==='run_sql'?'t-db':(t==='answer'?'t-ans':'t-meta'));}
+function tagCls(t){
+  if(t==='kb_search'||t==='kb_read'||t==='read_file')return 't-kb';
+  if(t==='run_sql'||t==='describe_table'||t==='find_column')return 't-db';
+  if(t==='answer'||t==='make_file'||t==='run_code')return 't-ans';
+  return 't-meta';
+}
 
 /* ---------------- 会话（多轮记忆） ----------------
    服务端靠 session_id 记住同一场会话，并把它作为上下文交给模型。
@@ -281,14 +286,25 @@ function newSession(){
    下载不能用 <a href>：鉴权是 Authorization 头（JWT 在 localStorage），
    裸链接不会带 header ⇒ 401。所以统一走 fetch → blob → 触发保存。 */
 var DOCFILES=[];
+function fileKind(name){
+  var e=(name||'').split('.').pop().toLowerCase();
+  if(['xlsx','xls','xlsm','csv'].indexOf(e)>=0)return '表格';
+  if(e==='pdf')return 'PDF';
+  if(e==='pptx'||e==='pptm')return 'PPT';
+  return '文档';
+}
 function renderFiles(){
   var el=document.getElementById('filetip');
-  if(!DOCFILES.length){el.textContent='';return;}
-  el.innerHTML='已上传：'+DOCFILES.map(function(f){
+  if(!DOCFILES.length){el.innerHTML='';return;}
+  el.innerHTML=DOCFILES.map(function(f,i){
     var p=f.parsed||{};
-    return esc(f.name)+'（'+(p.ok?('已解析 '+p.chars+' 字'):('未解析：'+(p.error||'未知')))+'）';
-  }).join('；');
+    var st=p.ok?('已解析 '+p.chars+' 字'):('未解析：'+(p.error||'未知'));
+    return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:3px 8px;border:1px solid #d6e4f0;border-radius:10px;background:#f4f9ff">'
+      +'<b>'+esc(f.name)+'</b> <span style="color:#5b7fa6">'+fileKind(f.name)+'</span> '
+      +esc(st)+' <a href="javascript:void(0)" onclick="delFile('+i+')" style="color:#a12a20">×</a></span>';
+  }).join('');
 }
+function delFile(i){DOCFILES.splice(i,1);renderFiles();}
 function uploadDoc(inp){
   var f=inp.files&&inp.files[0]; inp.value='';
   if(!f)return;
@@ -394,6 +410,20 @@ function ask(){
      if(d.session_id)setSession(d.session_id);      /* 首问服务端会生成并回传 */
      document.getElementById('completed').textContent=(d.user_profile?('用户画像：'+d.user_profile+String.fromCharCode(10)):'')+(d.completed_question?('补全参考（仅参考，以问题为准）：'+d.completed_question):'');
       document.getElementById('answer').textContent=d.answer||'（空）';
+      /* 产物卡片：本轮 make_file 出的文件（自检结论 + 下载） */
+      var prods=(d.trace||[]).filter(function(s){return s.tool==='make_file'&&s.result&&s.result.url;});
+      if(prods.length){
+        var ph='';
+        prods.forEach(function(s){
+          var r=s.result;
+          ph+='<div style="margin-top:8px;padding:8px 10px;border:1px solid #cfe3d6;border-radius:8px;background:#f6fdf8">'
+             +'<b>'+esc(r.name)+'</b> · '+(Math.round((r.bytes||0)/1024))+' KB · 自检 '
+             +esc(((r.self_check||{}).verdict)||'-')+' · '
+             +'<a href="javascript:void(0)" onclick="saveBlob(\''+r.url+'\',\''+esc(r.name)+'\')">下载</a></div>';
+        });
+        document.getElementById('answer').innerHTML=esc(d.answer||'（空）')
+          +'<div style="font-size:13px">'+ph+'</div>';
+      }
      var w=d.no_db_query?'<span class="warn">本次未查询数据库</span>':'';
      var tm=d.timings||{};
      var gap=d.recorded_as_gap?'<span class="warn" style="background:#fff1f0;color:#a12a20">已记入缺口清单</span>':'';

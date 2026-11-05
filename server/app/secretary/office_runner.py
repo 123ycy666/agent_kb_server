@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """办公技能执行器：让 agent 真的能跑技能包里的脚本（而不是只读说明书）。
 
 为什么需要它（2026-10-21）
@@ -34,6 +34,11 @@ PPTX_SCRIPTS = SKILLS_DIR / 'bisheng-pptx' / 'scripts'
 DOCX_SCRIPTS = SKILLS_DIR / 'bisheng-docx' / 'scripts'
 XLSX_SCRIPTS = SKILLS_DIR / 'bisheng-xlsx' / 'scripts'
 DEFAULT_TIMEOUT = 300
+
+# 跑技能包用哪个解释器（2026-11-05）：默认就是当前进程的解释器。
+# 为什么要能换：本项目 venv 里没装 python-pptx（离线环境装不上），而系统 Python 装了；
+# 出 PPT 时把 SECRETARY_OFFICE_PYTHON 指向有依赖的那个解释器即可，不必改代码。
+PYTHON = (os.environ.get('SECRETARY_OFFICE_PYTHON') or '').strip() or sys.executable
 
 ALLOW_IMPORT = {
     'pptx', 'docx', 'openpyxl', 'PIL', 'lxml', 'json', 'os', 'sys', 're', 'math',
@@ -119,7 +124,7 @@ def run_code(code: str, workdir, *, timeout: int = DEFAULT_TIMEOUT) -> dict:
     script = wd / 'scratch' / '_run.py'
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(code, encoding='utf-8')
-    return _exec([sys.executable, '-X', 'utf8', str(script)], wd, timeout)
+    return _exec([PYTHON, '-X', 'utf8', str(script)], wd, timeout)
 
 
 def run_script(script, args: list[str] | None = None, workdir=None,
@@ -133,7 +138,7 @@ def run_script(script, args: list[str] | None = None, workdir=None,
     if not p.exists():
         raise RunnerError('脚本不存在：%s' % p.name)
     wd = Path(str(workdir))
-    return _exec([sys.executable, '-X', 'utf8', str(p)] + [str(a) for a in (args or [])], wd, timeout)
+    return _exec([PYTHON, '-X', 'utf8', str(p)] + [str(a) for a in (args or [])], wd, timeout)
 
 
 def outputs(workdir) -> list[dict]:

@@ -19,13 +19,17 @@ import time
 
 from app.secretary import pgdb
 
-SLOTS = ('fetch', 'judge', 'answer', 'check')
+SLOTS = ('fetch', 'judge', 'answer', 'check', 'list', 'file', 'kb')
 
 SLOT_NAMES = {
     'fetch': '查数口径',
     'judge': '判定标准',
     'answer': '作答规则',
     'check': '自检清单',
+    # 第 8 步按本轮动作拼（2026-11-05）：读文件出清单 / 出文件 / 改知识库
+    'list': '清单规则（读文件出清单时）',
+    'file': '产物规则（出文件时）',
+    'kb': '变更规则（改知识库时）',
 }
 
 _TTL = 60.0          # 秒：改了规则最多 1 分钟生效，不必重启
