@@ -285,6 +285,20 @@ function newSession(){
    任务：速读 / 审校 / 查表走 /api/docs/jobs，轮询进度，完成后给下载。
    下载不能用 <a href>：鉴权是 Authorization 头（JWT 在 localStorage），
    裸链接不会带 header ⇒ 401。所以统一走 fetch → blob → 触发保存。 */
+function renderAnswer(txt){
+  var lines=String(txt||'').split(/\r?\n/), out='', list=false;
+  lines.forEach(function(l){
+    var m=l.match(/^\s*(\d+)[.、)]\s*(.*)$/);
+    if(m){
+      if(!list){out+='<ol style="margin:6px 0 6px 20px;padding:0">';list=true;}
+      out+='<li>'+esc(m[2])+'</li>';return;
+    }
+    if(list){out+='</ol>';list=false;}
+    if(l.trim())out+='<p style="margin:6px 0">'+esc(l)+'</p>';
+  });
+  if(list)out+='</ol>';
+  return out||esc(txt||'');
+}
 var DOCFILES=[];
 function fileKind(name){
   var e=(name||'').split('.').pop().toLowerCase();
@@ -409,21 +423,18 @@ function ask(){
    .then(function(d){
      if(d.session_id)setSession(d.session_id);      /* 首问服务端会生成并回传 */
      document.getElementById('completed').textContent=(d.user_profile?('用户画像：'+d.user_profile+String.fromCharCode(10)):'')+(d.completed_question?('补全参考（仅参考，以问题为准）：'+d.completed_question):'');
-      document.getElementById('answer').textContent=d.answer||'（空）';
-      /* 产物卡片：本轮 make_file 出的文件（自检结论 + 下载） */
-      var prods=(d.trace||[]).filter(function(s){return s.tool==='make_file'&&s.result&&s.result.url;});
-      if(prods.length){
-        var ph='';
-        prods.forEach(function(s){
+      /* 回答渲染：段落 + 编号清单（速读/纠错这类清单不再是一大坨文字） */
+      var _ph='';
+      (d.trace||[]).forEach(function(s){
+        if(s.tool==='make_file'&&s.result&&s.result.url){
           var r=s.result;
-          ph+='<div style="margin-top:8px;padding:8px 10px;border:1px solid #cfe3d6;border-radius:8px;background:#f6fdf8">'
+          _ph+='<div style="margin-top:8px;padding:8px 10px;border:1px solid #cfe3d6;border-radius:8px;background:#f6fdf8">'
              +'<b>'+esc(r.name)+'</b> · '+(Math.round((r.bytes||0)/1024))+' KB · 自检 '
              +esc(((r.self_check||{}).verdict)||'-')+' · '
              +'<a href="javascript:void(0)" onclick="saveBlob(\''+r.url+'\',\''+esc(r.name)+'\')">下载</a></div>';
-        });
-        document.getElementById('answer').innerHTML=esc(d.answer||'（空）')
-          +'<div style="font-size:13px">'+ph+'</div>';
-      }
+        }
+      });
+      document.getElementById('answer').innerHTML=renderAnswer(d.answer||'（空）')+_ph;
      var w=d.no_db_query?'<span class="warn">本次未查询数据库</span>':'';
      var tm=d.timings||{};
      var gap=d.recorded_as_gap?'<span class="warn" style="background:#fff1f0;color:#a12a20">已记入缺口清单</span>':'';

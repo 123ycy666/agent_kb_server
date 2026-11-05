@@ -1422,8 +1422,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     try:
         from app.secretary import prompt_text as _pt
         _priority = _pt.get('priority', '') or ''
+        # 工具说明：页面给了用页面的，没给用默认段（2026-11-05）
+        _tool_guide = _pt.get('tools', '') or _pt.DEFAULT_TOOLS_GUIDE
     except Exception:                              # noqa: BLE001
         _priority = ''
+        _tool_guide = ''
     messages = [{'role': 'system',
                  'content': agent_v2.system(
                      _mode, _system, today,
@@ -1437,7 +1440,10 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                      # S7 我的规则（个人库 type=rule）
                      personal_rules=(_pkb.get('text') or ''),
                      # 查数口径只在「要查业务库」时注入（2026-11-05）
-                     with_rules=bool(_route['use_db']))},
+                     with_rules=bool(_route['use_db']),
+                     # 工具说明：给工具时才给（聊天 0 只手，给了只会诱发乱调）
+                     tool_guide=(_tool_guide if (_route['use_db'] or _route['use_file']
+                                                 or _route['make_file']) else ''))},
                 {'role': 'user', 'content': user_content}]
     # 装配结果记一条：system 多少字、带没带查数口径（测试与排障要看这个）
     trace.append({'seq': len(trace) + 1, 'kind': 'system', 'tool': 'system',

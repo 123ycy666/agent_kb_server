@@ -66,7 +66,7 @@ def judge_mode(question: str, has_files: bool = False) -> str:
 def system(mode: str, legacy, today=None, persona: str | None = None,
            prefs: dict | None = None, priority: str | None = None,
            answer_format: str | None = None, personal_rules: str | None = None,
-           with_rules: bool = True) -> str:
+           with_rules: bool = True, tool_guide: str | None = None) -> str:
     """该模式的 system 提示词。
 
     legacy 是 agent._system（旧装配），用于回退——签名 legacy(today)。
@@ -106,6 +106,9 @@ def system(mode: str, legacy, today=None, persona: str | None = None,
             persona=persona, prefs=prefs)['system']
         if personal_rules:
             head += '\n\n' + personal_rules
+        # 工具说明（2026-11-05）：只在给了工具时注入；页面 `tools` 框可覆盖。
+        if tool_guide:
+            head += '\n\n' + tool_guide
         # ★ 2026-11-03（Fred）：硬编码的「今天的日期是…」不再注入 ——
         #   它是"我不填也生效的字"。要日期就在页面上自己写。
         if (os.environ.get('SECRETARY_INJECT_DATE') or '').strip() == '1':
