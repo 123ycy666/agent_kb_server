@@ -14,6 +14,7 @@ import PermissionManagement from './pages/PermissionManagement'
 import AuditLogs from './pages/AuditLogs'
 import ModelConfig from './pages/ModelConfig'
 import TaskCenter from './pages/TaskCenter'
+import Workflows from './pages/Workflows'
 import AgentChat from './pages/AgentChat'
 import ChatHistory from './pages/ChatHistory'
 import Prompts from './pages/Prompts'
@@ -102,6 +103,7 @@ export default function App() {
             }
           />
           <Route path="tasks" element={<TaskCenter />} />
+          <Route path="workflows" element={<Workflows />} />
           <Route path="*" element={<Navigate to="/overview" replace />} />
         </Route>
       </Routes>

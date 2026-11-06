@@ -12,6 +12,7 @@ import {
   theme,
 } from 'antd'
 import {
+  ApartmentOutlined,
   AuditOutlined,
   BookOutlined,
   ClusterOutlined,
@@ -69,6 +70,7 @@ export default function MainLayout() {
     },
     { key: '/tags', icon: <TagsOutlined />, label: <Link to="/tags">标签管理</Link> },
     { key: '/tasks', icon: <DeploymentUnitOutlined />, label: <Link to="/tasks">任务中心</Link> },
+    { key: '/workflows', icon: <ApartmentOutlined />, label: <Link to="/workflows">工作流</Link> },
     { type: 'divider' as const },
     {
       key: '/permissions',
