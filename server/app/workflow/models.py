@@ -72,6 +72,17 @@ class Schedule(Base):
                                                  server_default=func.now(), onupdate=func.now())
 
 
+class DocSchedule(Base):
+    """文档 ↔ 定时方案（多对多）：一份文档可挂多个方案，例如 8 点一个、9 点一个。"""
+
+    __tablename__ = 'wf_doc_schedule'
+    __table_args__ = (UniqueConstraint('doc_id', 'schedule_id', name='uk_wf_doc_sched'),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    doc_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    schedule_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+
+
 class Run(Base):
     """一轮运行（过程）。没命中也有这一行。"""
 
@@ -199,7 +210,7 @@ class Param(Base):
     note: Mapped[str | None] = mapped_column(Text)
 
 
-TABLES = [RuleDoc, DocVersion, Schedule, Run, RunLog, CheckResult, Item, Notify, Param]
+TABLES = [RuleDoc, DocVersion, Schedule, DocSchedule, Run, RunLog, CheckResult, Item, Notify, Param]
 
 DEFAULT_PARAMS = {
     'max_steps': ('24', '单轮最多几步工具调用'),

@@ -55,7 +55,11 @@ def templates(work_type: str, actor: CurrentActor = Depends(get_current_actor)):
 @router.get('/docs', summary='文档列表')
 def list_docs(work_type: str | None = None, db: Session = Depends(get_db),
               actor: CurrentActor = Depends(get_current_actor)):
-    return _jr({'items': docsdb.list_docs(db, work_type=work_type)})
+    items = docsdb.list_docs(db, work_type=work_type)
+    for it in items:
+        it['schedules'] = [{'id': s.id, 'name': s.name}
+                           for s in docsdb.schedules_of_doc(db, it['id'])]
+    return _jr({'items': items})
 
 
 @router.post('/docs', summary='新建文档')
@@ -98,14 +102,14 @@ async def save_doc(doc_id: int, request: Request, db: Session = Depends(get_db),
                     enabled=body.get('enabled'),
                     disabled_reason=body.get('disabled_reason'),
                     updated_by=actor.username)
-    # 停用 = 退出调度：立刻从定时方案上解挂，避免"停用了还在跑"
+    # 停用 = 退出调度：立刻从所有定时方案上解挂，避免"停用了还在跑"
     detached = None
-    if body.get('enabled') is False and d.schedule_id:
-        old = d.schedule_id
+    if body.get('enabled') is False:
+        names = [x.name for x in docsdb.schedules_of_doc(db, d.id)]
+        docsdb.unlink_doc(db, d.id)
         d.schedule_id = None
         db.commit()
-        sch = db.get(Schedule, int(old))
-        detached = sch.name if sch else str(old)
+        detached = '、'.join(names) if names else None
     wfsched.reload()
     out = docsdb.dict_of(d)
     out['detached_from'] = detached
@@ -265,8 +269,8 @@ async def create_schedule(request: Request, db: Session = Depends(get_db),
     if want:
         for d in db.execute(select(RuleDoc).where(RuleDoc.id.in_(want),
                                                   RuleDoc.deleted_flag == 0)).scalars().all():
-            d.schedule_id = s.id
-        db.commit()
+            pass
+        docsdb.set_schedule_docs(db, s.id, want)
     wfsched.reload()
     return _jr(_sched_dict(db, s))
 
@@ -298,12 +302,7 @@ async def save_schedule(sid: int, request: Request, db: Session = Depends(get_db
         s.note = body.get('note')
     if body.get('doc_ids') is not None:
         _check_mountable(db, body.get('doc_ids'))
-        want = {int(x) for x in (body.get('doc_ids') or [])}
-        for d in db.execute(select(RuleDoc).where(RuleDoc.deleted_flag == 0)).scalars().all():
-            if d.id in want and d.schedule_id != s.id:
-                d.schedule_id = s.id
-            elif d.id not in want and d.schedule_id == s.id:
-                d.schedule_id = None
+        docsdb.set_schedule_docs(db, s.id, body.get('doc_ids'))
     db.commit()
     wfsched.reload()
     return _jr(_sched_dict(db, s))

@@ -1,10 +1,10 @@
 """规则文档：模板、CRUD、版本。"""
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.workflow.models import DocVersion, RuleDoc
+from app.workflow.models import DocSchedule, DocVersion, RuleDoc, Schedule
 
 DETECT_SECTIONS = [
     ('what', '一 管什么', '这条预警盯的是哪件事、算到哪一层。一句话说清，不要写方法。',
@@ -179,8 +179,41 @@ def delete_doc(db: Session, d: RuleDoc) -> None:
 
 
 def docs_of_schedule(db: Session, schedule_id: int) -> list[RuleDoc]:
-    return db.execute(select(RuleDoc).where(RuleDoc.schedule_id == int(schedule_id),
+    ids = [r for r in db.execute(select(DocSchedule.doc_id)
+                                 .where(DocSchedule.schedule_id == int(schedule_id)))
+           .scalars().all()]
+    if not ids:
+        return []
+    return db.execute(select(RuleDoc).where(RuleDoc.id.in_(ids),
                                             RuleDoc.deleted_flag == 0)).scalars().all()
+
+
+def schedules_of_doc(db: Session, doc_id: int) -> list[Schedule]:
+    ids = [r for r in db.execute(select(DocSchedule.schedule_id)
+                                  .where(DocSchedule.doc_id == int(doc_id))).scalars().all()]
+    if not ids:
+        return []
+    return db.execute(select(Schedule).where(Schedule.id.in_(ids))).scalars().all()
+
+
+def set_schedule_docs(db: Session, schedule_id: int, doc_ids) -> None:
+    """把方案的挂载文档整体替换成给定的这一批。"""
+    want = {int(x) for x in (doc_ids or [])}
+    cur = {int(x) for x in db.execute(select(DocSchedule.doc_id)
+                                      .where(DocSchedule.schedule_id == int(schedule_id)))
+           .scalars().all()}
+    for d in cur - want:
+        db.execute(text('DELETE FROM wf_doc_schedule WHERE schedule_id=:s AND doc_id=:d'),
+                   {'s': int(schedule_id), 'd': int(d)})
+    for d in want - cur:
+        db.add(DocSchedule(doc_id=int(d), schedule_id=int(schedule_id)))
+    db.commit()
+
+
+def unlink_doc(db: Session, doc_id: int) -> None:
+    """把一份文档从所有方案上摘掉（停用文档时用）。"""
+    db.execute(text('DELETE FROM wf_doc_schedule WHERE doc_id=:d'), {'d': int(doc_id)})
+    db.commit()
 
 
 def count_docs(db: Session) -> int:

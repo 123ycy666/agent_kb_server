@@ -30,6 +30,13 @@ def ensure_tables() -> None:
         # 2026-11-06：调度方案支持多个运行时间点（8 点跑一次、9 点再跑一次）
         db.execute(text('ALTER TABLE wf_schedule ADD COLUMN IF NOT EXISTS crons jsonb '
                         "NOT NULL DEFAULT '[]'::jsonb"))
+        # 老数据：把 wf_doc.schedule_id 的单值关系搬进多对多表
+        db.execute(text('INSERT INTO wf_doc_schedule (doc_id, schedule_id) '
+                        'SELECT d.id, d.schedule_id FROM wf_doc d '
+                        'WHERE d.schedule_id IS NOT NULL AND NOT EXISTS ('
+                        '  SELECT 1 FROM wf_doc_schedule x WHERE x.doc_id = d.id '
+                        '  AND x.schedule_id = d.schedule_id)'))
+        db.execute(text('UPDATE wf_doc SET schedule_id = NULL WHERE schedule_id IS NOT NULL'))
         for k, (v, note) in DEFAULT_PARAMS.items():
             if db.get(Param, k) is None:
                 db.add(Param(key=k, value=v, note=note))

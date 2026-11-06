@@ -303,7 +303,7 @@ function SchedulesTab({ docs }: { docs: WfDoc[] }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<WfSchedule | null>(null)
   const [name, setName] = useState('')
-  const [times, setTimes] = useState<T[]>([{ unit: 'day', n: 1, hh: 8, mm: 0, dow: 1, dom: 1 }])
+  const [t, setT] = useState<T>({ unit: 'day', n: 1, hh: 8, mm: 0, dow: 1, dom: 1 })
   const [docIds, setDocIds] = useState<number[]>([])
   const [enabled, setEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -313,43 +313,42 @@ function SchedulesTab({ docs }: { docs: WfDoc[] }) {
   }, [])
   useEffect(() => { void load() }, [load])
 
-  const toCron = (t: T) => {
-    const hm = `${t.mm} ${t.hh}`
-    if (t.unit === 'minute') return `*/${t.n} * * * *`
-    if (t.unit === 'hour') return `${t.mm} */${t.n} * * *`
-    if (t.unit === 'day') return `${hm} * * *`
-    if (t.unit === 'week') return `${hm} * * ${t.dow}`
-    return `${hm} ${t.dom} * *`
+  const toCron = (x: T) => {
+    const hm = `${x.mm} ${x.hh}`
+    if (x.unit === 'minute') return `*/${x.n} * * * *`
+    if (x.unit === 'hour') return `${x.mm} */${x.n} * * *`
+    if (x.unit === 'day') return `${hm} * * *`
+    if (x.unit === 'week') return `${hm} * * ${x.dow}`
+    return `${hm} ${x.dom} * *`
+  }
+
+  const parseCron = (c: string): T => {
+    const [mi, hh, dom, , dow] = String(c || '').split(/\s+/)
+    if (String(mi).startsWith('*/')) return { unit: 'minute', n: Number(String(mi).slice(2)) || 1, hh: 8, mm: 0, dow: 1, dom: 1 }
+    if (String(hh).startsWith('*/')) return { unit: 'hour', n: Number(String(hh).slice(2)) || 1, hh: 8, mm: Number(mi) || 0, dow: 1, dom: 1 }
+    const base = { n: 1, hh: Number(hh) || 8, mm: Number(mi) || 0, dow: Number(dow) || 1, dom: Number(dom) || 1 }
+    if (dow !== '*') return { ...base, unit: 'week' }
+    if (dom !== '*') return { ...base, unit: 'month' }
+    return { ...base, unit: 'day' }
   }
 
   const openNew = () => {
     setEditing(null); setName(''); setDocIds([]); setEnabled(true)
-    setTimes([{ unit: 'day', n: 1, hh: 8, mm: 0, dow: 1, dom: 1 }])
+    setT({ unit: 'day', n: 1, hh: 8, mm: 0, dow: 1, dom: 1 })
     setOpen(true)
   }
   const openEdit = (s: WfSchedule) => {
     setEditing(s); setName(s.name); setDocIds(s.doc_ids || []); setEnabled(s.enabled)
-    const crons = s.crons && s.crons.length ? s.crons : [s.cron]
-    setTimes(crons.map((c) => {
-      const [mi, hh, dom, , dow] = String(c).split(/\s+/)
-      if (String(mi).startsWith('*/')) return { unit: 'minute', n: Number(String(mi).slice(2)) || 1, hh: 8, mm: 0, dow: 1, dom: 1 }
-      if (String(hh).startsWith('*/')) return { unit: 'hour', n: Number(String(hh).slice(2)) || 1, hh: 8, mm: Number(mi) || 0, dow: 1, dom: 1 }
-      const base = { n: 1, hh: Number(hh) || 8, mm: Number(mi) || 0, dow: Number(dow) || 1, dom: Number(dom) || 1 }
-      if (dow !== '*') return { ...base, unit: 'week' }
-      if (dom !== '*') return { ...base, unit: 'month' }
-      return { ...base, unit: 'day' }
-    }))
+    setT(parseCron(s.cron || (s.crons || [])[0] || '0 8 * * *'))
     setOpen(true)
   }
 
-  const patch = (i: number, p: Partial<T>) =>
-    setTimes((arr) => arr.map((t, idx) => (idx === i ? { ...t, ...p } : t)))
+  const patch = (p: Partial<T>) => setT((x) => ({ ...x, ...p }))
 
   const save = async () => {
     setSaving(true)
     try {
-      const crons = times.map(toCron)
-      const body = { name, crons, doc_ids: docIds, enabled }
+      const body = { name, crons: [toCron(t)], doc_ids: docIds, enabled }
       if (editing) await wfApi.saveSchedule(editing.id, body)
       else await wfApi.createSchedule(body)
       setOpen(false)
@@ -360,14 +359,7 @@ function SchedulesTab({ docs }: { docs: WfDoc[] }) {
 
   const columns: ColumnsType<WfSchedule> = [
     { title: '名称', dataIndex: 'name' },
-    {
-      title: '运行时间', dataIndex: 'crons', width: 220,
-      render: (v: string[], r) => (
-        <Space direction="vertical" size={0}>
-          {(v && v.length ? v : [r.cron]).map((c) => <Tag key={c}>{cronText(c)}</Tag>)}
-        </Space>
-      ),
-    },
+    { title: '运行时间', dataIndex: 'cron', width: 170, render: (v) => <Tag>{cronText(v)}</Tag> },
     { title: '下次触发', dataIndex: 'next', width: 170, render: (v: string[]) => (v?.length ? v[0] : '—') },
     {
       title: '挂载文档', dataIndex: 'doc_names',
@@ -412,48 +404,40 @@ function SchedulesTab({ docs }: { docs: WfDoc[] }) {
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
         locale={{ emptyText: <Empty description="还没有定时方案。不建方案就不会自动跑。" /> }} />
 
-      <Modal open={open} width={680} destroyOnClose
+      <Modal open={open} width={620} destroyOnClose
         title={editing ? '修改定时方案' : '新建定时方案'}
         onCancel={() => setOpen(false)} onOk={() => void save()} okText="保存" confirmLoading={saving}>
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
           <div>
             <div style={{ marginBottom: 4 }}>名称</div>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例：每天早晚各扫一遍" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例：每天八点跑预算预警" />
           </div>
           <div>
-            <div style={{ marginBottom: 4 }}>运行时间（可以加多个：8 点一次、9 点再跑一次）</div>
-            <Space direction="vertical" style={{ width: '100%' }}>
-              {times.map((t, i) => (
-                <Space key={i} wrap>
-                  <Select value={t.unit} onChange={(v) => patch(i, { unit: v })} style={{ width: 120 }} options={[
-                    { value: 'day', label: '每天' }, { value: 'week', label: '每周' },
-                    { value: 'month', label: '每月' }, { value: 'minute', label: '每 N 分钟' },
-                    { value: 'hour', label: '每 N 小时' }]} />
-                  {(t.unit === 'minute' || t.unit === 'hour') && (
-                    <><span>每</span><InputNumber min={1} max={59} value={t.n} onChange={(v) => patch(i, { n: Number(v) || 1 })} /><span>个</span></>
-                  )}
-                  {t.unit !== 'minute' && (
-                    <><InputNumber min={0} max={23} value={t.hh} onChange={(v) => patch(i, { hh: Number(v) || 0 })} /><span>时</span>
-                      <InputNumber min={0} max={59} value={t.mm} onChange={(v) => patch(i, { mm: Number(v) || 0 })} /><span>分</span></>
-                  )}
-                  {t.unit === 'week' && (
-                    <Select value={t.dow} onChange={(v) => patch(i, { dow: v })} style={{ width: 100 }}
-                      options={WEEK.map((l, idx) => ({ value: idx + 1, label: l }))} />
-                  )}
-                  {t.unit === 'month' && (
-                    <><span>每月</span><InputNumber min={1} max={28} value={t.dom} onChange={(v) => patch(i, { dom: Number(v) || 1 })} /><span>号</span></>
-                  )}
-                  <Text type="secondary">{cronText(toCron(t))}</Text>
-                  {times.length > 1 && <a onClick={() => setTimes((arr) => arr.filter((_, idx) => idx !== i))}>删除</a>}
-                </Space>
-              ))}
-              <Button onClick={() => setTimes((arr) => [...arr, { unit: 'day', n: 1, hh: 9, mm: 0, dow: 1, dom: 1 }])}>
-                添加时间点
-              </Button>
+            <div style={{ marginBottom: 4 }}>什么时候跑（一个方案一个时间；要 8 点、9 点各跑一次就建两个方案，各选同一份文档）</div>
+            <Space wrap>
+              <Select value={t.unit} onChange={(v) => patch({ unit: v })} style={{ width: 120 }} options={[
+                { value: 'day', label: '每天' }, { value: 'week', label: '每周' },
+                { value: 'month', label: '每月' }, { value: 'minute', label: '每 N 分钟' },
+                { value: 'hour', label: '每 N 小时' }]} />
+              {(t.unit === 'minute' || t.unit === 'hour') && (
+                <><span>每</span><InputNumber min={1} max={59} value={t.n} onChange={(v) => patch({ n: Number(v) || 1 })} /><span>个</span></>
+              )}
+              {t.unit !== 'minute' && (
+                <><InputNumber min={0} max={23} value={t.hh} onChange={(v) => patch({ hh: Number(v) || 0 })} /><span>时</span>
+                  <InputNumber min={0} max={59} value={t.mm} onChange={(v) => patch({ mm: Number(v) || 0 })} /><span>分</span></>
+              )}
+              {t.unit === 'week' && (
+                <Select value={t.dow} onChange={(v) => patch({ dow: v })} style={{ width: 100 }}
+                  options={WEEK.map((l, idx) => ({ value: idx + 1, label: l }))} />
+              )}
+              {t.unit === 'month' && (
+                <><span>每月</span><InputNumber min={1} max={28} value={t.dom} onChange={(v) => patch({ dom: Number(v) || 1 })} /><span>号</span></>
+              )}
+              <Text type="secondary">{cronText(toCron(t))}</Text>
             </Space>
           </div>
           <div>
-            <div style={{ marginBottom: 4 }}>挂载文档（可多选，每个时间点都会跑这些）</div>
+            <div style={{ marginBottom: 4 }}>挂载文档（可多选；同一份文档也可以挂在别的方案上）</div>
             <Select mode="multiple" allowClear style={{ width: '100%' }} value={docIds} onChange={setDocIds}
               optionFilterProp="label" placeholder="选文档"
               options={docs.map((d) => ({
@@ -462,7 +446,7 @@ function SchedulesTab({ docs }: { docs: WfDoc[] }) {
                 disabled: !d.enabled,
               }))} />
             <div style={{ marginTop: 4 }}>
-              <Text type="secondary">停用的文档不能挂载；把文档停用会自动从方案上解挂。</Text>
+              <Text type="secondary">停用的文档不能挂载；把文档停用会自动从所有方案上解挂。</Text>
             </div>
           </div>
           <div><span style={{ marginRight: 8 }}>启用</span><Switch checked={enabled} onChange={setEnabled} /></div>
