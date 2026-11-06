@@ -48,24 +48,28 @@ def next_runs(crons, n: int = 5) -> list[str]:
     return [x.strftime('%Y-%m-%d %H:%M') for x in out[:n]]
 
 
-def _run_schedule(sid: int) -> dict:
+def run_schedule_now(sid: int, force: bool = True) -> dict:
+    """跑一个方案下的所有启用文档（3 路并发，各自独立会话）。force=False 时停用的方案也跳过。"""
     import concurrent.futures as cf
     db = SessionLocal()
     try:
         sch = db.get(Schedule, int(sid))
-        if sch is None or not sch.enabled:
-            return {'skipped': 'schedule 不存在或已停用'}
-        docs = [d for d in docsdb.docs_of_schedule(db, sid) if d.enabled]
-        targets = [(d.id, d.name) for d in docs]
+        if sch is None:
+            return {'skipped': 'schedule 不存在'}
+        sched_name = sch.name
+        if not force and not sch.enabled:
+            return {'skipped': 'schedule 已停用'}
+        targets = [(d.id, d.name) for d in docsdb.docs_of_schedule(db, sid) if d.enabled]
     finally:
         db.close()
 
     def _one(pair):
         doc_id, doc_name = pair
-        s = SessionLocal()          # 每条文档一个会话：并行跑互不干扰
+        s = SessionLocal()
         try:
-            r = run_doc(s, doc_id, trigger='cron')
-            return {'doc': doc_name, 'run_id': r.get('run_id'), 'status': r.get('status')}
+            r = run_doc(s, doc_id, trigger='cron' if not force else 'manual')
+            return {'doc': doc_name, 'run_id': r.get('run_id'), 'status': r.get('status'),
+                    'hit_n': r.get('hit_n')}
         except Exception as exc:    # noqa: BLE001
             logger.warning('跑文档 %s 失败：%s', doc_name, exc)
             return {'doc': doc_name, 'status': 'failed', 'error': str(exc)[:200]}
@@ -76,10 +80,15 @@ def _run_schedule(sid: int) -> dict:
     if targets:
         with cf.ThreadPoolExecutor(max_workers=3) as ex:
             out = list(ex.map(_one, targets))
-    rec = {'schedule': sch.name if sch else sid, 'docs': out}
+    rec = {'schedule': sched_name, 'docs': out}
     LAST.append(rec)
     del LAST[:-50]
     return rec
+
+
+def _run_schedule(sid: int) -> dict:
+    """APScheduler 到点调用：方案停用就跳过。"""
+    return run_schedule_now(sid, force=False)
 
 
 def reload() -> dict:

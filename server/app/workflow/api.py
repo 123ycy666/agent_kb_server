@@ -270,9 +270,6 @@ async def create_schedule(request: Request, db: Session = Depends(get_db),
     db.commit()
     want = {int(x) for x in (body.get('doc_ids') or [])}
     if want:
-        for d in db.execute(select(RuleDoc).where(RuleDoc.id.in_(want),
-                                                  RuleDoc.deleted_flag == 0)).scalars().all():
-            pass
         docsdb.set_schedule_docs(db, s.id, want)
     wfsched.reload()
     return _jr(_sched_dict(db, s))
@@ -354,25 +351,15 @@ def delete_schedule(sid: int, db: Session = Depends(get_db),
     return _jr({'ok': True})
 
 
-@router.post('/schedules/{sid}/run', summary='立即跑该方案下的文档')
-def run_schedule(sid: int, db: Session = Depends(get_db),
-                 actor: CurrentActor = Depends(get_current_actor)):
+@router.post('/schedules/{sid}/run', summary='立即跑该方案下的文档（多份并行，各自一轮）')
+async def run_schedule(sid: int, db: Session = Depends(get_db),
+                       actor: CurrentActor = Depends(get_current_actor)):
     s = db.get(Schedule, int(sid))
     if s is None:
         raise HTTPException(status_code=404, detail={'code': 'SCHEDULE_NOT_FOUND',
                                                      'message': '方案不存在'})
-    out = []
-    for d in docsdb.docs_of_schedule(db, s.id):
-        if not d.enabled:
-            out.append({'doc': d.name, 'status': 'skipped', 'reason': '已停用'})
-            continue
-        try:
-            r = run_doc(db, d.id, trigger='manual')
-            out.append({'doc': d.name, 'run_id': r.get('run_id'), 'status': r.get('status'),
-                        'hit_n': r.get('hit_n', 0)})
-        except Exception as exc:         # noqa: BLE001
-            out.append({'doc': d.name, 'status': 'failed', 'error': str(exc)[:200]})
-    return _jr({'schedule': s.name, 'docs': out})
+    from starlette.concurrency import run_in_threadpool
+    return _jr(await run_in_threadpool(wfsched.run_schedule_now, s.id, True))
 
 
 # ── 运行记录 ────────────────────────────────────────────────────────────
