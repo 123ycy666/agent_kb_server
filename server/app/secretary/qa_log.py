@@ -156,14 +156,15 @@ def save(result, session_id=None, user_id=None, user_code=None,
         return {'session_id': sid, 'qa_id': None}
     info = _save_sync(result, sid, user_id, user_code, client_ip, channel)
     if info.get('steps'):
-        t = threading.Thread(target=_save_steps, args=(info['qa_id'], info['steps']), daemon=True)
-        t.start()
+        # ★ 2026-11-08：原来丢给后台线程，紧接着读历史会读不到步骤（实测：刚做完 PPT
+        #   立刻打开这场会话，产物卡片是空的，过一秒再刷新才有）。
+        #   步骤只有十几条 INSERT，同步写完，保证「历史能回放产物」这件事立即成立。
+        _save_steps(info['qa_id'], info['steps'])
     return {'session_id': sid, 'qa_id': info['qa_id']}
 
 
 def _save_sync(result, sid, user_id, user_code, client_ip, channel):
     """写会话 + 两条消息 + trace 主行。seq_no 冲突时重试一次。"""
-    scope = result.get('scope') or {}
     timings = result.get('timings') or {}
     answer = result.get('answer') or ''
     question = result.get('input_question') or ''
@@ -220,18 +221,14 @@ def _save_sync(result, sid, user_id, user_code, client_ip, channel):
                 'INSERT INTO t_chat_query_trace '
                 '(message_id, chat_session_id, raw_question, fixed_question, completed_question, '
                 ' user_profile, name_fix_used, completion_used, '
-                ' period_type, period_key, time_text, time_is_default, place, place_is_default, '
                 ' model, db_query_count, sql_query_count, kb_query_count, steps, '
                 ' no_db_query, unverified, is_gap, elapsed_ms, namefix_ms, completion_ms, loop_ms) '
-                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                 (ai_msg_id, sid,
                  question, result.get('fixed_question'), result.get('completed_question'),
                  (result.get('user_profile') or None),
                  1 if result.get('name_fix_used') else 0,
                  1 if result.get('completion_used') else 0,
-                 scope.get('period_type'), scope.get('period_key'), scope.get('time'),
-                 1 if scope.get('time_is_default') else 0,
-                 scope.get('place'), 1 if scope.get('place_is_default') else 0,
                  result.get('model'),
                  int(result.get('db_query_count') or 0), int(result.get('sql_query_count') or 0),
                  int(result.get('kb_query_count') or 0), int(result.get('steps') or 0),
@@ -513,8 +510,11 @@ def get_history(session_id, limit=None, with_steps=False, max_rows=None):
             steps = {}
             if ids:
                 marks = ','.join(['%s'] * len(ids))
+                # ★ 2026-11-08：必须带 output_text —— 产物（make_file 的 name/url/bytes/
+                #   自检结论）就存在这里。原来没选它，历史回放就永远看不到文件卡片。
                 cur.execute('SELECT trace_id, step_no, step_kind, round_no, tool_name, '
-                            '       sql_text, result_rows, cost_ms, model_ms, status, error_msg '
+                            '       input_text, output_text, sql_text, result_rows, '
+                            '       cost_ms, model_ms, status, error_msg '
                             'FROM t_chat_trace_step WHERE trace_id IN (' + marks + ') AND deleted_flag=0 '
                             'ORDER BY trace_id, step_no', ids)
                 for s in cur.fetchall():

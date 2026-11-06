@@ -98,92 +98,30 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("问数智能体预热启动失败（不影响服务）：%s", exc)
 
-    # 任务流转：内部 tick 循环（催办/升级/自动核销）
-    # ⚠️ 单进程部署才开；多 worker 会让每个进程各跑一遍（tick 幂等，但白耗 DB）
-    #    设 DISPATCH_TICK_MINUTES=0 关掉，改由外部定时任务调 POST /api/dispatch/tick
-    def _tick_in_pack() -> bool:
-        """心跳时间写在站点包 jobs.yml 里时，就别再起内置循环（否则同一份活跑两遍）。"""
-        try:
-            from app.secretary import scheduler as _sch
-            return _sch.pack_has('dispatch_tick')
-        except Exception:                          # noqa: BLE001
-            return False
-
-    _tick = {"stop": None, "task": None}
-    try:
-        import asyncio
-
-        from starlette.concurrency import run_in_threadpool
-
-        from app import dispatch_rules as _dr
-        from app.core.database import SessionLocal
-        from app.services import dispatch_service
-
-        if _dr.dispatch_on() and _dr.tick_minutes() > 0 and not _tick_in_pack():
-            minutes = _dr.tick_minutes()
-            stop = asyncio.Event()
-
-            async def _tick_loop():
-                while not stop.is_set():
-
-                    def _run():
-                        db = SessionLocal()
-                        try:
-                            return dispatch_service.tick(db)
-                        finally:
-                            db.close()
-
-                    try:
-                        await run_in_threadpool(_run)
-                    except Exception as exc:  # noqa: BLE001 - 单轮失败不许拖垮服务
-                        logger.warning("dispatch tick 失败：%s", exc)
-                    try:
-                        await asyncio.wait_for(stop.wait(), timeout=minutes * 60)
-                    except asyncio.TimeoutError:
-                        pass
-
-            _tick["stop"] = stop
-            _tick["task"] = asyncio.create_task(_tick_loop())
-            logger.info("dispatch tick 循环已启动 | 间隔=%s 分钟", minutes)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("dispatch tick 循环启动失败（不影响服务）：%s", exc)
-
-    # 站点包 jobs.yml 驱动定时活（扫描 4 条 + 心跳 1 条）。
-    # 2026-10-28 补：原来只读包、没人 start() —— 而上方内置 tick 循环又因"包里有 dispatch_tick"
-    # 主动让位，结果线上周期 tick 直接停摆（部署后发现）。多 worker 部署时设 SITE_JOBS=0，
-    # 只让一个进程跑（APScheduler 是进程内调度器）。
+    # 工作流框架：调度方案存库，启动时按库注册；改 cron 在页面里做（热重载）。
+    # 多 worker 部署时设 SITE_JOBS=0，只让一个进程跑（APScheduler 是进程内调度器）。
     _sch = {"on": False}
     try:
         if (os.environ.get("SITE_JOBS") or "1").strip() not in ("0", "false", "no"):
-            from app.secretary import scheduler as _scheduler
+            from app.workflow import scheduler as _wfsched
 
-            _scheduler.start()
-            st = _scheduler.status()
-            logger.info("站点包定时任务 | running=%s | %s", st.get("running"),
-                        ", ".join("%s→%s" % (j.get("id"), j.get("next")) for j in st.get("jobs") or []))
+            _reg = _wfsched.reload()
+            logger.info("工作流调度 | 注册 %d 条 | 跳过 %d 条",
+                        len(_reg.get("added") or []), len(_reg.get("skipped") or []))
             _sch["on"] = True
-    except Exception as exc:  # noqa: BLE001 - 定时活起不来不许拖垮服务
-        logger.warning("站点包定时任务启动失败（不影响服务）：%s", exc)
+    except Exception as exc:  # noqa: BLE001 - 调度起不来不许拖垮服务
+        logger.warning("工作流调度启动失败（不影响服务）：%s", exc)
 
     logger.info("API 文档： http://127.0.0.1:8200/docs")
     yield
     if _sch["on"]:
         try:
-            from app.secretary import scheduler as _scheduler
+            from app.workflow import scheduler as _wfsched
 
-            _scheduler.stop()
+            _wfsched.stop()
         except Exception:  # noqa: BLE001
             pass
-    if _tick["stop"] is not None:
-        _tick["stop"].set()
-    if _tick["task"] is not None:
-        _tick["task"].cancel()
-        try:
-            await _tick["task"]
-        except Exception:  # noqa: BLE001 - 关闭时任务被取消是正常路径
-            pass
     logger.info("服务已停止")
-
 
 app = FastAPI(
     title=settings.app_name,
@@ -291,14 +229,10 @@ from app.api.v1 import doc_jobs as doc_jobs_api    # noqa: E402
 app.include_router(doc_files_api.router, prefix="/api")
 app.include_router(doc_jobs_api.router, prefix="/api")
 
-# 预警四类 + 任务流转（2026-10-19）：/api/alerts/*、/api/tasks/*、/api/dispatch/*
-# 与 agent 的 /api/alerts/daily 并存；新接口一律 JWT 或内部令牌，不传角色/范围
-from app.api.v1 import alerts as alerts_api      # noqa: E402
-from app.api.v1 import dispatch as dispatch_api  # noqa: E402
+# 工作流框架（2026-11-06）：规则文档 / 调度方案 / 运行记录 / 事项 / 发送记录 / 参数
+from app.workflow import api as workflow_api  # noqa: E402
 
-app.include_router(alerts_api.router, prefix="/api")
-app.include_router(dispatch_api.router_tasks, prefix="/api")
-app.include_router(dispatch_api.router_dispatch, prefix="/api")
+app.include_router(workflow_api.router, prefix="/api")
 
 
 @app.get("/api", tags=["系统"], summary="服务信息")
@@ -322,17 +256,17 @@ def unified_health():
     my_ok, my_detail = check_mysql_connection()
     agent_h = agent_api.health()
     try:
-        from app.api.v1 import dispatch as dispatch_api
-        dispatch_h = dispatch_api.health_summary()
+        from app.workflow import scheduler as _wfsched
+        wf_h = _wfsched.status()
     except Exception as exc:  # noqa: BLE001
-        dispatch_h = {"ok": False, "error": str(exc)[:200]}
+        wf_h = {"ok": False, "error": str(exc)[:200]}
     return {
         "status": "ok",
         "app": settings.app_name,
         "database": {"ok": pg_ok, "detail": pg_detail},
         "employee_source": {"ok": my_ok, "detail": my_detail},
         "agent": agent_h,
-        "dispatch": dispatch_h,
+        "workflow": wf_h,
     }
 
 
@@ -359,10 +293,13 @@ _AGENT_STATIC = _Path(__file__).resolve().parent / "secretary" / "static"
 #     return _FileResponse(_AGENT_STATIC / "asr.html")
 
 
-@app.get("/agent/skills", tags=["问数智能体"], include_in_schema=False)
-def agent_skills_page():
-    """技能触发台（原 /skills）。"""
-    return _FileResponse(_AGENT_STATIC / "skills.html")
+# 问答页不缓存：改完前端刷新就能看到，不会被浏览器旧文件顶掉
+# （Fred 截图里看到的还是旧版界面，就是因为 index.html 被缓存了）
+@app.get("/agent/", include_in_schema=False)
+@app.get("/agent/index.html", include_in_schema=False)
+def agent_page():
+    return _FileResponse(_AGENT_STATIC / "index.html",
+                         headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 if _AGENT_STATIC.is_dir():
@@ -403,6 +340,15 @@ def spa_fallback(full_path: str):
                 return _FileResponse(target)
         except (OSError, ValueError):
             pass  # 非法路径（含 .. / 编码异常）→ 当作前端路由处理
+
+    # /api/* 没有匹配到任何接口 → 必须回 404 JSON，不能落到前端 index.html：
+    # 否则「接口删了」这件事在页面上表现为 200 + 一坨 HTML，排查时完全看不出来。
+    if full_path.startswith("api/"):
+        return JSONResponse(
+            {"error": "接口不存在", "path": "/" + full_path},
+            status_code=404,
+            headers={"Cache-Control": "no-store"},
+        )
 
     if _SPA_INDEX.is_file():
         # index.html **绝不能缓存**：它决定加载哪个 hash 的 JS。

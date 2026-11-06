@@ -125,7 +125,6 @@ def main() -> int:
     agent.semantic.codes_menu = lambda: ''
     agent.semantic.table_list_menu = lambda: 't_budget（替身）'
     agent.config.PAGE_ON = False
-    agent.config.NUMBER_GUARD_ON = False
 
     # ── 场景 1：模型直接给正文 → 一次收工，不催、不拦（2026-11-03 守卫全关）
     res, fm = run('2025年全市情况', [{'content': '2025年全市执行率105.64%。'}])

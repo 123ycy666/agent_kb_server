@@ -161,6 +161,10 @@ def labeled(section: str) -> str:
 
 # 材料段的统一标记：换阶段时靠它把上一段切掉（换，不是叠）
 MARK = '\n\n===== 规则材料（本阶段） =====\n'
+# 标记的标题行。★ 2026-11-05：`prompt_stack._block()` 会 strip() 正文，把 MARK 的
+# 前导空行吃掉，只认 MARK 就找不到材料起点 —— 收尾那次于是仍背着 18k 查数口径
+# （实测收尾 system 19,091 字，本该 1,261 字）。取起点两种形式都认。
+_MARK_HEAD = MARK.strip()
 
 
 def index_text(slots) -> str:
@@ -207,10 +211,15 @@ def block(slots, pinned_only: bool = True, with_index: bool = True,
 
 
 def strip_block(system: str) -> str:
-    """去掉 system 里的材料段，留下基础提示词。"""
+    """去掉 system 里的材料段，留下基础提示词。
+
+    两种起点都认：完整 MARK，或被上游 strip 掉前导空行的标题行（见 `_MARK_HEAD`）。
+    """
     s = str(system or '')
     i = s.find(MARK)
-    return s[:i] if i >= 0 else s
+    if i < 0:
+        i = s.find(_MARK_HEAD)
+    return s[:i].rstrip('\n') if i >= 0 else s
 
 
 def summary() -> list[dict]:

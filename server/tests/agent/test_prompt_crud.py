@@ -139,6 +139,15 @@ def main() -> int:
     chk('查：strip_block 从标记处截断', pm.strip_block('abc' + pm.MARK + 'x') == 'abc')
     chk('查：正文恰好含标记会被截（已知边界，钉住现状）',
         pm.strip_block('说明' + pm.MARK) == '说明')
+    # ★ 2026-11-05：材料是经 `prompt_stack._block()` 进 system 的，它会 strip() 正文，
+    #   MARK 的前导空行被吃掉；只认 MARK 就切不掉，收尾那次仍背 18k 查数口径。
+    chk('查：前导空行被 strip 后仍能截断',
+        pm.strip_block('说明' + pm.MARK.strip() + '材料正文') == '说明')
+    from app.secretary import prompt_stack
+    _sysm = prompt_stack.build(mode='data', rules_menu=pm.block(('fetch',)))['system']
+    chk('查：真实装配出的 system 能切回基础提示词（材料在、切完不在）',
+        '正文甲' in _sysm and '正文甲' not in pm.strip_block(_sysm),
+        pm.strip_block(_sysm)[-40:])
     chk('查：summary 固定四份',
         [x['slot'] for x in pm.summary()] == ['fetch', 'judge', 'answer', 'check'])
 

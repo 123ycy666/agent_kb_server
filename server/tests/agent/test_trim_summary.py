@@ -88,21 +88,10 @@ check('8e 单位守卫只对指标表', ('千瓦时' in agent._unit_guard('SELEC
       and agent._unit_guard('SELECT budget_amount FROM t_power_company_budget_result') == '')
 
 
-# 9. 数字闸：金额必须能在本轮结果（含成对派生）里找到出处
-TR = [{'kind': 'tool', 'tool': 'run_sql', 'result': {'rows': [{'budget_amount': '19100000.00'}],
-       'summary': {'budget_amount': {'sum': 19100000.0, 'mean': 19100000.0, 'min': 19100000.0, 'max': 19100000.0, 'n': 1}}}},
-      {'kind': 'tool', 'tool': 'run_sql', 'result': {'rows': [{'alloc': '449000.00', 'used': '256500.00'}]}}]
-POOL = agent._num_pool(TR)
-check('9a 有出处的金额放过', agent._untraceable_money('全市分配1910.00万元', POOL) == [])
-check('9b 编出来的金额被抓', agent._untraceable_money('全市分配1950.00万元', POOL) == [1950.0])
-check('9c 余额（派生差）放过', agent._untraceable_money('余额19.25万元', POOL) == [])
-check('9d 10 万以下不看', agent._untraceable_money('小额5.50万元', POOL) == [])
-
-# 10. 内部系数闸：不许把 0.6 系数换算成「XX% 基准线 / 进度要求」
-check('10a 进度要求被抓', bool(agent._coefficient_talk('41个所预算执行率低于45%的进度要求')))
-check('10b 基准线被抓', bool(agent._coefficient_talk('全市执行率低于 60% 的达标线')))
-check('10c 正常比较不误报', agent._coefficient_talk('线损率2.61%，低于3%的正常线') == '')
-check('10d 只给两个数不报', agent._coefficient_talk('已过时间比例75%，当前执行率5.87%') == '')
+# 9/10. 数字闸 / 内部系数闸：2026-11-08（Fred）整块删除，代码里不再有这两个闸
+check('9 数字闸已删除', not hasattr(agent, '_num_pool') and not hasattr(agent, '_untraceable_money')
+      and not hasattr(agent, '_facts_pool'))
+check('10 系数闸已删除', not hasattr(agent, '_coefficient_talk'))
 
 small = tools_db.run_sql('SELECT COUNT(*) AS c FROM t_power_company_budget_result WHERE year=2026 AND deleted_flag=0')
 t2 = agent._trim('run_sql', small)

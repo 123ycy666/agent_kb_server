@@ -45,20 +45,32 @@ def read_file(file_id: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> dict
     except doc_files.DocFileError as exc:
         return {'error': exc.message}
     blocks = data.get('blocks') or []
-    used, out = 0, []
-    for b in blocks:
+    off = int(offset or 0)
+    used, out, taken = 0, [], 0
+    for i, b in enumerate(blocks):
         text = str(b.get('text') or '').strip()
         if not text:
+            taken = i + 1
             continue
         if used + len(text) > MAX_CHARS and out:
             break
         out.append({'para_no': b.get('para_no'), 'heading': b.get('heading_path') or '',
                     'type': b.get('block_type') or 'text', 'text': text})
         used += len(text)
-    total = len(doc_files.blocks(file_id, uid, offset=0, limit=100000)['blocks'])
-    nxt = int(offset or 0) + len(blocks) if int(offset or 0) + len(blocks) < total else None
+        taken = i + 1
+    total = int(data.get('total') or 0)
+    # ★ 2026-11-08：next_offset 必须按**实际给出**的块数算。原来按取回的块数算，
+    #   一旦撞上 MAX_CHARS 提前 break，剩下的块既没给、next_offset 又是 null，
+    #   模型只能回头自己猜 offset 重读（实测速读/PPT/Word 三条链路都白读两轮）。
+    end = off + taken
+    nxt = end if end < total else None
+    note = ('接着读 next_offset=%d（还剩 %d 块，全文 %d 块）。' % (nxt, total - end, total)
+            if nxt is not None else
+            '已到末尾：全文 %d 块，本次给的是第 %d-%d 块，已经读完，不要重复读。'
+            % (total, off + 1, end))
     return {'file_id': file_id, 'name': meta.get('name'), 'total_blocks': total,
-            'offset': int(offset or 0), 'blocks': out, 'next_offset': nxt}
+            'note': note,
+            'offset': off, 'blocks': out, 'next_offset': nxt}
 
 
 def kb_read(doc_id=None, doc_name: str = '', offset: int = 0, limit: int = DEFAULT_LIMIT) -> dict:
@@ -92,16 +104,23 @@ def kb_read(doc_id=None, doc_name: str = '', offset: int = 0, limit: int = DEFAU
             .offset(int(offset or 0)).limit(int(limit or DEFAULT_LIMIT))).all()
         total = db.execute(
             select(DocumentChunk.id).where(DocumentChunk.doc_id == d_id)).all()
-        used, out = 0, []
-        for idx, head, content in chunks:
+        off = int(offset or 0)
+        used, out, taken = 0, [], 0
+        for i, (idx, head, content) in enumerate(chunks):
             text = str(content or '').strip()
             if used + len(text) > MAX_CHARS and out:
                 break
             out.append({'chunk': int(idx), 'heading': head or '', 'text': text})
             used += len(text)
-        nxt = int(offset or 0) + len(chunks) if int(offset or 0) + len(chunks) < len(total) else None
-        return {'doc_id': d_id, 'name': fname, 'total_chunks': len(total),
-                'offset': int(offset or 0), 'chunks': out, 'next_offset': nxt,
+            taken = i + 1
+        end = off + taken
+        nxt = end if end < len(total) else None
+        note = ('接着读 next_offset=%d（还剩 %d 块，全文 %d 块）。' % (nxt, len(total) - end, len(total))
+                if nxt is not None else
+                '已到末尾：全文 %d 块，本次给的是第 %d-%d 块，已经读完，不要重复读。'
+                % (len(total), off + 1, end))
+        return {'doc_id': d_id, 'name': fname, 'total_chunks': len(total), 'note': note,
+                'offset': off, 'chunks': out, 'next_offset': nxt,
                 'candidates': [{'doc_id': r[0], 'name': r[1]} for r in rows]}
     except Exception as exc:                       # noqa: BLE001
         return {'error': '%s: %s' % (type(exc).__name__, str(exc)[:200])}
@@ -179,7 +198,7 @@ def make_file(kind: str, spec: dict, self_check: bool = True) -> dict:
         out_path = out_dir / ('%s.xlsx' % title)
         code = _XLSX_CODE.replace('{spec_json!r}', repr(json.dumps(spec, ensure_ascii=False))) \
                          .replace('{out!r}', repr(str(out_path)))
-        script = None
+        script = R.XLSX_SCRIPTS / 'inspect_workbook.py'
     else:
         return {'error': 'kind 只能是 docx / pptx / xlsx'}
 

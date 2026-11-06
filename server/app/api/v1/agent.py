@@ -18,6 +18,7 @@ import os
 import threading
 import time
 import uuid
+import contextvars
 
 from fastapi import APIRouter, Depends, Query, Request
 import json as _json
@@ -31,7 +32,7 @@ from app.services import screen_intent as screen_intent_svc
 from app.secretary import config as sec_config
 from app.secretary import doc_context
 from app.secretary import doc_files as sec_doc_files
-from app.secretary import kb_adapter, qa_log, report as report_mod, tools_asr
+from app.secretary import kb_adapter, qa_log, tools_asr
 from app.secretary.gaps import list_gaps
 from app.schemas.agent import AskResponse
 
@@ -51,6 +52,18 @@ def _jr(data, status_code: int = 200) -> Response:
     )
 
 router = APIRouter(tags=["问数智能体"])
+
+# 流式提问的任务表（2026-11-08）：task_id → {trace, done, result, started}
+# 只放内存，进程重启就丢 —— 它就是给「边跑边看」用的，不需要持久化。
+_TASKS: dict = {}
+_TASKS_TTL = 30 * 60          # 半小时后清掉，避免长跑进程一直涨
+
+
+def _TASKS_GC() -> None:
+    now = time.time()
+    for k in [k for k, v in _TASKS.items()
+              if now - float(v.get("started") or 0) > _TASKS_TTL]:
+        _TASKS.pop(k, None)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -279,6 +292,43 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
     #    参数传不进去，只能靠 ContextVar；run_in_threadpool 会复制上下文。
     kb_adapter.set_scope(kb_scope)
 
+    # ── 流式提问（2026-11-08）：把 ask 丢到后台线程，接口立刻返回 task_id；
+    #    前端轮询 /api/ask/progress 就能实时看到每一步（trace 是同一个 list）。
+    # 为什么要另起线程而不是 run_in_threadpool：run_in_threadpool 会等结果，
+    #    而这里要「先返回、边跑边读」。contextvars 必须手动复制，否则
+    #    kb_adapter 的登录身份/检索范围在新线程里是空的（kb_search 会 403）。
+    if str(data.get("stream") or "").strip().lower() in ("1", "true", "yes", "on"):
+        _TASKS_GC()
+        tid = "t_" + uuid.uuid4().hex[:12]
+        state = {"trace": [], "done": False, "result": None, "stop": False,
+                 "started": time.time(), "session_id": session_id}
+        _TASKS[tid] = state
+        _ctx = contextvars.copy_context()
+
+        def _work(tid=tid, state=state, _ctx=_ctx):
+            try:
+                rr = agent_mod.ask(
+                    q, model=model, max_steps=max_steps, profile=profile,
+                    want_page=want_page, today=today, scope=scope,
+                    page_async=page_async, session_id=session_id,
+                    user_id=actor.user_id, user_code=user_code or actor.username,
+                    client_ip=client_ip, channel=channel, history_turns=history_turns,
+                    doc_context=ctx.get("context") or None,
+                    doc_files=ctx.get("files") or None,
+                    trace=state["trace"],
+                    should_stop=lambda: bool(state.get("stop")))
+            except Exception as e:                 # noqa: BLE001
+                rr = {"input_question": q, "session_id": session_id,
+                      "answer": (str(e) if isinstance(e, agent_mod.ModelUnavailable)
+                                 else "服务异常：" + type(e).__name__ + " " + str(e)),
+                      "trace": state["trace"], "steps": len(state["trace"])}
+            state["result"] = rr
+            state["done"] = True
+            state["ended"] = time.time()
+
+        threading.Thread(target=_ctx.run, args=(_work,), daemon=True).start()
+        return _jr({"task_id": tid, "stream": True, "session_id": session_id})
+
     try:
         # ⚠️ 必须丢线程池执行（2026-10-16 修的真实故障）：
         #    agent_mod.ask 内部是**同步**调模型（urllib，单次几十秒），
@@ -374,6 +424,48 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
             print('[screen] 跳转识别跳过：%s: %s' % (type(_exc).__name__, _exc), flush=True)
 
     return _jr(r)
+
+
+@router.post("/ask/stop", summary="停止生成（配 POST /api/ask {stream:true}）")
+def ask_stop(task_id: str = Query(default=""),
+             actor: CurrentActor = Depends(get_current_actor)):
+    """把这一问标记为停止：模型循环下一轮开头就收手，返回已查到的部分。"""
+    t = _TASKS.get(task_id)
+    if not t:
+        return _jr({"ok": False, "error": "任务不存在或已过期"}, status_code=404)
+    t["stop"] = True
+    return _jr({"ok": True, "task_id": task_id})
+
+
+@router.get("/ask/progress", summary="提问进度：边跑边看每一步（配 POST /api/ask {stream:true}）")
+def ask_progress(task_id: str = Query(default=""),
+                 actor: CurrentActor = Depends(get_current_actor)):
+    """返回这一问已经跑过的步骤；跑完再把完整结果一起给出来。
+
+    步骤就是 ask() 里的 trace —— 同一个 list，边写边读，所以能看到
+    「判分流 → 纠错 → 补全 → 定稿 → 每个工具调用 → 写回答」。
+    """
+    t = _TASKS.get(task_id)
+    if not t:
+        return _jr({"done": True, "steps": [], "error": "任务不存在或已过期"}, status_code=404)
+    steps = []
+    for s in list(t.get("trace") or []):
+        item = dict(s)
+        if isinstance(item.get("content"), str) and len(item["content"]) > 800:
+            item["content"] = item["content"][:800] + '…'
+        r = item.get("result")
+        if isinstance(r, dict):
+            r = dict(r)
+            if isinstance(r.get("text"), str) and len(r["text"]) > 800:
+                r["text"] = r["text"][:800] + '…'
+            item["result"] = r
+        steps.append(item)
+    out = {"done": bool(t.get("done")), "steps": steps,
+           "session_id": t.get("session_id"),
+           "elapsed_ms": int((time.time() - float(t.get("started") or time.time())) * 1000)}
+    if t.get("done"):
+        out["result"] = t.get("result")
+    return _jr(out)
 
 
 def _parse_file_ids(raw) -> list[str]:
@@ -612,103 +704,6 @@ async def feedback(request: Request, actor: CurrentActor = Depends(get_current_a
         return _jr({"ok": n > 0, "updated": n, "qa_id": qa_id, "feedback": fb})
     except Exception as e:                         # noqa: BLE001
         return _jr({"error": "%s: %s" % (type(e).__name__, str(e)[:200])}, status_code=500)
-
-
-# ══════════════════════════════════════════════════════════════
-#  报告技能组（需登录）
-# ══════════════════════════════════════════════════════════════
-
-@router.post("/skill/run", summary="触发一个技能（技能文档 + 上游数据 → 合并回答）")
-async def skill_run(request: Request, actor: CurrentActor = Depends(get_current_actor)):
-    data = await _read_json(request)
-    try:
-        r = await run_in_threadpool(
-            report_mod.run_skill,
-            (data.get("skill_id") or "").strip(),
-            model=data.get("model") or None,
-            work_name=data.get("work_name") or "",
-            frm=data.get("from") or "", to=data.get("to") or "",
-            questions=data.get("questions") or None,
-            role=data.get("role") or "", scope=data.get("scope") or "",
-            use_doc=bool(data.get("use_doc", True)),
-            inputs=data.get("inputs") or None,
-        )
-    except Exception as e:                         # noqa: BLE001
-        r = {"answer": "服务异常：" + type(e).__name__ + " " + str(e)[:200], "trace": [], "tool_calls": 0}
-    return _jr(r)
-
-
-@router.post("/skill/title", summary="定时触发专用：只回一个标题（绝不空返回）")
-async def skill_title(request: Request, actor: CurrentActor = Depends(get_current_actor)):
-    data = await _read_json(request)
-    try:
-        r = await run_in_threadpool(
-            report_mod.run_skill_title,
-            (data.get("skill_id") or "").strip(),
-            model=data.get("model") or None,
-            account=data.get("account") or data.get("uid") or actor.username,
-            when=data.get("when") or data.get("triggered_at") or "",
-            scope=data.get("scope") or "",
-            inputs=data.get("inputs") or None,
-            today=(data.get("today") or data.get("business_date") or "").strip() or None,
-        )
-    except Exception as e:                         # noqa: BLE001
-        r = {"skill_id": data.get("skill_id"), "status": "unknown", "count": None,
-             "title": "服务异常：" + type(e).__name__ + " " + str(e)[:200],
-             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-    return _jr(r)
-
-
-@router.post("/report/notice", summary="按供电所生成预算分配通知（可编辑模拟值）")
-async def report_notice(request: Request, actor: CurrentActor = Depends(get_current_actor)):
-    data = await _read_json(request)
-    station = (data.get("station") or "").strip()
-    if not station:
-        return _jr({"error": "缺少 station"})
-    try:
-        r = await run_in_threadpool(
-            report_mod.build_notice, station,
-            base_year=data.get("base_year"), plan_year=data.get("plan_year"))
-    except Exception as e:                         # noqa: BLE001
-        r = {"error": type(e).__name__ + " " + str(e)[:200]}
-    return _jr(r)
-
-
-@router.post("/report", summary="年度缺陷治理计划分析（模型按技能文档自查自答）")
-async def report(request: Request, actor: CurrentActor = Depends(get_current_actor)):
-    data = await _read_json(request)
-    try:
-        r = await run_in_threadpool(
-            report_mod.run_report, notice=data.get("notice") or None,
-            station=(data.get("station") or report_mod._default_station()),
-            model=data.get("model") or None)
-    except Exception as e:                         # noqa: BLE001
-        r = {"report": "", "trace": [], "notice": {},
-             "warnings": ["服务异常：" + type(e).__name__ + " " + str(e)], "elapsed_ms": 0}
-    return _jr(r)
-
-
-@router.get("/statechange", summary="状态变更模拟数据（技能台演示）")
-def statechange(actor: CurrentActor = Depends(get_current_actor)):
-    return _jr(report_mod.state_change_sim())
-
-
-@router.get("/triggers", summary="技能触发清单")
-def triggers(actor: CurrentActor = Depends(get_current_actor)):
-    return _jr(report_mod.list_triggers())
-
-
-@router.get("/skills", summary="技能文档清单")
-def skills(actor: CurrentActor = Depends(get_current_actor)):
-    return _jr({"skills": report_mod.list_skill_docs()})
-
-
-@router.get("/report/meta", summary="报告技能元数据（基准年/计划年/供电所列表）")
-def report_meta(actor: CurrentActor = Depends(get_current_actor)):
-    y = report_mod.latest_year()
-    return _jr({"base_year": y, "plan_year": str(int(y) + 1),
-                         "stations": report_mod.list_stations(),
-                         "title": "年度缺陷治理计划分析"})
 
 
 # ══════════════════════════════════════════════════════════════

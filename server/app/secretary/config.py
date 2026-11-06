@@ -262,9 +262,8 @@ TABLES = [x for x in os.environ.get('SECRETARY_TABLES', '').replace(' ', '').spl
 #   唯一的硬上限是 MAX_STEPS=30（防死循环）。要压测再设 SECRETARY_QUESTION_BUDGET。
 QUESTION_BUDGET_S = float(ENV.get('SECRETARY_QUESTION_BUDGET') or '0')
 
-# 数字闸 / 系数闸：★ 2026-11-03 定稿「守卫先全关」—— 默认关，出问题再说。
-# 原来的行为：回答里的金额必须能在本轮 SQL 结果里找到出处，找不到就重问一次。
-NUMBER_GUARD_ON = (ENV.get('SECRETARY_NUMBER_GUARD') or '0') not in ('0', 'false', 'False')
+# ★ 2026-11-08（Fred）：数字闸 / 系数闸整块删除（连同 NUMBER_GUARD_ON 配置项）。
+#   它从来没在生效：默认关，且池子对不上数组并发返回。要防抄写错就靠 SQL 里 SUM，不靠事后对账。
 
 # 系统提示从 ai_data.ai_prompt 注入（取 IS_new=1 的最新版），不在代码里写死。
 # 列表里不存在的 key 会自动跳过，所以可以先接好槽位、等内容补上就自动生效。
@@ -299,7 +298,7 @@ RULES_PRIORITY = (os.environ.get('SECRETARY_RULES_PRIORITY') or '1').strip().low
 #   不是限制他」。
 # ★ 2026-11-03 定稿：设 30 —— 只防真死循环（同一个工具反复查不收敛），不含任何业务规则。
 #   复杂问题十几二十步是正常的，30 留足余量；要更长改环境变量 SECRETARY_MAX_STEPS。
-MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '30'))
+MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '40'))
 
 # HTTP 接口的**防呆上限**：历史对话类接口（/api/sessions、/api/history）在「要求全部返回」时，
 # 一次最多给这么多条，超出的截断，并在响应里带 truncated=true 让调用方知道被截了。

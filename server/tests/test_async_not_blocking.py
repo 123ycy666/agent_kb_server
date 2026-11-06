@@ -36,7 +36,7 @@ import urllib.request
 from pathlib import Path
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
-VICTIM = "/api/skills"            # 同步 def 端点，等价于知识库那批端点
+VICTIM = "/api/stats"             # 同步 def 端点，等价于知识库那批端点
 SLOW_SECONDS = 2.0
 VICTIM_SEND_DELAY = 0.5           # 慢请求开跑 0.5 秒后再打受害者端点
 VICTIM_MAX_OK = 0.8               # 被拖住的话会接近 SLOW_SECONDS - VICTIM_SEND_DELAY

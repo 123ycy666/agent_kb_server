@@ -10,7 +10,6 @@
 3. `config.PAGE_ON` 必须是 False（2026-10-19 Fred：正常流程先把页面生成关了）
 4. `config.NUMBER_GUARD_ON` / `QUESTION_BUDGET_S` 必须还在（新仓库版本的 config 丢了这两个键）
 5. `config.MODEL_CHANNEL` 必须在（新仓库的三通道开关，必须保留）
-6. `report.SKILL_DIR` 必须指向 `app/secretary/skills` 且能读到 ≥15 篇（平台布局）
 7. 预警三件套可导入，`ALERT_TYPES` 非空，`daily()` 可调用
 8. `app/secretary/*.py` 里不许再留裸兄弟模块 import（`import config` 这种，单进程下会 ImportError）
 9. `tools_kb` 必须走 `kb_adapter`（进程内检索），不是 `kb_client`
@@ -42,7 +41,7 @@ def chk(label: str, cond, extra: str = "") -> None:
 
 def main() -> int:
     try:
-        from app.secretary import agent, alerts, config, lex_source, qa_log, report, tools_kb
+        from app.secretary import agent, alerts, config, lex_source, qa_log, tools_kb
     except Exception as e:                                    # noqa: BLE001
         print("导入失败：%s: %s" % (type(e).__name__, e))
         print("\n0 项：0 通过 / 1 不通过（导入即失败，其余判据无法评估）")
@@ -55,16 +54,17 @@ def main() -> int:
         {"kb_search", "find_column", "run_sql"} <= names, sorted(names))
 
     # 2 ── 守卫层
-    for fn in ("_time_guard", "_scope_guard", "_unit_guard", "_num_pool",
-               "_untraceable_money", "_coefficient_talk", "_clean_answer", "_final_answer"):
+    for fn in ("_time_guard", "_scope_guard", "_unit_guard", "_clean_answer", "_final_answer"):
         chk("守卫函数 %s 存在" % fn, callable(getattr(agent, fn, None)))
 
     # 3/4/5 ── 配置开关
     chk("PAGE_ON 为 False（页面生成关闭）", getattr(config, "PAGE_ON", None) is False,
         str(getattr(config, "PAGE_ON", "<缺失>")))
-    # ★ 2026-11-03 定稿「守卫先全关」：数字闸默认关、单题时间预算默认不限。
-    chk("NUMBER_GUARD_ON 默认关", getattr(config, "NUMBER_GUARD_ON", "缺失") is False,
-        str(getattr(config, "NUMBER_GUARD_ON", "<缺失>")))
+    # ★ 2026-11-08（Fred）：数字闸 / 系数闸整块删除，配置项一并删掉。
+    chk("数字闸已删除（没有 NUMBER_GUARD_ON）", not hasattr(config, "NUMBER_GUARD_ON"))
+    chk("数字闸函数已删除", not [f for f in ("_num_pool", "_untraceable_money",
+                                              "_coefficient_talk", "_facts_pool")
+                                 if hasattr(agent, f)])
     chk("QUESTION_BUDGET_S 默认不限", getattr(config, "QUESTION_BUDGET_S", None) == 0,
         str(getattr(config, "QUESTION_BUDGET_S", "<缺失>")))
     chk("KB_TIMEOUT 存在", isinstance(getattr(config, "KB_TIMEOUT", None), int),
@@ -74,13 +74,8 @@ def main() -> int:
         str(getattr(config, "MODEL_CHANNEL", "<缺失>")))
     chk("MODELS 非空", bool(getattr(config, "MODELS", None)), str(len(getattr(config, "MODELS", []))))
 
-    # 6 ── 技能目录（平台布局）
-    sd = Path(getattr(report, "SKILL_DIR", ""))
-    chk("SKILL_DIR 指向 secretary/skills",
-        sd.name == "skills" and sd.parent.name == "secretary", str(sd))
-    docs = report.list_skill_docs()
-    chk("技能文档 ≥ 15 篇", len(docs) >= 15, str(len(docs)))
-    chk("《判据规则》在技能文档里", any("判据规则" in d["name"] for d in docs), str(len(docs)))
+    # 6 ── 报告技能已整块删除（2026-11-08）：接口 /report* /skill/* /skills /triggers /statechange 与
+    #      secretary/report.py、static/skills.html 一起下线，这里不再检查技能目录。
 
     # 7 ── 预警
     chk("ALERT_TYPES 非空", bool(getattr(alerts.R, "ALERT_TYPES", None)),

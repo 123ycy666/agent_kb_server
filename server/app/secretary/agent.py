@@ -57,9 +57,14 @@ TOOLS = [
     {'type': 'function', 'function': {
         'name': 'run_sql',
         'description': '在只读业务库执行 SELECT（只允许业务字典里的表；不支持分号与注释，最多返回 200 行）。'
-                       '★ sql 可以传**字符串或字符串数组**：互不依赖的查询一次全传进来，框架内部并发跑。'
+                       '★ 互不依赖的查询**一次全传进 sql 数组**（框架内部并发跑），不要一条一条调：'
+                       '同一轮里不同维度、不同表、不同口径的数，都放进同一个数组。'
                        '★ 调工具的那几轮**只给工具调用，不要写任何说明文字**；数据查够后就只回一句「数据已查全」。',
-        'parameters': {'type': 'object', 'properties': {'sql': {'type': 'string'}}, 'required': ['sql']}}},
+        'parameters': {'type': 'object', 'properties': {
+            'sql': {'anyOf': [{'type': 'string'},
+                              {'type': 'array', 'items': {'type': 'string'}}],
+                    'description': '一条 SQL，或互不依赖的多条 SQL 组成的数组'}},
+            'required': ['sql']}}},
     # ★ 2026-10-30：字段明细与规则条目改成"按需取"，不再全塞进 system。
     {'type': 'function', 'function': {
         'name': 'describe_table',
@@ -422,6 +427,19 @@ def _swap_materials(messages, slots):
         return messages
 
 
+def _progress_feed(trace, user_content, limit=8):
+    """进度自评的资料：本轮要办的事（含要答的方面）+ 已经查过哪些 SQL、各回几行。"""
+    lines = ['【本轮要办的事】' + str(user_content or '')[:400], '【已经查过的】']
+    for t in (trace or []):
+        if not isinstance(t, dict) or t.get('kind') != 'tool' or t.get('tool') != 'run_sql':
+            continue
+        res = t.get('result') or {}
+        n = len(res.get('rows') or []) if isinstance(res, dict) else 0
+        lines.append('- %s → %d 行' % (
+            str((t.get('args') or {}).get('sql') or '')[:100].replace('\n', ' '), n))
+    return '\n'.join(lines[:limit + 2])
+
+
 _FACTS_RULE = ('把这一轮已经查到的事实列成清单，一条一行，只写〔口径〕=〔数值〕（来自哪张表）；'
                '查过但没数据的那条就写「无数据」。不要写结论、不要写建议、不要写过程。')
 
@@ -473,32 +491,6 @@ def _write_answer(messages, model, user_content, trace=None, need_facts=True,
     return {'answer': _final_answer(_swap_materials(messages, tuple(slots)), model,
                                     allow_rule=True, trace=trace),
             'facts': ''}
-
-
-def _facts_pool(text):
-    """事实清单里的数值池（万元 + 两两和差比），对账用。清单一条一行，好抽。"""
-    vals = set()
-    body = str(text or '')
-    for m in re.finditer(r'(-?\d[\d,]*(?:\.\d+)?)\s*万元', body):
-        try:
-            vals.add(round(float(m.group(1).replace(',', '')), 2))
-        except ValueError:
-            continue
-    for m in re.finditer(r'(-?\d[\d,]*(?:\.\d+)?)', body):
-        try:
-            raw = float(m.group(1).replace(',', ''))
-        except ValueError:
-            continue
-        if abs(raw) >= 10000:
-            vals.add(round(raw / 10000.0, 2))
-    base = sorted(vals)
-    for i, a in enumerate(base):
-        for b in base[i + 1:]:
-            vals.add(round(a + b, 2))
-            vals.add(round(abs(a - b), 2))
-            if b:
-                vals.add(round(a / b, 4))
-    return vals
 
 
 _TOOL_RESULT_CHARS = 4000      # 单个工具结果给模型的字符上限（可用 config 覆盖）
@@ -606,81 +598,6 @@ def _unit_guard(sql):
             '停电时长=小时/户、工单与跳闸=件/次；change_rate 已是百分数。'
             '**算占比/倍数/同比之前先把两边化成同一单位**，算完自查量级。')
 
-
-# 回答里的金额对账（数字闸）：金额必须在**本轮** SQL 结果里找得到出处，否则重问一次。
-# ★ 为什么需要：汇总数已经改成由库算（summary），但实测仍有「76.26 万写成 762.62 万」这类
-#   抄写错；这类错看一眼回答发现不了，只能拿本轮结果去对。
-_MONEY_RE = re.compile(r'(\d+(?:\.\d+)?)\s*万元')
-
-
-def _num_pool(trace):
-    """本轮所有 SQL 结果构成的可追溯数值池（单位：万元）。
-
-    池子 = 行值 + summary 的 sum/mean/min/max，再补上两两的「和 / 差 / 比值」——
-    余额、缺口、占比、两所合计这些合规的再计算才不会误报。
-    """
-    vals = set()
-    for t in (trace or []):
-        if not isinstance(t, dict) or t.get('kind') != 'tool':
-            continue
-        res = t.get('result') or {}
-        raw = []
-        for row in (res.get('rows') or []):
-            if isinstance(row, dict):
-                raw.extend(row.values())
-        for col in (res.get('summary') or {}).values():
-            if isinstance(col, dict):
-                raw.extend([col.get('sum'), col.get('mean'), col.get('min'), col.get('max')])
-        for v in raw:
-            try:
-                x = float(str(v))
-            except (TypeError, ValueError):
-                continue
-            vals.add(round(x, 2))
-            vals.add(round(x / 10000.0, 2))
-    out = set(vals)
-    base = sorted(v for v in vals if abs(v) < 1e7)
-    for a in base:
-        for b in base:
-            out.add(round(a + b, 2))
-            out.add(round(abs(a - b), 2))
-            if b:
-                out.add(round(a / b, 4))
-    return out
-
-
-def _untraceable_money(answer, pool, floor=10.0):
-    """回答里 >= floor 万元的金额，哪些在池子里找不到（容差 0.06 万或 0.2%）。"""
-    bad = []
-    for m in _MONEY_RE.finditer(answer or ''):
-        try:
-            x = float(m.group(1))
-        except ValueError:
-            continue
-        if x < floor:
-            continue
-        if any(abs(x - s) <= max(0.06, abs(s) * 0.002) for s in pool):
-            continue
-        if x not in bad:
-            bad.append(x)
-    return bad
-
-
-# 内部系数（0.6 达标系数那类）不许写成人看的「基准线 / 进度要求」—— 实测模型会写
-# 「41 个所预算执行率低于 45% 的进度要求」。命中就重问一次。
-_COEF_RE = re.compile(r'\d+(?:\.\d+)?\s*%\s*(?:的)?\s*(基准线|达标线|考核线|进度线|进度要求)')
-_COEF_LOOSE_RE = re.compile(r'(?:低于|不低于|高于|达到)\s*\d+(?:\.\d+)?\s*%')
-_COEF_CONTEXT = ('执行率', '进度', '达标', '完成率')
-
-
-def _coefficient_talk(text):
-    """回答里有没有把内部系数当标准讲 —— 有就返回那句（没有返回空串）。"""
-    for ln in (text or '').splitlines():
-        if _COEF_RE.search(ln):
-            return ln.strip()[:80]
-        if _COEF_LOOSE_RE.search(ln) and any(w in ln for w in _COEF_CONTEXT):
-            return ln.strip()[:80]
-    return ''
 
 
 def _trim(name, res):
@@ -1176,7 +1093,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         page_async=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None,
-        doc_context=None, doc_files=None, persona=None):
+        doc_context=None, doc_files=None, persona=None, trace=None, should_stop=None):
     """question = 用户的原话（不需要上游预处理）。
 
     本服务依次做：**载入多轮上下文** → 字面纠错与名称归一 → 时间与地点补全 →
@@ -1197,7 +1114,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     model = model or config.MODEL
     max_steps = max_steps or config.MAX_STEPS
     t_all = time.time()
-    trace = []
+    # ★ 2026-11-08：trace 可以由调用方传进来（同一个 list 边跑边读），
+    #   用于「实时运行步骤」——接口那边轮询这个 list 就能看到每一步。
+    trace = trace if trace is not None else []
     raw_question = question
     # 上游（业务系统）指定的数据范围：提问人是谁、在哪个页面只有上游知道，所以它**强制**。
     # 上游强制的数据范围（业务系统传的，只记录、不再注入提示词）
@@ -1302,41 +1221,29 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     sum_upto = int(sess_sum.get('upto_seq') or 0)
     # ★ 2026-11-03（Fred）：**时间地点补全整块删除** —— 不由代码换算、不补默认年月和全市。
     #   要补什么由 Fred 在「补全表」里自己配（第 4 步命中后交给第 6 步判断）。
-    #   这里只留一个空骨架，让 result['scope'] / trace 的结构对内网接口保持兼容。
-    scope = {'question': question,
-             'time': {'matched': '', 'time_text': '', 'period_type': '', 'period_key': '',
-                      'is_default': False, 'note': ''},
-             'place': '', 'place_default': False,
-             'inherited': {'time': False, 'place': False},
-             'scope_text': '', 'place_confirm': False}
-    trace.append({'seq': len(trace) + 1, 'kind': 'scope', 'tool': 'scope_removed',
-                  'result': {'skipped': True,
-                             'reason': '时间地点补全已删除，改由补全表配置'}})
+    # ★ 2026-11-08：连空骨架一起删了（原为兼容内网接口保留 result['scope']/trace，实测没人读）。
     # **不预检索、不预注入判据**：按问题检索判据挑"该用哪条标准"实测不稳（会把相邻技能的标准当成本题的标准，
     # 例如把「项目执行进度异常」当成「审批积压」）。判据改成让模型在循环里用 kb_search 工具自己查 ——
     # 需要判断就去查，查不到就不下判断（见回答契约第 7 条）。
     # 问题不改写：原话 + 纠错 + 补问法 + 补全表命中，一路往下传。
     t_loop = time.time()
-    # ── ⑥ 问题确定：把前面几步揉成一份定稿，第 7 步只拿这份 ────────────────
-    #    判据在页面框 `confirm`（空 = 不归整，参考资料原样下传）。
+    # ── ⑥ 问题确定：把前面几步揉成一句问题，第 7 步只拿这一句 ────────────────
+    #    判据在页面框 `confirm`；框空 = 用 confirm.settle() 收敛成一句（不再下传资料）。
     #    ★ 2026-11-03 定稿：主循环不再吃「原话 + 最近几轮 + 【统计范围】」那一堆 ——
     #      取舍只在这一处，改一处就生效。第 1 步判"不走"时（闲聊 / 明确要求）
     #      原话直接进第 7 步，缺信息由它自己反问用户。
     if allow_refine:
-        _conf = confirm.run(question, fixed, comp, scope, history,
+        _conf = confirm.run(question, fixed, comp, history,
                             ask=lambda _s, _u: _ask_short(_s, _u, model))
     else:
-        _conf = {'used': False, 'text': '', 'block': ''}
+        _conf = {'used': False, 'text': '', 'block': '【本轮原话】' + str(question or '')}
     trace.append({'seq': len(trace) + 1, 'kind': 'confirm', 'tool': 'confirm',
                   'result': {'used': bool(_conf.get('used')),
                              'passed': 'model' if _conf.get('used') else 'raw',
-                             'text': str(_conf.get('text') or '')[:800]}})
-    if _conf.get('used'):
-        user_content = ('【本轮要办的事】（第 6 步归整后的定稿，按它办）\n' + _conf['text'])
-    elif _conf.get('block'):
-        user_content = _conf['block']
-    else:
-        user_content = question
+                             'text': str(_conf.get('text') or _conf.get('block') or '')[:800]}})
+    user_content = ('【本轮要办的事】（按它办）\n'
+                    + (_conf['text'] if _conf.get('used') else
+                       (_conf.get('block') or str(question or ''))))
     # 只给一行日期：第 6 步框空着时，"上个月"要靠它自己推。这是信息，不是纪律。
     user_content += '\n\n【今天】%s' % (today or time.strftime('%Y-%m-%d'))
     # 摘要与最近几轮**不再拼进主循环**（第 6 步已经把该用的信息归整进定稿了）。
@@ -1500,26 +1407,48 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     gate_log: list = []     # 保留字段（落库结果里内网在用），本轮恒为空
     step = 0
     facts_text = ''
+    seen_sig: set = set()
+    noprogress = 0
+
+    def _wrap_up(why, tail):
+        """收尾：查数轮先落事实清单再写正文。
+
+        ★ 2026-11-08：撞上限 / 原地打转 也走这里（原来只有模型自己停手才列清单）。
+          清单里写"无数据"的那几项就是没查清楚的 —— 它会暴露在回答里，而不是被掩盖。
+        """
+        if _route['use_db'] and any(isinstance(t, dict) and t.get('kind') == 'tool' for t in trace):
+            _w = _write_answer(messages, model, user_content + '\n\n' + tail,
+                               trace=trace, need_facts=True, slots=_slots)
+            return _w['answer'], _w['facts']
+        return _final_answer(_swap_materials(
+            list(messages) + [{'role': 'user', 'content': tail}], ('answer',)),
+            model, allow_rule=True, trace=trace), ''
+
+    _TAIL_BUDGET = ('时间/步数预算到了，请用已查到的数据给出结论；'
+                    '如果还缺关键前提（例如具体是哪张单、哪个所），'
+                    '就在回答里一句话说清需要补什么，不要再查。')
+    _TAIL_STUCK = ('连续两轮查回来的结果和之前一样，没有新数据了。'
+                   '请用已查到的数据给出结论；缺的那几项在回答里一句话说清缺什么，不要再查。')
     while True:
         step += 1
         _over_step = bool(max_steps) and step > max_steps
         _budget = float(getattr(config, 'QUESTION_BUDGET_S', 0) or 0)
         _over_time = _budget > 0 and (time.time() - t_all) > _budget
+        # ★ 2026-11-08：用户点了「停止生成」→ 立刻收手，用已有的东西回一句，
+        #   不再继续调模型/工具。should_stop 由接口层传（轮询那个 task 的状态）。
+        if should_stop is not None and should_stop():
+            answer = '（已停止生成）'
+            trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content': '用户点了停止'})
+            break
         if _over_step or _over_time:
-            # 到顶不再空转：关掉工具直接要正文。原来回一句「已超过最大步骤」等于把这题废了。
-            # 时间预算同理：实测「没给对象」的问题（「这单钱都花哪了」）会一直翻表到客户端 600 s 超时，
-            # 什么都拿不到；宁可给一份「已查到什么 + 还缺什么」的回答。
             _why = ('已到查询步数上限 %d' % max_steps) if _over_step else ('已到单题时间预算 %.0f 秒' % config.QUESTION_BUDGET_S)
-            answer = _final_answer(
-                _swap_materials(
-                    (list(messages) + [{'role': 'user', 'content':
-                                        '时间/步数预算到了，请**用已查到的数据**给出结论；'
-                                        '如果还缺关键前提（例如具体是哪张单、哪个所），'
-                                        '就在回答里一句话说清需要补什么，不要再查。'}]
-                     if _over_time else messages),
-                    ('answer',)),
-                    model, allow_rule=True, trace=trace)
+            answer, facts_text = _wrap_up(_why, _TAIL_BUDGET)
             trace.append({'seq': len(trace) + 1, 'kind': 'final', 'content': _why + '，强制出正文'})
+            break
+        if noprogress >= 2:
+            answer, facts_text = _wrap_up('原地打转', _TAIL_STUCK)
+            trace.append({'seq': len(trace) + 1, 'kind': 'final',
+                          'content': '连续 %d 轮无新数据，强制收尾' % noprogress})
             break
         t0 = time.time()
         # 第 7 步 · 干活循环。工具按分流子集给；没给工具就直接要正文。
@@ -1595,6 +1524,35 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         #    deepseek-v4.1 直接 400（"insufficient tool messages following tool_calls message"）。
         # ★ 2026-11-03：这里原来每 2 轮塞一句「对照【各类问题的必答项】逐项点一遍」——
         #   必答项随规则一起删了，这句在指空；代码也不再替模型管节奏。
+        # ★ 2026-11-08（Fred）：本轮结果指纹 —— 连续两轮一模一样，说明它在原地打转，
+        #   下一轮开头就收尾（不按轮数砍，按"有没有新数据"砍）。
+        _sigs = set()
+        for _o in outs:
+            try:
+                _sigs.add(json.dumps(_o.get('result'), ensure_ascii=False,
+                                     sort_keys=True, default=str)[:1500])
+            except Exception:                      # noqa: BLE001
+                _sigs.add(str(_o.get('result'))[:1500])
+        if _sigs:
+            noprogress = (noprogress + 1) if not (_sigs - seen_sig) else 0
+            seen_sig |= _sigs
+        # ★ 2026-11-08（Fred）：每 3 轮让模型自己报一次进度 —— 给它"够不够"的依据，
+        #   不给它催促。还缺什么由它自己看已经查回来的行数判断。
+        if step % 3 == 0 and not fins and _route['use_db']:
+            try:
+                _prog = _ask_short(
+                    '看下面这份进度资料，只回两行：\n已查到：…\n还缺：…\n'
+                    '只写本轮要答的几个方面里哪些已经有数据、哪些还没有；没有就写"无数据"。'
+                    '不要建议、不要解释、不要重复 SQL。',
+                    _progress_feed(trace, user_content), model, max_tokens=300)
+            except Exception:                      # noqa: BLE001 - 进度报不出来不影响干活
+                _prog = ''
+            if _prog:
+                messages.append({'role': 'user', 'content':
+                                 '【进度自检】' + _prog +
+                                 '\n照这份进度办：还缺的继续查，齐了就用 finish 收尾。'})
+                trace.append({'seq': len(trace) + 1, 'kind': 'progress', 'round': step,
+                              'content': _prog[:600]})
         if fins:
             # 模型自己说「数据够了」→ 先落事实清单，再由系统按清单写正文
             _wa = _write_answer(messages, model, user_content, trace=trace,
@@ -1609,83 +1567,6 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # （实测 dsv4 禁不掉，只能代码层兜）。**必须在 qtype 与页面之前** —— 页面是从 answer 生成的，
     # 洗晚了页面里还是脏的。
     answer = _clean_answer(answer)
-    # 简洁闸（2026-11-05）：问数轮按「一两句话汇报」的规则落地 —— 超长就压一次。
-    # 规则在页面上（answer 材料），但实测模型会无视长度要求，这里兜一道。
-    if _route['use_db'] and len(re.sub(r'\s', '', answer or '')) > 200:
-        _bmsgs = [{'role': 'system', 'content': _answer_system(messages, _slots)},
-                  {'role': 'assistant', 'content': answer},
-                  {'role': 'user', 'content':
-                   '太长了。按汇报格式压到 120 字以内：先用一句话给结论（带关键数字），'
-                   '最多再补一句提醒；不要分节、不要编号、不要复述口径。只输出正文。'}]
-        try:
-            _short = _final_answer(_bmsgs, model, max_tokens=400, trace=None)
-        except Exception:                                  # noqa: BLE001
-            _short = ''
-        if _short and len(re.sub(r'\s', '', _short)) < len(re.sub(r'\s', '', answer)):
-            answer = _clean_answer(_short)
-            trace.append({'seq': len(trace) + 1, 'kind': 'brevity_guard',
-                          'result': {'kept': 'rewrite', 'chars': len(answer)}})
-    # 数字闸（对账）：回答里的金额必须能在**本轮** SQL 结果或其确定性派生里找到出处。
-    # 找不到就带着清单重问一次；第二次仍对不上就保留「错得更少」的那版，并把对账结果记进 trace。
-    _queried = any(isinstance(t, dict) and t.get('tool') == 'run_sql' for t in trace)
-    if config.NUMBER_GUARD_ON and _queried and not blocked:
-        # ★ 2026-11-04：有事实清单就以清单为准（第 8 步只看清单，重写也不许把工具原文塞回来）。
-        _pool = _facts_pool(facts_text) if facts_text else _num_pool(trace)
-        # ★ 2026-11-03：上一轮查到的金额也算有出处（否则复用历史结论会被逼着重写）。
-        for _h in (history or []):
-            for _m in _MONEY_RE.finditer(str(_h.get('answer') or '')):
-                try:
-                    _x = float(_m.group(1))
-                except (TypeError, ValueError):
-                    continue
-                _pool.add(round(_x, 2))
-                _pool.add(round(_x / 10000.0, 2))
-        _bad1 = _untraceable_money(answer, _pool)
-        if _bad1:
-            if facts_text:
-                _base = [{'role': 'system', 'content': _answer_system(messages)},
-                         {'role': 'user', 'content': user_content},
-                         {'role': 'user',
-                          'content': '【这一轮查到的事实（数字只用这些）】\n' + facts_text}]
-            else:
-                _base = list(messages)
-            _msgs = _base + [
-                {'role': 'assistant', 'content': answer},
-                {'role': 'user', 'content':
-                 '对账不通过：回答里这些金额在你本轮查询结果里找不到出处 —— %s 万元。'
-                 '请只使用上面事实清单里的数，逐条改正后重写正文；'
-                 '不要改口径、不要新增没查过的数，也不要提这条提示。' % '、'.join(str(x) for x in _bad1[:8])}]
-            try:
-                _ans2 = _final_answer(_swap_materials(_msgs, ('answer',)), model,
-                                      allow_rule=True, trace=trace)
-            except Exception:                                  # noqa: BLE001
-                _ans2 = ''
-            _bad2 = _untraceable_money(_ans2, _pool)
-            if _ans2 and len(_bad2) < len(_bad1):
-                answer = _ans2
-            trace.append({'seq': len(trace) + 1, 'kind': 'number_guard',
-                          'before': _bad1[:8], 'after': _bad2[:8],
-                          'kept': 'rewrite' if _ans2 and len(_bad2) < len(_bad1) else 'original'})
-    # 内部系数闸：把 0.6 达标系数换算成「XX% 基准线 / 进度要求」写给人看是明令禁止的。
-    # 与数字闸同一套路：点出原句、重写一次；第二次还有就保留更干净的那版。
-    if config.NUMBER_GUARD_ON and answer:
-        _coef1 = _coefficient_talk(answer)
-        if _coef1:
-            _cmsgs = list(messages) + [
-                {'role': 'assistant', 'content': answer},
-                {'role': 'user', 'content':
-                 '回答里出现了「%s」—— 把内部系数写成标准是禁止的。请重写：要么只给「已过时间比例」和「当前占比」两个数让人自己看，要么只说「还差多少、还需完成多少」，不要出现任何「XX%% 基准线 / 达标线 / 进度要求」。' % _coef1}],
-            try:
-                _cans2 = _final_answer(_swap_materials(_cmsgs, ('answer',)), model,
-                                       allow_rule=True, trace=trace)
-            except Exception:                                  # noqa: BLE001
-                _cans2 = ''
-            _coef2 = _coefficient_talk(_cans2)
-            if _cans2 and not _coef2:
-                answer = _cans2
-            trace.append({'seq': len(trace) + 1, 'kind': 'coef_guard', 'before': _coef1,
-                          'after': _coef2,
-                          'kept': 'rewrite' if (_cans2 and not _coef2) else 'original'})
     # qtype：**只用来决定要不要出分析页面**（前端要页面可以直接传 want_page）。
     # 真正怎么写回答由 COMMON 里的分层纪律管，不在这里分流。
     # 这里取两个"实际发生的事"的信号，任一成立即算分析：
@@ -1732,6 +1613,24 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     db_calls = [t for t in trace if t.get('tool') in DB_TOOLS]
     sql_calls = [t for t in trace if t.get('tool') == 'run_sql']
     kb_calls = [t for t in trace if t.get('tool') == 'kb_search']
+    # 产物记账（2026-11-08）：make_file / run_code 出的文件单独列成一张清单。
+    # 为什么：产物原来只躺在 trace 里，接口调用方要自己翻；现在 result['artifacts']
+    # 直接给名字、字节数、下载地址、自检结论。
+    artifacts = []
+    for _t in trace:
+        if _t.get('kind') != 'tool' or _t.get('tool') not in ('make_file', 'run_code'):
+            continue
+        _r = _t.get('result') or {}
+        if _r.get('url'):
+            artifacts.append({'kind': _r.get('kind') or str(_r.get('name') or '').rsplit('.', 1)[-1].lower(),
+                              'name': _r.get('name'), 'bytes': _r.get('bytes'),
+                              'file_id': _r.get('file_id'), 'url': _r.get('url'),
+                              'self_check': (_r.get('self_check') or {}).get('verdict') or '未自检'})
+        for _o in (_r.get('outputs') or []):
+            if _o.get('url'):
+                artifacts.append({'kind': str(_o.get('name') or '').rsplit('.', 1)[-1].lower(),
+                                  'name': _o.get('name'), 'file_id': _o.get('file_id'),
+                                  'url': _o.get('url'), 'self_check': '未自检'})
     result = {
         'input_question': raw_question,
         'today': today or time.strftime('%Y-%m-%d'),
@@ -1742,19 +1641,6 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                      'overflow': _pkb.get('overflow') or ''},
         'fixed_question': question,
         'name_fix_used': fixed['used'],
-        'scope': {
-            'time': scope['time']['time_text'],
-            'period_type': scope['time']['period_type'],
-            'period_key': scope['time']['period_key'],
-            'time_is_default': scope['time']['is_default'],
-            'place': scope['place'],
-            'place_is_default': scope['place_default'],
-            # 这两个为 true 说明该值**不是用户这轮说的**，而是从上一轮沿用来的
-            'time_inherited': scope['inherited']['time'],
-            'place_inherited': scope['inherited']['place'],
-            # 本轮地点没认出来 → 范围未定，排障时一眼能看到（2026-11-02）
-            'place_confirm': bool(scope.get('place_confirm')),
-        },
         'user_profile': profile or '',
         'completion_used': False,      # 已取消「问题改写」，这个字段保留只为兼容历史记录
         'qtype': qtype,
@@ -1786,6 +1672,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         'history_injected': len(hist_detail),
         # 带文件提问时：本轮用了哪些文件、各用了多少字、有没有节选（前端据此显示"已读 2.1 万字"）
         'files': list(doc_files or []),
+        'artifacts': artifacts,
         'summary_used': bool(sess_sum.get('summary')),
         'summary_chars': len(sess_sum.get('summary') or ''),
         'summary_upto_seq': sum_upto,
