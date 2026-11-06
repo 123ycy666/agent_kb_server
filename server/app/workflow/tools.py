@@ -57,9 +57,10 @@ TOOLS_SEND = TOOLS_COMMON + [
     _fn('read_items', '读事项（默认只读未关闭的）',
         {'status': _STR, 'alert_type': _STR, 'tier': _STR,
          'limit': {'type': 'integer'}}, []),
-    _fn('send', '发一条给某人：必须写清依据（为什么发给他）',
+    _fn('send', '发一条给某人：message 是收件人看到的那句话，reason 是为什么发给他（依据）',
         {'item_id': {'type': 'integer'}, 'recipient_login': _STR, 'recipient_name': _STR,
-         'reason': _STR, 'channel': _STR}, ['item_id', 'recipient_login', 'reason']),
+         'message': {'type': 'string', 'description': '推给收件人的一段话：标题 + 一句话 + 要点'},
+         'reason': _STR, 'channel': _STR}, ['item_id', 'recipient_login', 'message', 'reason']),
     _fn('finish', '本轮结束：交发出的条数与一句话结论',
         {'sent_n': {'type': 'integer'}, 'note': _STR}, []),
 ]
@@ -157,15 +158,18 @@ def call(ctx: dict, name: str, args: dict) -> dict:
         item_id = int(args.get('item_id') or 0)
         login = str(args.get('recipient_login') or '').strip()
         reason = str(args.get('reason') or '').strip()
+        message = str(args.get('message') or '').strip()
         if not item_id or not login or not reason:
             return {'ok': False, 'error': 'item_id / recipient_login / reason 都必填'}
+        if not message:
+            return {'ok': False, 'error': 'message 必填：写清楚收件人看到的那句话'}
         if store.recent_sent(db, item_id, login):
             return {'ok': True, 'skipped': '已在该静默期内发过'}
         if dry:
             ctx['counts']['would_send'] = ctx['counts'].get('would_send', 0) + 1
             return {'ok': True, 'dry': True}
         r = store.add_notify(db, run, item_id, login, str(args.get('recipient_name') or ''),
-                             reason, str(args.get('channel') or ''))
+                             reason, str(args.get('channel') or ''), message=message)
         ctx['counts']['sent_n'] = ctx['counts'].get('sent_n', 0) + (1 if r.get('ok') else 0)
         return r
 

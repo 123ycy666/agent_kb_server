@@ -192,6 +192,7 @@ class Notify(Base):
     recipient_login: Mapped[str] = mapped_column(String(64), nullable=False, default='')
     recipient_name: Mapped[str | None] = mapped_column(String(64))
     channel: Mapped[str] = mapped_column(String(16), nullable=False, default='station')
+    message: Mapped[str | None] = mapped_column(Text)
     reason: Mapped[str | None] = mapped_column(Text)
     sent_at: Mapped[datetime] = _ts()
     ok: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)

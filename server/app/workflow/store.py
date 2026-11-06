@@ -1,4 +1,4 @@
-"""存取：运行批次、结果流水、事项、发送记录、参数。存取规则全部在这里。"""
+﻿"""存取：运行批次、结果流水、事项、发送记录、参数。存取规则全部在这里。"""
 from __future__ import annotations
 
 import uuid
@@ -37,6 +37,8 @@ def ensure_tables() -> None:
                         '  SELECT 1 FROM wf_doc_schedule x WHERE x.doc_id = d.id '
                         '  AND x.schedule_id = d.schedule_id)'))
         db.execute(text('UPDATE wf_doc SET schedule_id = NULL WHERE schedule_id IS NOT NULL'))
+        # 2026-11-06：推送内容（收件人看到的那句话）单独一列
+        db.execute(text('ALTER TABLE wf_notify ADD COLUMN IF NOT EXISTS message text'))
         for k, (v, note) in DEFAULT_PARAMS.items():
             if db.get(Param, k) is None:
                 db.add(Param(key=k, value=v, note=note))
@@ -212,11 +214,12 @@ def recent_sent(db: Session, item_id: int, login: str) -> bool:
 
 
 def add_notify(db: Session, run: Run, item_id: int, login: str, name: str = '',
-               reason: str = '', channel: str = '', ok: bool = True, error: str = '') -> dict:
+               reason: str = '', channel: str = '', ok: bool = True, error: str = '',
+               message: str = '') -> dict:
     ch = channel or param(db, 'send_channel_default', 'station')
     n = Notify(item_id=item_id, recipient_login=str(login)[:64],
                recipient_name=(str(name)[:64] if name else None), channel=ch[:16],
-               reason=reason, ok=1 if ok else 0, error=error or None,
+               message=message or None, reason=reason, ok=1 if ok else 0, error=error or None,
                run_id=run.id, doc_version=run.doc_version)
     db.add(n)
     db.commit()
@@ -282,7 +285,7 @@ def item_notifies(db: Session, item_id: int) -> list[dict]:
     rows = db.execute(select(Notify).where(Notify.item_id == item_id)
                       .order_by(Notify.id.desc()).limit(50)).scalars().all()
     return [{'id': n.id, 'login': n.recipient_login, 'name': n.recipient_name,
-             'channel': n.channel, 'reason': n.reason, 'ok': bool(n.ok), 'error': n.error,
+             'channel': n.channel, 'message': n.message, 'reason': n.reason, 'ok': bool(n.ok), 'error': n.error,
              'sent_at': n.sent_at.isoformat() if n.sent_at else None} for n in rows]
 
 
@@ -292,7 +295,7 @@ def list_notifies(db: Session, limit: int = 100, offset: int = 0) -> dict:
                       .limit(max(1, min(500, limit))).offset(max(0, offset))).scalars().all()
     return {'total': int(total), 'items': [
         {'id': n.id, 'item_id': n.item_id, 'login': n.recipient_login, 'name': n.recipient_name,
-         'channel': n.channel, 'reason': n.reason, 'ok': bool(n.ok), 'error': n.error,
+         'channel': n.channel, 'message': n.message, 'reason': n.reason, 'ok': bool(n.ok), 'error': n.error,
          'sent_at': n.sent_at.isoformat() if n.sent_at else None} for n in rows]}
 
 
@@ -344,3 +347,4 @@ def append_chat(db: Session, session_id: str, account: str, content: str,
     except Exception:                       # noqa: BLE001
         db.rollback()
         return None
+

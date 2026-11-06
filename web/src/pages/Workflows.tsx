@@ -616,7 +616,8 @@ function ItemsTab() {
               <Table size="small" rowKey="id" dataSource={detail.notifies || []} pagination={false}
                 columns={[
                   { title: '收件人', render: (_, r) => `${r.name || ''} ${r.login}` },
-                  { title: '通道', dataIndex: 'channel' },
+                  { title: '内容', dataIndex: 'message', render: (m: string) => <span style={{ whiteSpace: 'pre-wrap' }}>{m || '—'}</span> },
+          { title: '通道', dataIndex: 'channel' },
                   { title: '依据', dataIndex: 'reason' },
                   { title: '时间', dataIndex: 'sent_at', render: dt },
                 ]} />
@@ -642,6 +643,7 @@ function NotifyTab() {
         columns={[
           { title: '事项', dataIndex: 'item_id', width: 80 },
           { title: '收件人', render: (_, r) => `${r.name || ''} ${r.login}` },
+          { title: '内容', dataIndex: 'message', render: (m: string) => <span style={{ whiteSpace: 'pre-wrap' }}>{m || '—'}</span> },
           { title: '通道', dataIndex: 'channel', width: 90 },
           { title: '依据', dataIndex: 'reason' },
           { title: '时间', dataIndex: 'sent_at', width: 165, render: dt },
