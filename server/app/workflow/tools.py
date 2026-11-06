@@ -49,6 +49,11 @@ TOOLS_DETECT = TOOLS_COMMON + [
 ]
 
 TOOLS_SEND = TOOLS_COMMON + [
+    _fn('find_user', '按单位名和岗位/角色关键字找可收件的人（返回登录名、姓名、部门、岗位、角色）',
+        {'unit': {'type': 'string', 'description': '单位名关键字，如 两水；留空表示不限单位'},
+         'role': {'type': 'string', 'description': '岗位或角色关键字，如 所长、负责人、财务；留空不限'},
+         'limit': {'type': 'integer', 'description': '最多返回几个，默认 10'}},
+        []),
     _fn('read_items', '读事项（默认只读未关闭的）',
         {'status': _STR, 'alert_type': _STR, 'tier': _STR,
          'limit': {'type': 'integer'}}, []),
@@ -101,6 +106,43 @@ def call(ctx: dict, name: str, args: dict) -> dict:
                                    'rows': r.get('row_count'),
                                    'error': (r.get('error') or '')[:500]})
         return _short(r)
+
+    if name == 'find_user':
+        from app.secretary import tools_db
+        unit = str(args.get('unit') or '').strip()
+        role = str(args.get('role') or '').strip()
+        if not unit and not role:
+            return {'ok': False,
+                    'error': 'unit 和 role 至少给一个。unit 传事项对象里的单位名（如 厉山供电所），'
+                             'role 传岗位关键字（如 所长、负责人、财务）'}
+        lim = max(1, min(50, int(args.get('limit') or 10)))
+        where = ['e.deleted_flag=0', 'e.disabled_flag=0']
+        params: list = []
+        if unit:
+            where.append('d.department_name LIKE %s')
+            params.append('%' + unit + '%')
+        if role:
+            where.append('(p.position_name LIKE %s OR r.role_name LIKE %s)')
+            params.extend(['%' + role + '%', '%' + role + '%'])
+        sql = ('SELECT e.login_name AS login_name, e.actual_name AS actual_name, '
+               'd.department_name AS dept, p.position_name AS position, '
+               'GROUP_CONCAT(DISTINCT r.role_name) AS roles '
+               'FROM t_employee e '
+               'LEFT JOIN t_department d ON d.department_id = e.department_id '
+               'LEFT JOIN t_position p ON p.position_id = e.position_id '
+               'LEFT JOIN t_role_employee re ON re.employee_id = e.employee_id '
+               'LEFT JOIN t_role r ON r.role_id = re.role_id '
+               'WHERE ' + ' AND '.join(where) + ' '
+               'GROUP BY e.employee_id, e.login_name, e.actual_name, d.department_name, p.position_name '
+               'ORDER BY e.login_name LIMIT %s')
+        params.append(lim)
+        r = tools_db._exec(sql, params, limit_rows=lim)
+        rows = [dict(x) for x in (r.get('rows') or [])]
+        store.log(db, run, 'tool', {'tool': 'find_user', 'unit': unit, 'role': role, 'found': len(rows)})
+        if not rows:
+            return {'count': 0, 'users': [],
+                    'hint': '没找到人：单位名或岗位关键字可能不对，换关键字再试；确实没有就按规则不发'}
+        return {'count': len(rows), 'users': rows}
 
     if name == 'read_items':
         rows = store.read_items(db, status=str(args.get('status') or 'open'),
