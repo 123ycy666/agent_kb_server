@@ -32,7 +32,10 @@ def _system(doc: RuleDoc, today: str) -> str:
     ]
     if doc.work_type == 'detect':
         lines += [
-            '- 每个被检查的对象都要调一次 write_result，命中与不命中都写；不命中就 hit=false。',
+            '- **取数要一次查完**：用一条 SQL 按对象分组（GROUP BY）算出全部对象的值，'
+            '不要一个对象查一次；同一份文档里 SQL 最多查 3~4 次。',
+            '- 每个被检查的对象都要写一条结果，命中与不命中都写；不命中就 hit=false。',
+            '- **优先用 write_results 批量写**（一次 5~15 条），比分条写快很多。',
             '- detail 与 evidence 必填：detail 放给人看的几个数，evidence 放"表.字段 + 口径 + 数据截止日"。',
             '- 一条对象只写一次；对象键在同一份文档里必须稳定。',
             '- 全部写完后调 finish，checked_n 填你实际检查了几个对象。',
@@ -91,6 +94,13 @@ def run_doc(db: Session, doc_id: int, trigger: str = 'manual', dry: bool = False
                                  'content': tools.dumps(out)[:6000]})
             if ctx.get('finished'):
                 break
+            # 前几步全在查数、一条结果都没写：提醒它先落库，别再反复查
+            if (doc.work_type == 'detect' and step >= 8
+                    and not ctx['keys'] and not ctx.get('_nudged')):
+                ctx['_nudged'] = True
+                messages.append({'role': 'user', 'content':
+                                 '提醒：已经查了很多次，还没有写任何结果。请现在就用 write_results '
+                                 '把已经查到的对象批量写进去；不够的再补一次 SQL，别再逐对象查。'})
 
         counts = ctx.get('counts') or {}
         if doc.work_type == 'detect':

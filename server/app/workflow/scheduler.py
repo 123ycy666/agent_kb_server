@@ -49,27 +49,37 @@ def next_runs(crons, n: int = 5) -> list[str]:
 
 
 def _run_schedule(sid: int) -> dict:
+    import concurrent.futures as cf
     db = SessionLocal()
     try:
         sch = db.get(Schedule, int(sid))
         if sch is None or not sch.enabled:
             return {'skipped': 'schedule 不存在或已停用'}
-        out = []
-        for d in docsdb.docs_of_schedule(db, sid):
-            if not d.enabled:
-                continue
-            try:
-                r = run_doc(db, d.id, trigger='cron')
-                out.append({'doc': d.name, 'run_id': r.get('run_id'), 'status': r.get('status')})
-            except Exception as exc:    # noqa: BLE001
-                logger.warning('跑文档 %s 失败：%s', d.name, exc)
-                out.append({'doc': d.name, 'status': 'failed', 'error': str(exc)[:200]})
-        rec = {'schedule': sch.name, 'docs': out}
-        LAST.append(rec)
-        del LAST[:-50]
-        return rec
+        docs = [d for d in docsdb.docs_of_schedule(db, sid) if d.enabled]
+        targets = [(d.id, d.name) for d in docs]
     finally:
         db.close()
+
+    def _one(pair):
+        doc_id, doc_name = pair
+        s = SessionLocal()          # 每条文档一个会话：并行跑互不干扰
+        try:
+            r = run_doc(s, doc_id, trigger='cron')
+            return {'doc': doc_name, 'run_id': r.get('run_id'), 'status': r.get('status')}
+        except Exception as exc:    # noqa: BLE001
+            logger.warning('跑文档 %s 失败：%s', doc_name, exc)
+            return {'doc': doc_name, 'status': 'failed', 'error': str(exc)[:200]}
+        finally:
+            s.close()
+
+    out = []
+    if targets:
+        with cf.ThreadPoolExecutor(max_workers=3) as ex:
+            out = list(ex.map(_one, targets))
+    rec = {'schedule': sch.name if sch else sid, 'docs': out}
+    LAST.append(rec)
+    del LAST[:-50]
+    return rec
 
 
 def reload() -> dict:

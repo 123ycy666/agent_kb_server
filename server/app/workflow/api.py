@@ -180,7 +180,9 @@ async def dry_run(doc_id: int, request: Request, db: Session = Depends(get_db),
             'code': 'DOC_INCOMPLETE', 'message': '文档还没填完：' + '、'.join(missing),
             'missing': missing})
     try:
-        r = run_doc(db, d.id, trigger='test', dry=True, today=today)
+        # 跑一轮是同步阻塞（几分钟），必须丢线程池，否则会卡住事件循环、整页 503
+        from starlette.concurrency import run_in_threadpool
+        r = await run_in_threadpool(run_doc, db, d.id, 'test', True, today)
     except Exception as exc:             # noqa: BLE001
         raise HTTPException(status_code=500, detail={
             'code': 'RUN_FAILED', 'message': '%s: %s' % (type(exc).__name__, str(exc)[:300])})
@@ -199,7 +201,8 @@ async def manual_run(request: Request, db: Session = Depends(get_db),
             'code': 'DOC_INCOMPLETE', 'message': '文档还没填完：' + '、'.join(missing),
             'missing': missing})
     try:
-        return _jr(run_doc(db, d.id, trigger='manual', dry=bool(body.get('dry'))))
+        from starlette.concurrency import run_in_threadpool
+        return _jr(await run_in_threadpool(run_doc, db, d.id, 'manual', bool(body.get('dry'))))
     except Exception as exc:             # noqa: BLE001
         raise HTTPException(status_code=500, detail={
             'code': 'RUN_FAILED', 'message': '%s: %s' % (type(exc).__name__, str(exc)[:300])})

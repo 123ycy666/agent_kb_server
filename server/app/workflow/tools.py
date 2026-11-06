@@ -40,6 +40,10 @@ TOOLS_DETECT = TOOLS_COMMON + [
          'reliable': {'type': 'boolean', 'description': '数据是否可靠'},
          'title': _STR, 'body': _STR},
         ['object_key', 'object_name', 'hit', 'detail', 'evidence']),
+    _fn('write_results',
+        '批量写检查结果（一次 5~15 条更快）。items 里每个元素同 write_result 的参数；'
+        '每个被检查的对象都要出现一次，命中与不命中都要写',
+        {'items': {'type': 'array', 'items': {'type': 'object'}}}, ['items']),
     _fn('finish', '本轮结束：交检查对象数与一句话结论',
         {'checked_n': {'type': 'integer'}, 'data_as_of': _STR, 'note': _STR}, ['checked_n']),
 ]
@@ -122,6 +126,22 @@ def call(ctx: dict, name: str, args: dict) -> dict:
                              reason, str(args.get('channel') or ''))
         ctx['counts']['sent_n'] = ctx['counts'].get('sent_n', 0) + (1 if r.get('ok') else 0)
         return r
+
+    if name == 'write_results':
+        items = args.get('items') or []
+        if not isinstance(items, list) or not items:
+            return {'ok': False, 'error': 'items 必须是非空数组'}
+        ok = fail = 0
+        errs = []
+        for it in items[:30]:
+            r = call(ctx, 'write_result', it if isinstance(it, dict) else {})
+            if r.get('ok'):
+                ok += 1
+            else:
+                fail += 1
+                if len(errs) < 3:
+                    errs.append(r.get('error'))
+        return {'ok': fail == 0, 'written': ok, 'failed': fail, 'errors': errs}
 
     if name == 'write_result':
         key = str(args.get('object_key') or '').strip() or str(args.get('object_name') or '').strip()
