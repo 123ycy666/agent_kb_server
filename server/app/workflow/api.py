@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """工作流框架接口：文档 / 调度 / 运行 / 事项 / 发送记录 / 参数。
 
 口径：登录用户都能改（与 /prompts 一致，不自行加管理员闸）。
@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db_wf as get_db
 from app.core.deps import CurrentActor, get_current_actor
 from app.workflow import docs as docsdb
 from app.workflow import scheduler as wfsched
@@ -414,29 +414,35 @@ def get_run(run_id: int, db: Session = Depends(get_db),
     return _jr(out)
 
 
-# ── 事项 ────────────────────────────────────────────────────────────────
-@router.get('/items', summary='事项列表')
+# ── 事项（结果） ────────────────────────────────────────────────────────
+@router.get('/items/overview', summary='预警概览（按类计数、未读数、最近一轮）')
+def items_overview(db: Session = Depends(get_db),
+                   actor: CurrentActor = Depends(get_current_actor)):
+    return _jr(store.overview(db, login=actor.username))
+
+
+@router.get('/items', summary='结果列表')
 def list_items(status: str | None = None, doc_id: int | None = None,
                alert_type: str | None = None, tier: str | None = None,
-               q: str | None = None, limit: int = Query(100, ge=1, le=500), offset: int = 0,
+               level: str | None = None, county_name: str | None = None,
+               unit_name: str | None = None, q: str | None = None,
+               limit: int = Query(100, ge=1, le=500), offset: int = 0,
                db: Session = Depends(get_db), actor: CurrentActor = Depends(get_current_actor)):
     return _jr(store.list_items(db, status=status or None, doc_id=doc_id,
-                                alert_type=alert_type, tier=tier, q=q,
+                                alert_type=alert_type, tier=tier, level=level,
+                                county_name=county_name, unit_name=unit_name, q=q,
                                 limit=limit, offset=offset))
 
 
-@router.get('/items/{item_id}', summary='事项详情（含历史与发送记录）')
+@router.get('/items/{item_id}', summary='结果详情（含被通知记录）')
 def get_item(item_id: int, db: Session = Depends(get_db),
              actor: CurrentActor = Depends(get_current_actor)):
     it = db.get(Item, int(item_id))
     if it is None:
         raise HTTPException(status_code=404, detail={'code': 'ITEM_NOT_FOUND',
-                                                     'message': '事项不存在'})
+                                                     'message': '结果不存在'})
     out = store.item_dict(it)
-    doc = db.get(RuleDoc, it.doc_id)
-    out['doc_name'] = doc.name if doc else ''
-    out['history'] = store.item_history(db, it)
-    out['notifies'] = store.item_notifies(db, it.id)
+    out['notifications'] = store.item_notifies(db, it.id)
     return _jr(out)
 
 
@@ -463,19 +469,44 @@ def item_chat(item_id: int, db: Session = Depends(get_db),
     it = db.get(Item, int(item_id))
     if it is None:
         raise HTTPException(status_code=404, detail={'code': 'ITEM_NOT_FOUND',
-                                                     'message': '事项不存在'})
+                                                     'message': '结果不存在'})
     sid = 'wf-item-%d-%s' % (it.id, actor.username)
     d = store.item_dict(it)
-    text = '**%s**\n\n当前值 %s / 阈值 %s / 档位 %s\n\n依据：%s' % (
-        d['title'], d['value'], d['threshold'], d['tier'],
+    text = '**%s**\n\n当前值 %s%s / 阈值 %s / 档位 %s\n\n依据：%s' % (
+        d['object_name'], d['value'], d['value_unit'], d['threshold'], d['tier'],
         '；'.join('%s=%s' % (k, v) for k, v in (d['evidence'] or {}).items()))
     got = store.append_chat(db, sid, actor.username, text,
-                            meta={'kind': 'alert_item', 'item': d}, title='【工作流】' + d['title'])
+                            meta={'kind': 'alert_item', 'item': d},
+                            title='【预警】' + d['object_name'])
     return _jr({'session_id': sid, 'chat_store': 'ok' if got else 'unavailable', 'item': d})
 
 
-# ── 发送记录 / 参数 ─────────────────────────────────────────────────────
-@router.get('/notifications', summary='发送记录')
+# ── 每人版本（通知）/ 参数 ──────────────────────────────────────────────
+@router.get('/notifications/mine', summary='我的通知（按登录人，unread=1 只回未读）')
+def my_notifications(unread: int = 0, alert_type: str | None = None,
+                     level: str | None = None,
+                     limit: int = Query(20, ge=1, le=50), offset: int = 0,
+                     db: Session = Depends(get_db),
+                     actor: CurrentActor = Depends(get_current_actor)):
+    return _jr(store.list_notifies(db, login=actor.username, unread=bool(unread),
+                                   alert_type=alert_type, level=level,
+                                   limit=limit, offset=offset))
+
+
+@router.post('/notifications/{notify_id}/read', summary='标已读（只能标自己的）')
+def read_notification(notify_id: int, db: Session = Depends(get_db),
+                      actor: CurrentActor = Depends(get_current_actor)):
+    r = store.mark_read(db, notify_id, actor.username)
+    if r is None:
+        raise HTTPException(status_code=404, detail={'code': 'NOTIFY_NOT_FOUND',
+                                                     'message': '通知不存在'})
+    if r.get('forbidden'):
+        raise HTTPException(status_code=403, detail={'code': 'FORBIDDEN',
+                                                     'message': '不是你的通知'})
+    return _jr(r)
+
+
+@router.get('/notifications', summary='发送记录（全部）')
 def list_notifications(limit: int = Query(100, ge=1, le=500), offset: int = 0,
                        db: Session = Depends(get_db),
                        actor: CurrentActor = Depends(get_current_actor)):
@@ -496,3 +527,4 @@ async def save_params(request: Request, db: Session = Depends(get_db),
         store.set_param(db, str(k), str(v))
     return _jr({'items': [{'key': k, 'value': v[0], 'note': v[1]}
                           for k, v in sorted(store.params(db).items())]})
+

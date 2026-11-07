@@ -91,7 +91,7 @@ def run_doc(db: Session, doc_id: int, trigger: str = 'manual', dry: bool = False
                     'tool': name, 'args': tools.dumps(args)[:1500],
                     'ok': out.get('ok', True), 'out': tools.dumps(out)[:1500]})
                 messages.append({'role': 'tool', 'tool_call_id': c.get('id') or '',
-                                 'content': tools.dumps(out)[:6000]})
+                                 'content': tools.dumps(out)[:24000]})
             if ctx.get('finished'):
                 break
             # 前几步全在查数、一条结果都没写：提醒它先落库，别再反复查

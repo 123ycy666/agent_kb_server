@@ -1,0 +1,299 @@
+[
+  {
+    "name": "预算花不完",
+    "work_type": "detect",
+    "alert_type": "预算",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "分配额 = 该所今年 budget_amount 合计（一个所多行，SUM）。\n已花 = 该所今年 is_approved=1 工单的 total_budget 合计。\n执行率 = 已花 / 分配额。\n时间进度 = 已过天数 / 365。\n预计年末执行率 = 执行率 / 时间进度。\n预计结余 = 分配额 ×（1 - 预计年末执行率）。\n分配额为 0 或没有分配记录的所不参与计算。",
+      "data": "一、t_power_ai_company_budget_result（所级年度分配预算）\n  power_station_id：所 id（关联键）\n  power_station_name：所名\n  county_company_name：所属县\n  budget_amount：分配额，单位元\n  year：年份\n  deleted_flag：删除标记\n二、t_power_ai_work_order（工单）\n  power_company_id：所 id（关联键）\n  is_approved：是否审批通过，1=通过\n  total_budget：工单预算，单位元\n  year：年份\n  deleted_flag：删除标记\n只取：year=今年 且 deleted_flag=0 的行。\n坑一：两表按 id 关联（power_station_id = power_company_id），按单位名关联会报 1267。\n坑二：total_budget 注释写万元，实测是元，不要换算。",
+      "goal": "查出哪个所今年的预算到年底花不完，一个所一条结果。\n产出：结果表里每个所一行，带预计年末执行率与预计结余；47 个所全查，命中约 38 个。",
+      "what": "哪个所今年的预算到年底花不完。\n算到供电所，一个所一条。",
+      "judge": "预计年末执行率 < 60% 报；< 30% 为高档，30%~60% 为中档；60% 及以上不报。",
+      "store": "对象：所名；对象键：所 id。\n归属所：本所；归属县：county_company_name。\n当前值：预计年末执行率（百分数，42 表示 42%），单位 %。\n阈值 60，档位 high / mid。\n明细四项：分配额、已花、预计结余（元）、时间进度（%）。\n依据三项：分配额取自所级年度分配预算；已花取自当年审批通过工单的预算合计；数据截止日。\n可靠性：两张表都查得动就算可靠；工单表没有该所记录时按已花 0 处理，在明细里注明「工单表无该所记录」，仍按可靠上报。"
+    }
+  },
+  {
+    "name": "单笔工单预算异常",
+    "work_type": "detect",
+    "alert_type": "预算",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "取今年每张工单的 total_budget。",
+      "data": "t_power_ai_work_order：id 工单 id、work_code 工单号、work_name 工单名、power_company_name 所名、county_company_name 县名、total_budget 预算金额（元）、work_status 状态、year、deleted_flag。\n只取：year=今年 且 deleted_flag=0。",
+      "goal": "查出哪张工单的预算金额明显偏大，一张工单一条结果。\n产出：结果表里每张超限工单一行，带预算金额与所属所、县；按今年工单全查，命中几十张。",
+      "what": "哪张工单的预算金额明显偏大，需要复核。\n算到工单，一张一条。",
+      "judge": "total_budget ≥ 1000000 元（100 万）报，全部为高档。",
+      "store": "对象：工单名（带所名）；对象键：工单 id。\n归属所：power_company_name；归属县：county_company_name。\n当前值：total_budget，单位 元。\n阈值 1000000，档位 high。\n明细四项：工单号、所名、县名、状态。\n依据两项：预算金额取自工单表 total_budget；年度。"
+    }
+  },
+  {
+    "name": "工单金额缺失",
+    "work_type": "detect",
+    "alert_type": "预算",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "取今年审批通过工单的 total_budget。",
+      "data": "t_power_ai_work_order：id、work_code、work_name、power_company_name、county_company_name、total_budget（元）、is_approved（1=通过）、year、deleted_flag。\n只取：year=今年、deleted_flag=0、is_approved=1。",
+      "goal": "查出哪张已审批通过的工单没填预算金额，一张工单一条结果。\n产出：结果为金额为空或 0 的已批工单，带所属所、县。",
+      "what": "哪张已审批通过的工单没填预算金额。\n算到工单，一张一条。",
+      "judge": "total_budget 为 0 或空 → 报，中档。",
+      "store": "对象：工单名（带所名）；对象键：工单 id。\n归属所：power_company_name；归属县：county_company_name。\n当前值：total_budget（空按 0），单位 元。\n阈值 0，档位 mid。\n明细三项：工单号、所名、审批状态。\n依据两项：预算金额取自工单表；审批状态取自 is_approved。"
+    }
+  },
+  {
+    "name": "台区线损超线",
+    "work_type": "detect",
+    "alert_type": "指标",
+    "scope_level": "area",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "取最新月份的台区线损率，每个台区一条。",
+      "data": "t_power_ai_area_effect：power_area_id、power_area_name 台区名、area_code 台区编码、line_loss_rate 当月线损率（%）、sales_volume 当月售电量（kWh）、stat_month 统计月份（YYYYMM）、deleted_flag。\n归属靠台区台账 t_power_area：area_code 关联，power_id / power_name 是所属所。\n只取：deleted_flag=0，且 stat_month 为全表最新月份。\n坑：两张表的 area_code 排序规则不同，直接关联报 1267，要写成\n  convert(a.area_code using utf8mb4) collate utf8mb4_unicode_ci =\n  convert(e.area_code using utf8mb4) collate utf8mb4_unicode_ci",
+      "goal": "查出哪个台区的线损率超过考核线，一个台区一条结果。\n产出：结果为最新月份线损超线的台区，带所属所、县；约 1900 个台区的数据里命中几十个。",
+      "what": "哪个台区的线损率超过考核线。\n算到台区，一个台区一条。",
+      "judge": "line_loss_rate > 3 报；> 5 为高档，3~5 为中档。",
+      "store": "对象：台区名；对象键：power_area_id（没有就用 area_code）。\n归属所：t_power_area.power_name；归属县：按所 id 查 t_power_company 的上级。\n当前值：线损率（百分数），单位 %。\n阈值 3，档位 high / mid。\n明细三项：统计月份、售电量、台区编码。\n依据两项：线损率取自当月台区成效表；统计月份。\n可靠性：最新月份只有极少量台区时标不可靠（数据未补齐）。"
+    }
+  },
+  {
+    "name": "台区售电量骤降",
+    "work_type": "detect",
+    "alert_type": "指标",
+    "scope_level": "area",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "同一台区取最新两个 stat_month 的 sales_volume；\n环比 =（本月 - 上月）/ 上月 × 100（百分数，负数表示下降）。",
+      "data": "t_power_ai_area_effect：power_area_id、power_area_name、area_code、sales_volume（kWh）、stat_month、deleted_flag。\n归属靠台区台账 t_power_area（同上，area_code 关联要转排序规则）。\n只取：deleted_flag=0。",
+      "goal": "查出哪个台区这个月售电量比上个月掉得厉害，一个台区一条结果。\n产出：结果为环比降幅超线的台区，带所属所、县。",
+      "what": "哪个台区这个月售电量比上个月掉得厉害。\n算到台区，一个台区一条。",
+      "judge": "环比 < -30% 报；< -50% 为高档，其余中档。",
+      "store": "对象：台区名；对象键：power_area_id。\n归属所：t_power_area.power_name；归属县：按所 id 查上级。\n当前值：环比变化率（百分数，负数），单位 %。\n阈值 -30，档位 high / mid。\n明细四项：本月售电量、上月售电量、本月月份、上月月份。\n依据两项：售电量取自台区成效表两个月份。\n可靠性：上月售电量为 0 或缺失的台区不参与计算。"
+    }
+  },
+  {
+    "name": "指标同比恶化",
+    "work_type": "detect",
+    "alert_type": "指标",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "取最新累计月份每个所的三项同比变化率（正数=同比变差）；取绝对值最大的那一项作为当前值，并在明细里写清是哪一项。",
+      "data": "t_power_ai_station_summary：station_name 所名、county_company_name 所属县、stat_month 累计截止月（YYYYMM）、loss_rate_yoy_rate 线损率同比变化率（%）、trip_count_yoy_rate 跳闸同比变化率（%）、average_outage_duration_yoy_rate 平均停电时长同比变化率（%）、deleted_flag。\n只取：deleted_flag=0，且 stat_month 为全表最新月份。",
+      "goal": "查出哪个所的核心指标比去年同期变差，一个所一条结果。\n产出：结果为线损率、跳闸、停电时长三项里有任一项同比变差的所，带所属县与最差那一项。",
+      "what": "哪个所的核心指标比去年同期变差了。\n算到供电所，一个所一条。",
+      "judge": "任一项超过门槛即报：线损率同比 > 5%、跳闸同比 > 20%、停电时长同比 > 20%；\n超出门槛一倍为高档，其余中档。",
+      "store": "对象：所名；对象键：power_station_id（没有就用所名）。\n归属所：本所；归属县：county_company_name。\n当前值：最差那一项的同比变化率（百分数，正数表示变差），单位 %。\n阈值：对应项的门槛（5 或 20）。\n明细五项：最差项名称、线损率同比、跳闸同比、停电时长同比、所属县。\n依据两项：三项同比取自所级汇总表对应列；统计月份。\n可靠性：三项同比全空的所不参与计算。"
+    }
+  },
+  {
+    "name": "已批未开工",
+    "work_type": "detect",
+    "alert_type": "审批",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "天数 = create_time 到今天的天数。",
+      "data": "t_power_ai_work_order：id、work_code、work_name、power_company_name、county_company_name、is_approved（1=通过）、actual_start_time 实际开工时间、create_time 创建时间、total_budget（元）、year、deleted_flag。\n只取：year=今年、deleted_flag=0、is_approved=1、actual_start_time 为空。",
+      "goal": "查出哪张工单批下来了却迟迟没开工，一张工单一条结果。\n产出：结果为已审批通过、开工时间为空、超过 90 天的工单，带已过天数。",
+      "what": "哪张工单批下来了却迟迟没开工。\n算到工单，一张一条。",
+      "judge": "天数 > 90 报；> 180 为高档，其余中档。",
+      "store": "对象：工单名（带所名）；对象键：工单 id。\n归属所：power_company_name；归属县：county_company_name。\n当前值：已过天数，单位 天。\n阈值 90，档位 high / mid。\n明细四项：工单号、预算金额、创建时间、天数按创建时间推算的说明。\n依据三项：审批状态、实际开工时间、创建时间。\n可靠性：actual_start_time 整表为空时标\"按创建时间推算，天数偏大\"。"
+    }
+  },
+  {
+    "name": "工单长期未结束",
+    "work_type": "detect",
+    "alert_type": "审批",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "天数 = create_time 到今天的天数。",
+      "data": "t_power_ai_work_order：id、work_code、work_name、power_company_name、county_company_name、actual_end_time 实际结束时间、create_time、work_status、total_budget（元）、year、deleted_flag。\n只取：year=今年、deleted_flag=0、actual_end_time 为空。",
+      "goal": "查出哪张工单拖了很久还没结束，一张工单一条结果。\n产出：结果为结束时间为空、创建超过 180 天的工单，带已过天数。",
+      "what": "哪张工单拖了很久还没结束。\n算到工单，一张一条。",
+      "judge": "天数 > 180 报；> 270 为高档，其余中档。",
+      "store": "对象：工单名（带所名）；对象键：工单 id。\n归属所：power_company_name；归属县：county_company_name。\n当前值：已过天数，单位 天。\n阈值 180，档位 high / mid。\n明细三项：工单号、工作状态、预算金额。\n依据两项：实际结束时间、创建时间。"
+    }
+  },
+  {
+    "name": "审批长期未通过",
+    "work_type": "detect",
+    "alert_type": "审批",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": null,
+    "doc": {
+      "calc": "天数 = update_time 到今天的天数（没有审批任务表，只能用最后更新时间近似，是下限）。",
+      "data": "t_power_ai_work_order：id、work_code、work_name、power_company_name、county_company_name、is_approved（0=未通过）、current_node_name 当前审批节点、update_time 最后更新时间、create_time、total_budget（元）、year、deleted_flag。\n只取：year=今年、deleted_flag=0、is_approved=0。",
+      "goal": "查出哪张工单卡在审批里很久没通过，一张工单一条结果。\n产出：结果为未通过、最后更新超过 30 天的工单，带停留天数与当前节点。",
+      "what": "哪张工单卡在审批里很久没通过。\n算到工单，一张一条。",
+      "judge": "天数 > 30 报；> 90 为高档，其余中档。",
+      "store": "对象：工单名（带所名）；对象键：工单 id。\n归属所：power_company_name；归属县：county_company_name。\n当前值：停留天数，单位 天。\n阈值 30，档位 high / mid。\n明细四项：当前节点、工单号、预算金额、天数按最后更新时间估算的说明。\n依据三项：审批状态、当前节点、最后更新时间。\n可靠性：update_time 为空的跳过，并在运行记录里注明。"
+    }
+  },
+  {
+    "name": "预算花不完 · 发送",
+    "work_type": "send",
+    "alert_type": "预算",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "预算花不完",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司财务部：find_user(unit = 县名，如 随县；role = 财务)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《预算花不完》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个所一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{所名}今年预算只能花到 {整数}%\n县级：本县 {n} 所预算到年底花不完\n市级：全市 {n} 所预算到年底花不完\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：厉山供电所今年预算只能花到 42%",
+      "source": "结果表，按文档名读：doc_name = 预算花不完；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  },
+  {
+    "name": "单笔工单预算异常 · 发送",
+    "work_type": "send",
+    "alert_type": "预算",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "单笔工单预算异常",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司财务部：find_user(unit = 县名，如 随县；role = 财务)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《单笔工单预算异常》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个工单一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{所名}一张工单预算 {整万} 万\n县级：本县 {n} 张工单预算超百万\n市级：全市 {n} 张工单预算超百万\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：厉山供电所一张工单预算 320 万",
+      "source": "结果表，按文档名读：doc_name = 单笔工单预算异常；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  },
+  {
+    "name": "工单金额缺失 · 发送",
+    "work_type": "send",
+    "alert_type": "预算",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "工单金额缺失",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司财务部：find_user(unit = 县名，如 随县；role = 财务)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《工单金额缺失》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个工单一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{所名} {n} 张工单没填预算\n县级：本县 {n} 张工单没填预算\n市级：全市 {n} 张工单没填预算\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：厉山供电所 5 张工单没填预算",
+      "source": "结果表，按文档名读：doc_name = 工单金额缺失；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  },
+  {
+    "name": "台区线损超线 · 发送",
+    "work_type": "send",
+    "alert_type": "指标",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "台区线损超线",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司运检部：find_user(unit = 县名，如 随县；role = 运检)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《台区线损超线》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个台区一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{台区名}线损率 {一位小数}%\n县级：本县 {n} 个台区线损超线\n市级：全市 {n} 个台区线损超线\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：白鹤台区线损率 5.2%",
+      "source": "结果表，按文档名读：doc_name = 台区线损超线；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  },
+  {
+    "name": "台区售电量骤降 · 发送",
+    "work_type": "send",
+    "alert_type": "指标",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "台区售电量骤降",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司运检部：find_user(unit = 县名，如 随县；role = 运检)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《台区售电量骤降》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个台区一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{台区名}售电量下降 {整数}%\n县级：本县 {n} 个台区售电量骤降\n市级：全市 {n} 个台区售电量骤降\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：白鹤台区售电量下降 42%",
+      "source": "结果表，按文档名读：doc_name = 台区售电量骤降；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  },
+  {
+    "name": "指标同比恶化 · 发送",
+    "work_type": "send",
+    "alert_type": "指标",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "指标同比恶化",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司运检部：find_user(unit = 县名，如 随县；role = 运检)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《指标同比恶化》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个所一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{所名}{最差项}同比上升 {整数}%\n县级：本县 {n} 所指标同比恶化\n市级：全市 {n} 所指标同比恶化\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：厉山供电所线损率同比上升 12%",
+      "source": "结果表，按文档名读：doc_name = 指标同比恶化；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  },
+  {
+    "name": "已批未开工 · 发送",
+    "work_type": "send",
+    "alert_type": "审批",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "已批未开工",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司营销部：find_user(unit = 县名，如 随县；role = 营销)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《已批未开工》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个工单一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{所名} {n} 张工单批了没开工\n县级：本县 {n} 张工单已批未开工\n市级：全市 {n} 张已批未开工\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：厉山供电所 3 张工单批了没开工",
+      "source": "结果表，按文档名读：doc_name = 已批未开工；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  },
+  {
+    "name": "工单长期未结束 · 发送",
+    "work_type": "send",
+    "alert_type": "审批",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "工单长期未结束",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司营销部：find_user(unit = 县名，如 随县；role = 营销)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《工单长期未结束》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个工单一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{所名}最长工单已拖 {整数} 天\n县级：本县 {n} 张工单长期未结束\n市级：全市 {n} 张工单长期未结束\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：厉山供电所最长工单已拖 220 天",
+      "source": "结果表，按文档名读：doc_name = 工单长期未结束；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  },
+  {
+    "name": "审批长期未通过 · 发送",
+    "work_type": "send",
+    "alert_type": "审批",
+    "scope_level": "station",
+    "enabled": true,
+    "pair_name": "审批长期未通过",
+    "doc": {
+      "who": "所级 → 该所所长：find_user(unit = 所名，如 厉山；role = 所长)\n县级 → 县公司营销部：find_user(unit = 县名，如 随县；role = 营销)\n市级 → 市公司领导：find_user(unit = 随州市；role = 市公司领导)\n\n查到多个取第一个；查不到这一层就不发，在 finish 的 note 里写清哪个单位缺哪个岗位。",
+      "goal": "把《审批长期未通过》今天判出来的结果，按所、县、市三层各写成一句话，发给对应的人。\n产出：每人一条通知；覆盖了哪几条结果，记在这条通知里。",
+      "rule": "四条都成立才发：status = open、reliable = true、tier 是 high 或 mid、last_seen 是今天。\n所级：按 unit_name 分组，每个工单一句（组里多条就数条数）；\n县级：按 county_name 分组，每个县一句；\n市级：全部合成一句。",
+      "fields": "object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位（high / mid / low）、value 当前值配 value_unit 读（% 表示百分数）、reliable 数据是否可靠（0 不发）、status 问题还在不在。",
+      "phrase": "不超过 30 字，只放一个数字。\n\n所级：{所名} {n} 张工单卡在审批\n县级：本县 {n} 张工单卡在审批\n市级：全市 {n} 张工单卡在审批\n\n不要写：样本总数、阈值、档位英文（high / mid）、一串明细。\n例：厉山供电所 4 张工单卡在审批",
+      "source": "结果表，按文档名读：doc_name = 审批长期未通过；只要 status=open、last_seen 是今天。\n要用到的列：object_name 对象名、unit_name 归属所、county_name 归属县、tier 档位、value 当前值、value_unit 单位。\n最多 200 条，超过就翻页接着读，读完为止。",
+      "delivery": "用 send 工具，一层一句话调一次：\nitem_ids 这几条结果的 id（第一个当成最差那条）\nlevel station / county / city\nscope_name 所名 或 县名 或 全市\nrecipient_login 查到的登录名；message 第五节的句子；reason 写为什么发他\n\n三层发完调 finish，sent_n 填实际发出条数。"
+    }
+  }
+]

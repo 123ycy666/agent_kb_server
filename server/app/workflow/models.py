@@ -1,16 +1,21 @@
-"""工作流框架 ORM（纯机制：没有一处业务字段）。"""
+﻿"""工作流框架 ORM（纯机制：没有一处业务字段）。
+
+2026-11-07 定死：只存两份数据 —— 结果（`wf_item`）与人看到的一句话（`wf_notify`）。
+过程不建表（每轮每对象的流水、通知与结果的中间表都不建）。
+"""
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Float, Index, Integer, SmallInteger, String, Text,
-    UniqueConstraint, func, text,
+    BigInteger, DateTime, Index, Integer, Numeric, SmallInteger, String,
+    Text, UniqueConstraint, func, text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base
+from app.core.database import WFBase as Base
 
 
 def _ts(nullable: bool = False):
@@ -18,8 +23,13 @@ def _ts(nullable: bool = False):
                          nullable=nullable)
 
 
+def _ts_null():
+    """可空时间列：没写就是没写，不给默认值（read_at / sent_at 靠它判未读）。"""
+    return mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class RuleDoc(Base):
-    """规则文档：一行 = 一份，正文里是分节文本。"""
+    """规则文档：一行 = 一份，正文里是分节文本。发送文档用 pair_doc_id 指回取数文档。"""
 
     __tablename__ = 'wf_doc'
 
@@ -31,6 +41,7 @@ class RuleDoc(Base):
     disabled_reason: Mapped[str | None] = mapped_column(Text)
     scope_level: Mapped[str] = mapped_column(String(16), nullable=False, default='city')
     schedule_id: Mapped[int | None] = mapped_column(BigInteger)
+    pair_doc_id: Mapped[int | None] = mapped_column(BigInteger)
     doc: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict,
                                       server_default=text("'{}'::jsonb"))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -73,7 +84,7 @@ class Schedule(Base):
 
 
 class DocSchedule(Base):
-    """文档 ↔ 定时方案（多对多）：一份文档可挂多个方案，例如 8 点一个、9 点一个。"""
+    """文档 ↔ 定时方案（多对多）。"""
 
     __tablename__ = 'wf_doc_schedule'
     __table_args__ = (UniqueConstraint('doc_id', 'schedule_id', name='uk_wf_doc_sched'),)
@@ -84,7 +95,7 @@ class DocSchedule(Base):
 
 
 class Run(Base):
-    """一轮运行（过程）。没命中也有这一行。"""
+    """一轮运行（过程只留这里与 wf_run_log，不另建流水表）。"""
 
     __tablename__ = 'wf_run'
 
@@ -96,7 +107,7 @@ class Run(Base):
     work_type: Mapped[str] = mapped_column(String(16), nullable=False, default='detect')
     trigger: Mapped[str] = mapped_column(String(16), nullable=False, default='manual')
     started_at: Mapped[datetime] = _ts()
-    finished_at: Mapped[datetime | None] = _ts(nullable=True)
+    finished_at: Mapped[datetime | None] = _ts_null()
     status: Mapped[str] = mapped_column(String(16), nullable=False, default='running')
     data_as_of: Mapped[str | None] = mapped_column(String(32))
     checked_n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -109,7 +120,7 @@ class Run(Base):
 
 
 class RunLog(Base):
-    """一轮里的步骤留痕（SQL、工具调用、错误）。"""
+    """一轮里的步骤留痕（SQL、工具调用、错误）—— 排错就看这里。"""
 
     __tablename__ = 'wf_run_log'
 
@@ -122,83 +133,67 @@ class RunLog(Base):
                                           server_default=text("'{}'::jsonb"))
 
 
-class CheckResult(Base):
-    """每个对象每轮一行：命中与不命中都写。"""
-
-    __tablename__ = 'wf_result'
-    __table_args__ = (UniqueConstraint('run_id', 'doc_id', 'object_key', name='uk_wf_result'),)
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    run_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
-    doc_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    object_key: Mapped[str] = mapped_column(String(160), nullable=False)
-    object_name: Mapped[str] = mapped_column(String(200), nullable=False, default='')
-    scope_type: Mapped[str | None] = mapped_column(String(16))
-    scope_key: Mapped[str | None] = mapped_column(String(64))
-    value: Mapped[float | None] = mapped_column(Float)
-    threshold: Mapped[float | None] = mapped_column(Float)
-    op: Mapped[str | None] = mapped_column(String(8))
-    tier: Mapped[str | None] = mapped_column(String(8))
-    hit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict,
-                                         server_default=text("'{}'::jsonb"))
-    evidence: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict,
-                                           server_default=text("'{}'::jsonb"))
-    reliable: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
-    created_at: Mapped[datetime] = _ts()
-
-
 class Item(Base):
-    """结果：一个问题一行，可关闭。"""
+    """预警结果：一条 = 一个对象在一条判据下的当前结论。"""
 
     __tablename__ = 'wf_item'
+    __table_args__ = (
+        UniqueConstraint('doc_id', 'object_key', name='uk_wf_item'),
+        Index('idx_wf_item_live', 'status', 'alert_type', 'tier'),
+        Index('idx_wf_item_county', 'county_name', 'status'),
+        Index('idx_wf_item_unit', 'unit_name', 'status'),
+        Index('idx_wf_item_seen', 'last_seen'),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    dedupe_key: Mapped[str] = mapped_column(String(240), unique=True, nullable=False)
     doc_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
-    alert_type: Mapped[str] = mapped_column(String(64), nullable=False, default='')
+    doc_name: Mapped[str] = mapped_column(String(120), nullable=False, default='')
+    alert_type: Mapped[str] = mapped_column(String(16), nullable=False, default='')
     object_key: Mapped[str] = mapped_column(String(160), nullable=False)
     object_name: Mapped[str] = mapped_column(String(200), nullable=False, default='')
-    scope_type: Mapped[str | None] = mapped_column(String(16))
-    scope_key: Mapped[str | None] = mapped_column(String(64))
-    value: Mapped[float | None] = mapped_column(Float)
-    threshold: Mapped[float | None] = mapped_column(Float)
-    op: Mapped[str | None] = mapped_column(String(8))
+    unit_name: Mapped[str] = mapped_column(String(120), nullable=False, default='')
+    county_name: Mapped[str] = mapped_column(String(120), nullable=False, default='')
+    value: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
+    value_unit: Mapped[str] = mapped_column(String(16), nullable=False, default='')
+    threshold: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
     tier: Mapped[str | None] = mapped_column(String(8))
-    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict,
-                                         server_default=text("'{}'::jsonb"))
-    evidence: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict,
-                                           server_default=text("'{}'::jsonb"))
     reliable: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
-    title: Mapped[str] = mapped_column(String(300), nullable=False, default='')
-    body: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default='open', index=True)
     close_reason: Mapped[str | None] = mapped_column(String(32))
     first_seen: Mapped[datetime] = _ts()
     last_seen: Mapped[datetime] = _ts()
-    seen_times: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    run_id_last: Mapped[int | None] = mapped_column(BigInteger)
-    sent_at: Mapped[datetime | None] = _ts(nullable=True)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict,
+                                         server_default=text("'{}'::jsonb"))
+    evidence: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict,
+                                           server_default=text("'{}'::jsonb"))
+    sent_at: Mapped[datetime | None] = _ts_null()
     task_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class Notify(Base):
-    """发送记录。"""
+    """每人版本：一条 = 一个人收到的一句话，覆盖哪几条结果存在 alert_ids 里。"""
 
     __tablename__ = 'wf_notify'
+    __table_args__ = (
+        Index('idx_wf_notify_mine', 'recipient_login', 'read_at', 'sent_at'),
+        Index('idx_wf_notify_scope', 'alert_type', 'level', 'sent_at'),
+        Index('idx_wf_notify_alerts', 'alert_ids', postgresql_using='gin'),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
-    recipient_login: Mapped[str] = mapped_column(String(64), nullable=False, default='')
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
+    alert_type: Mapped[str] = mapped_column(String(16), nullable=False, default='')
+    scope_name: Mapped[str] = mapped_column(String(120), nullable=False, default='')
+    recipient_login: Mapped[str] = mapped_column(String(64), nullable=False)
     recipient_name: Mapped[str | None] = mapped_column(String(64))
-    channel: Mapped[str] = mapped_column(String(16), nullable=False, default='station')
-    message: Mapped[str | None] = mapped_column(Text)
-    reason: Mapped[str | None] = mapped_column(Text)
+    role_code: Mapped[str | None] = mapped_column(String(32))
+    message: Mapped[str] = mapped_column(String(200), nullable=False)
+    alert_ids: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), nullable=False)
+    doc_id: Mapped[int | None] = mapped_column(BigInteger)
     sent_at: Mapped[datetime] = _ts()
-    ok: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
-    error: Mapped[str | None] = mapped_column(Text)
-    run_id: Mapped[int | None] = mapped_column(BigInteger)
-    doc_version: Mapped[int | None] = mapped_column(Integer)
+    read_at: Mapped[datetime | None] = _ts_null()
+    reason: Mapped[str | None] = mapped_column(Text)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, default='station')
 
 
 class Param(Base):
@@ -211,12 +206,14 @@ class Param(Base):
     note: Mapped[str | None] = mapped_column(Text)
 
 
-TABLES = [RuleDoc, DocVersion, Schedule, DocSchedule, Run, RunLog, CheckResult, Item, Notify, Param]
+TABLES = [RuleDoc, DocVersion, Schedule, DocSchedule, Run, RunLog, Item, Notify, Param]
 
 DEFAULT_PARAMS = {
     'max_steps': ('24', '单轮最多几步工具调用'),
-    'max_items_per_run': ('200', '单轮最多写几条事项'),
-    'no_repeat_days': ('1', '同一事项同一收件人多少天内不重发'),
-    'retention_months': ('12', '结果流水保留月数'),
+    'max_items_per_run': ('200', '单轮最多写几条结果'),
+    'no_repeat_days': ('1', '同一收件人同一层面同一类多少天内不重发'),
+    'retention_months': ('12', '运行日志保留月数'),
     'send_channel_default': ('station', '默认通道'),
 }
+
+

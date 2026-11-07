@@ -146,3 +146,49 @@ def check_connection() -> tuple[bool, str]:
             return True, detail
     except Exception as exc:  # noqa: BLE001 - 健康检查需要吞掉所有异常
         return False, str(exc)
+
+
+# ══════════════════════════════════════════════════════════════
+#  预警库（独立的 PostgreSQL 数据库，不和业务库 / 知识库混）
+#  2026-11-07：wf_* 表单独放一个库，先在这里跑通，确认后再谈合并
+# ══════════════════════════════════════════════════════════════
+
+def _wf_database_url() -> str:
+    import os
+
+    from sqlalchemy.engine import make_url
+
+    env = os.getenv('WF_DATABASE_URL')
+    if env:
+        return env
+    return make_url(settings.database_url).set(database='ad_wf').render_as_string(hide_password=False)
+
+
+wf_engine = create_engine(
+    _wf_database_url(),
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    pool_size=5,
+    max_overflow=10,
+    future=True,
+)
+
+SessionLocalWF = sessionmaker(
+    bind=wf_engine,
+    autoflush=False,
+    autocommit=False,
+    expire_on_commit=False,
+)
+
+
+class WFBase(DeclarativeBase):
+    """预警库的 ORM 基类：只装 wf_* 表，与业务 Base 的元数据分开。"""
+
+
+def get_db_wf() -> Generator[Session, None, None]:
+    """FastAPI 依赖：预警库会话。"""
+    db = SessionLocalWF()
+    try:
+        yield db
+    finally:
+        db.close()

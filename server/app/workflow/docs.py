@@ -7,36 +7,35 @@ from sqlalchemy.orm import Session
 from app.workflow.models import DocSchedule, DocVersion, RuleDoc, Schedule
 
 DETECT_SECTIONS = [
-    ('what', '一 管什么', '这条预警盯的是哪件事、算到哪一层。一句话说清，不要写方法。',
-     '哪个所今年的预算到年底花不完。算到供电所，一个所一条。'),
-    ('data', '二 看哪些数据', '哪张表、哪几列是什么意思、只取哪些行、有什么坑（单位、怎么关联、缺数据怎么办）。',
-     '表 A 存分配额（列 X 是所、列 Y 是金额，单位元）；表 B 存工单（列 Z 是是否审批通过）。只取未删除的行。'),
-    ('calc', '三 怎么算', '那个数怎么算出来：时间口径、按什么分组、一个对象一条还是并一条。',
-     '执行率 = 已花 / 分配；按时间进度外推到年底，得到预计执行率。'),
-    ('judge', '四 多少算异常', '比较方式、阈值、分档；多少以上不报也写在这一节。',
-     '预计执行率 < 0.6 报；< 0.3 为高档，其余中档；0.6 及以上不报。'),
-    ('store', '五 存什么数据', '每条命中要交出去的内容：对象和键、当前值、明细里放哪几项、依据指哪几列。只写内容，不写表名字段名。',
-     '对象=所名，键=所id；当前值=预计执行率；明细=分配额、已花、执行率、预计结余；依据=分配额与已审批金额两列。'),
+    ('goal', '一 目的', '这份文档要查出什么、算到哪个对象、最终在结果表里落成什么、跑完应该看到什么样子。只写目的，不写方法。',
+     '（示例：要查的那件事 + 算到哪个对象 + 结果表里一行是什么 + 跑完大约多少行）'),
+    ('what', '二 管什么', '这条判据盯的是哪件事、算到哪一层。一句话说清，不写方法。',
+     '（示例：一句话说清盯什么、算到哪一层）'),
+    ('data', '三 看哪些数据', '哪张表、哪几列、只取哪些行、怎么关联、有什么坑（单位、排序规则、缺数据怎么办）。',
+     '（示例：表 + 列 + 过滤条件 + 关联键 + 已知的坑）'),
+    ('calc', '四 怎么算', '那个数怎么算出来：时间口径、按什么分组、一个对象一条。',
+     '（示例：公式 + 时间口径 + 分组方式）'),
+    ('judge', '五 多少算异常', '比较方式、阈值、分档；多少以上不报也写在这一节。',
+     '（示例：阈值 + 比较方式 + 分档界线）'),
+    ('store', '六 存什么数据', '每个对象要交出去的内容：对象、归属单位、上级单位、当前值与单位、阈值、档位、明细几项、依据几项、可靠性。只写内容。',
+     '（示例：对象=什么，归属=哪个单位，当前值=什么配什么单位，明细=几项，依据=几项）'),
 ]
 
 SEND_SECTIONS = [
-    ('source', '一 读哪些数据', '从哪张表读、读哪一类、取哪些列、以哪个时间字段为准、排序与条数。'
-                              '只写"读什么"和"怎么取"，不写发不发的判断。',
-     '从 wf_item 读，alert_type=预算；取 object_name/tier/value/detail 等列；'
-     '以 last_seen 为准取今天，按 tier 倒序最多 200 条。'),
-    ('fields', '二 字段是什么意思', '要用到的每一列是什么含义；JSON 列里有哪些键。',
-     'object_name 单位名、tier 档位、value 当前值、detail 明细、last_seen 最近命中。'),
-    ('rule', '三 怎么判断该不该发', '什么条件发、什么条件不发（状态/档位/可靠性/当天已发/该类无数据）。',
-     'open 且 high/mid 且 reliable 才发；low、已关闭、当天已发、该类无数据都不发。'),
-    ('who', '四 发给谁', '角色 → 看哪个范围（本所/本县/全市）→ 账号怎么找；找不到账号怎么办。',
-     '所级发该所所长；县级在一批所出问题时才发县财务；市级只发全市结论；找不到账号不发。'),
-    ('phrase', '五 一句话怎么写', '提示词：字数上限、必须包含什么、禁止什么、正反例各一条。',
-     '不超过 30 字，写「哪个单位 + 预算怎么样 + 一个数」；禁止带总数、阈值、明细列表。'),
-    ('delivery', '六 怎么存', '用哪只工具写、每个参数取哪个值、返回什么算成功、失败怎么办。'
-                            '频率归定时方案，文档不写。',
-     '用 send 工具写通知表：item_id 取事项 id、recipient_login 取 find_user 的登录名、'
-     'role_code 取该账号的角色、message 取第五节的句子、reason 写为什么发给他；'
-     '返回 ok=true 算成功，ok=false 看 error。'),
+    ('goal', '一 目的', '这份文档把哪份取数文档判出来的结果、按哪几层、变成一句什么话、发给谁、产出在哪；跑完是什么样子。',
+     '（示例：把某份结果按几层各写一句发出去，产出每人一条通知）'),
+    ('source', '二 读哪些数据', '从结果表读、按哪份取数文档过滤、取哪些列、以哪个时间字段为准、排序与翻页。只写"读什么""怎么取"。',
+     '（示例：按文档名过滤 + 取哪几列 + 只看今天 + 超过多少条就翻页）'),
+    ('fields', '三 字段是什么意思', '要用到的每一列是什么含义；值单位怎么读；明细里有哪些键。',
+     '（示例：每一列的语义，值怎么配单位读）'),
+    ('rule', '四 怎么判断该不该发', '什么条件成立才发；以及按什么归到各层。',
+     '（示例：状态 + 可靠性 + 档位 + 今天命中；按哪个字段归到哪几层）'),
+    ('who', '五 发给谁', '层面 → 岗位 → find_user 参数；查到多个取哪个；查不到怎么办。',
+     '（示例：每层找哪个岗位，用单位与岗位关键字查人）'),
+    ('phrase', '六 一句话怎么写', '提示词：字数上限、只放一个数字、各层句式、禁止什么、正反例各一条。',
+     '（示例：字数 + 一个数字 + 各层句式 + 禁止项 + 一条正例）'),
+    ('delivery', '七 怎么存', '用哪只工具写、每个参数取哪个值、返回什么算成功。频率归定时方案。',
+     '（示例：用 send 工具，各参数取哪一节的什么值）'),
 ]
 
 TEMPLATES = {
@@ -75,7 +74,8 @@ def dict_of(d: RuleDoc) -> dict:
         'work_type_label': (TEMPLATES.get(d.work_type) or {}).get('label', d.work_type),
         'alert_type': d.alert_type, 'enabled': bool(d.enabled),
         'disabled_reason': d.disabled_reason, 'scope_level': d.scope_level,
-        'schedule_id': d.schedule_id, 'doc': d.doc or {}, 'version': d.version,
+        'schedule_id': d.schedule_id, 'pair_doc_id': d.pair_doc_id,
+        'doc': d.doc or {}, 'version': d.version,
         'updated_by': d.updated_by,
         'updated_at': d.updated_at.isoformat() if d.updated_at else None,
         'missing': missing, 'complete': not missing,
@@ -89,9 +89,11 @@ def get_doc(db: Session, doc_id: int) -> RuleDoc | None:
 
 def create_doc(db: Session, *, name: str, work_type: str, alert_type: str = '',
                scope_level: str = 'city', doc: dict | None = None,
+               pair_doc_id: int | None = None,
                updated_by: str = '') -> RuleDoc:
     d = RuleDoc(name=name[:120], work_type=(work_type if work_type in WORK_TYPES else 'detect'),
                 alert_type=(alert_type or '')[:64], scope_level=scope_level or 'city',
+                pair_doc_id=pair_doc_id,
                 doc=doc if doc is not None else blank_doc(work_type), updated_by=updated_by)
     db.add(d)
     db.commit()
@@ -100,7 +102,7 @@ def create_doc(db: Session, *, name: str, work_type: str, alert_type: str = '',
 
 def save_doc(db: Session, d: RuleDoc, *, name: str | None = None, doc: dict | None = None,
              alert_type: str | None = None, scope_level: str | None = None,
-             schedule_id=('KEEP',), enabled: bool | None = None,
+             schedule_id=('KEEP',), pair_doc_id=('KEEP',), enabled: bool | None = None,
              disabled_reason: str | None = None, updated_by: str = '') -> RuleDoc:
     if name:
         d.name = name[:120]
@@ -110,6 +112,8 @@ def save_doc(db: Session, d: RuleDoc, *, name: str | None = None, doc: dict | No
         d.scope_level = scope_level
     if schedule_id != ('KEEP',):
         d.schedule_id = int(schedule_id) if schedule_id not in (None, '', 0) else None
+    if pair_doc_id != ('KEEP',):
+        d.pair_doc_id = int(pair_doc_id) if pair_doc_id not in (None, '', 0) else None
     if enabled is not None:
         d.enabled = 1 if enabled else 0
     if disabled_reason is not None:
@@ -228,3 +232,47 @@ def unlink_doc(db: Session, doc_id: int) -> None:
 def count_docs(db: Session) -> int:
     return int(db.execute(select(func.count()).select_from(RuleDoc)
                           .where(RuleDoc.deleted_flag == 0)).scalar_one())
+
+# ── 文档导入导出（业务正文只在库里，代码里不放） ──────────────────────
+def export_json(db, path: str) -> int:
+    import json
+    rows = db.execute(select(RuleDoc).where(RuleDoc.deleted_flag == 0)
+                      .order_by(RuleDoc.id)).scalars().all()
+    names = {r.id: r.name for r in rows}
+    out = [{'name': r.name, 'work_type': r.work_type, 'alert_type': r.alert_type,
+            'scope_level': r.scope_level, 'enabled': bool(r.enabled),
+            'pair_name': names.get(r.pair_doc_id), 'doc': r.doc or {}} for r in rows]
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(json.dumps(out, ensure_ascii=False, indent=2))
+    return len(out)
+
+
+def import_json(db, path: str) -> dict:
+    import json
+    with open(path, encoding='utf-8') as f:
+        items = json.loads(f.read())
+    created = updated = 0
+    for it in items:
+        d = db.execute(select(RuleDoc).where(RuleDoc.name == it['name'])).scalars().first()
+        if d is None:
+            d = RuleDoc(name=it['name'], work_type=it.get('work_type') or 'detect', doc={})
+            db.add(d)
+            created += 1
+        else:
+            updated += 1
+        d.work_type = it.get('work_type') or 'detect'
+        d.alert_type = it.get('alert_type') or ''
+        d.scope_level = it.get('scope_level') or 'station'
+        d.enabled = 1 if it.get('enabled', True) else 0
+        d.deleted_flag = 0
+        d.doc = it.get('doc') or {}
+        db.commit()
+    for it in items:
+        if not it.get('pair_name'):
+            continue
+        d = db.execute(select(RuleDoc).where(RuleDoc.name == it['name'])).scalars().first()
+        p = db.execute(select(RuleDoc).where(RuleDoc.name == it['pair_name'])).scalars().first()
+        if d is not None and p is not None:
+            d.pair_doc_id = p.id
+            db.commit()
+    return {'created': created, 'updated': updated}

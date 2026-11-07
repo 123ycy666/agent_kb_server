@@ -1,4 +1,4 @@
-"""调度：调度方案存库，改完热重载，不重启进程。"""
+﻿"""调度：调度方案存库，改完热重载，不重启进程。"""
 from __future__ import annotations
 
 import logging
@@ -7,7 +7,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
-from app.core.database import SessionLocal
+from app.core.database import SessionLocalWF as SessionLocal
 from app.workflow import docs as docsdb
 from app.workflow.models import Schedule
 from app.workflow.runner import run_doc
@@ -140,3 +140,4 @@ def stop() -> None:
         except Exception:               # noqa: BLE001
             pass
         _SCHED['s'] = None
+
