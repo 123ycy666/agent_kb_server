@@ -82,16 +82,18 @@ export interface WfItem {
   detail: Record<string, unknown>
   evidence: Record<string, unknown>
   reliable: boolean
-  title: string
-  body?: string | null
   status: string
   close_reason?: string | null
   first_seen?: string
   last_seen?: string
-  seen_times: number
   sent_at?: string | null
   doc_name?: string
-  history?: { at?: string; value?: number | null; threshold?: number | null; tier?: string | null; hit: boolean }[]
+  unit_name?: string
+  county_name?: string
+  value_unit?: string
+  notifications?: { id: number; level: string; scope_name: string; message?: string | null;
+    recipient_login: string; recipient_name?: string | null; role_code?: string | null;
+    sent_at?: string | null; read_at?: string | null }[]
   notifies?: { id: number; login: string; name?: string; channel: string; reason?: string; ok: boolean; sent_at?: string }[]
 }
 

@@ -554,13 +554,13 @@ function ItemsTab() {
   const columns: ColumnsType<WfItem> = [
     { title: '档位', dataIndex: 'tier', width: 70, render: (v) => (v && TIER[v] ? <Tag color={TIER[v].color}>{TIER[v].text}</Tag> : '—') },
     { title: '对象', dataIndex: 'object_name', width: 160 },
-    { title: '事项', dataIndex: 'title', render: (v, r) => <a onClick={async () => setDetail(await wfApi.item(r.id))}>{v}</a> },
+    { title: '判据', dataIndex: 'doc_name', width: 170, render: (v, r) => <a onClick={async () => setDetail(await wfApi.item(r.id))}>{v}</a> },
     { title: '当前值', dataIndex: 'value', width: 100, render: fmt },
     { title: '阈值', dataIndex: 'threshold', width: 90, render: fmt },
     { title: '状态', dataIndex: 'status', width: 100, render: (v, r) => <Tag color={v === 'open' ? 'red' : 'default'}>{v === 'open' ? '未关闭' : (r.close_reason || '已关闭')}</Tag> },
     { title: '首见', dataIndex: 'first_seen', width: 120, render: (v) => (v ? String(v).slice(0, 10) : '—') },
     { title: '最近', dataIndex: 'last_seen', width: 120, render: (v) => (v ? String(v).slice(0, 10) : '—') },
-    { title: '次数', dataIndex: 'seen_times', width: 60 },
+    { title: '已通知', dataIndex: 'sent_at', width: 120, render: (v) => (v ? String(v).slice(5, 16).replace('T', ' ') : '—') },
   ]
 
   return (
@@ -572,7 +572,7 @@ function ItemsTab() {
       <Table rowKey="id" size="small" loading={loading} dataSource={rows} columns={columns}
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
         locale={{ emptyText: <Empty description="暂时没有问题" /> }} />
-      <Drawer open={!!detail} width={720} title={detail?.title} onClose={() => setDetail(null)} destroyOnClose
+      <Drawer open={!!detail} width={720} title={detail?.object_name} onClose={() => setDetail(null)} destroyOnClose
         extra={detail && (
           <Space>
             <Button onClick={async () => {
@@ -588,10 +588,11 @@ function ItemsTab() {
             <Descriptions size="small" column={2} items={[
               { key: 'o', label: '对象', children: `${detail.object_name}（${detail.object_key}）` },
               { key: 'd', label: '来源文档', children: detail.doc_name || detail.doc_id },
-              { key: 'v', label: '当前值 / 阈值', children: `${fmt(detail.value)} / ${fmt(detail.op)} ${fmt(detail.threshold)}` },
+              { key: 'u', label: '归属所 / 县', children: `${detail.unit_name || '—'} / ${detail.county_name || '—'}` },
+              { key: 'v', label: '当前值 / 阈值', children: `${fmt(detail.value)}${detail.value_unit || ''} / ${fmt(detail.threshold)}` },
               { key: 't', label: '档位', children: detail.tier || '—' },
               { key: 'r', label: '数据可靠', children: detail.reliable ? '是' : '否（有降级）' },
-              { key: 's', label: '首见 / 最近 / 次数', children: `${dt(detail.first_seen)} / ${dt(detail.last_seen)} / ${detail.seen_times}` },
+              { key: 's', label: '首见 / 最近 / 已通知', children: `${dt(detail.first_seen)} / ${dt(detail.last_seen)} / ${dt(detail.sent_at)}` },
             ]} />
             <Card size="small" title="明细">
               <Descriptions size="small" column={2}
@@ -601,24 +602,13 @@ function ItemsTab() {
               <Descriptions size="small" column={2}
                 items={Object.entries(detail.evidence || {}).map(([k, v]) => ({ key: k, label: k, children: fmt(v) }))} />
             </Card>
-            <Card size="small" title="历史（最近 30 轮）">
-              <Table size="small" rowKey={(r) => String(r.at) + String(r.value)} dataSource={detail.history || []}
-                pagination={{ pageSize: 10, hideOnSinglePage: true }}
+            <Card size="small" title="通知过谁">
+              <Table size="small" rowKey="id" dataSource={detail.notifications || []} pagination={false}
                 columns={[
-                  { title: '时间', dataIndex: 'at', render: dt },
-                  { title: '值', dataIndex: 'value', render: fmt },
-                  { title: '阈值', dataIndex: 'threshold', render: fmt },
-                  { title: '档位', dataIndex: 'tier', render: fmt },
-                  { title: '命中', dataIndex: 'hit', render: (v: boolean) => (v ? <Tag color="red">命中</Tag> : <Tag>未命中</Tag>) },
-                ]} />
-            </Card>
-            <Card size="small" title="发送记录">
-              <Table size="small" rowKey="id" dataSource={detail.notifies || []} pagination={false}
-                columns={[
-                  { title: '收件人', render: (_, r) => `${r.name || ''} ${r.login}` },
-                  { title: '内容', dataIndex: 'message', render: (m: string) => <span style={{ whiteSpace: 'pre-wrap' }}>{m || '—'}</span> },
-          { title: '通道', dataIndex: 'channel' },
-                  { title: '依据', dataIndex: 'reason' },
+                  { title: '层面', render: (_, r) => `${r.level} · ${r.scope_name}` },
+                  { title: '收件人', render: (_, r) => `${r.recipient_name || ''} ${r.recipient_login}${r.role_code ? '（' + r.role_code + '）' : ''}` },
+                  { title: '一句话', dataIndex: 'message', render: (m?: string | null) => m || '—' },
+                  { title: '已读', render: (_, r) => (r.read_at ? '已读' : '未读') },
                   { title: '时间', dataIndex: 'sent_at', render: dt },
                 ]} />
             </Card>
