@@ -28,6 +28,7 @@ from app.secretary import semantic
 from app.secretary import tools_db
 from app.secretary import tools_file
 from app.secretary import tools_kb
+from app.secretary import tools_result
 
 # 闸门判定（"这句答案能不能直接交出去"）已搬到 evidence_gate.py（2026-11-02）：
 # 原先是「问题侧词表 _BIZ + 答案侧数字 _CLAIM」两条正则，问题侧那半是开集，补不完。
@@ -65,6 +66,18 @@ TOOLS = [
                               {'type': 'array', 'items': {'type': 'string'}}],
                     'description': '一条 SQL，或互不依赖的多条 SQL 组成的数组'}},
             'required': ['sql']}}},
+    # ★ 2026-11-08：结果太大时不再砍内容 —— 数组会换成「前 k 条 + total + ref」，
+    #   剩下的用这只手按 offset 取回（契约同 read_file 的 next_offset）。
+    {'type': 'function', 'function': {
+        'name': 'read_result',
+        'description': '取回上一次查询没给完的明细。只有当工具结果里出现 ref / next_offset 时才有用：'
+                       '那次结果只给了前几条，其余落在这里。offset 从结果里的 next_offset 抄，'
+                       'next_offset 为 null 就是取完了。要合计 / 极值仍用 SQL 算，别拿取回的行自己加。',
+        'parameters': {'type': 'object', 'properties': {
+            'ref': {'type': 'string', 'description': '工具结果里那个 ref，如 r3f9a1c2d4e5'},
+            'offset': {'type': 'integer', 'description': '从第几条开始，默认 0；接着取就抄 next_offset'},
+            'limit': {'type': 'integer', 'description': '一次取几条，默认 20'}},
+            'required': ['ref']}}},
     # ★ 2026-10-30：字段明细与规则条目改成"按需取"，不再全塞进 system。
     {'type': 'function', 'function': {
         'name': 'describe_table',
@@ -377,7 +390,7 @@ def _final_answer(messages, model, max_tokens=None, allow_rule=False, trace=None
                     except Exception as exc:           # noqa: BLE001
                         _out = {'error': str(exc)[:160]}
                 msgs.append({'role': 'tool', 'tool_call_id': tc.get('id'),
-                             'content': json.dumps(_out, ensure_ascii=False)[:4000]})
+                             'content': tools_result.deliver('get_rule', _out)})
                 if trace is not None:
                     trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': _fn,
                                   'args': _args, 'phase': 'final',
@@ -497,9 +510,6 @@ def _write_answer(messages, model, user_content, trace=None, need_facts=True,
             'facts': ''}
 
 
-_TOOL_RESULT_CHARS = 4000      # 单个工具结果给模型的字符上限（可用 config 覆盖）
-
-
 def _dump(obj):
     return json.dumps(obj, ensure_ascii=False, default=str)
 
@@ -605,51 +615,13 @@ def _unit_guard(sql):
 
 
 def _trim(name, res):
-    """工具结果 → 给模型的 JSON 文本；超上限就**少列明细行**，绝不把 JSON 从中间切断。
+    """兼容旧调用点：一律转给交付层（2026-11-08）。
 
-    ★ 这里原来是 `json.dumps(res)[:4000]` —— 实测 47 行的分配结果就切在数字中间，
-      模型拿到的是**坏 JSON**（Unterminated string），既看不到整份、还可能自己把可见行相加。
-      改成整行进出之后：JSON 始终合法，row_count 保留真实行数，明细被丢这件事写在 note 里，
-      并明确告诉它汇总去取 summary（tools_db 已随结果一起给）。
+    ★ 旧的裁剪只认识 {columns, rows, summary} 一种形状：5 条数组查询的外层 results
+      被当成"最占地方的明细列表"整块砍成 0 条，模型拿到 results: [] 就答「暂无数据」。
+      现在换形式不砍内容，见 tools_result.deliver。新代码直接用 deliver，别再往这加逻辑。
     """
-    cap = int(getattr(config, 'TOOL_RESULT_CHARS', _TOOL_RESULT_CHARS) or _TOOL_RESULT_CHARS)
-    text = _dump(res)
-    if len(text) <= cap:
-        return text
-    obj = dict(res) if isinstance(res, dict) else {'value': res}
-    # 最占地方的明细列表：整行地丢，直到放得下
-    list_key = ''
-    for k, v in obj.items():
-        if isinstance(v, list) and v and (not list_key or len(_dump(v)) > len(_dump(obj[list_key]))):
-            list_key = k
-    if list_key:
-        rows = obj[list_key]
-
-        def build(n):
-            o = dict(obj)
-            o[list_key] = rows[:n]
-            o['note'] = ('%s 共 %d 条，为省篇幅只列出前 %d 条（其余未列出）。'
-                         '**合计 / 均值 / 最大最小一律取本结果的 summary —— 不要拿看得见的这几行自己相加**。'
-                         % (list_key, len(rows), n))
-            return o
-
-        lo, hi = 0, len(rows)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if len(_dump(build(mid))) <= cap:
-                lo = mid
-            else:
-                hi = mid - 1
-        while lo > 0 and len(_dump(build(lo))) > cap:
-            lo -= 1
-        return _dump(build(lo))
-    # 没有明细列表：截断最长的字符串值（仍保证是合法 JSON）
-    for k in sorted([k for k, v in obj.items() if isinstance(v, str)], key=lambda k: -len(obj[k])):
-        if len(_dump(obj)) <= cap:
-            break
-        over = len(_dump(obj)) - cap
-        obj[k] = obj[k][:max(0, len(obj[k]) - over - 40)] + '……（本条已截断，需要就去查更具体的对象）'
-    return _dump(obj)
+    return tools_result.deliver(name, res)
 
 
 # ---------------------------------------------------------------------------
@@ -756,6 +728,10 @@ def execute(name, args):
                 _outs = list(_ex.map(_one_sql, _items))
             return {'multi': True, 'count': len(_outs), 'results': _outs}
         return _one_sql(_sql)
+    if name == 'read_result':
+        # 2026-11-08：取回交付层落盘的分片（工具结果太大时只管给前几条，其余放这里）。
+        return tools_result.read_result(args.get('ref', ''), args.get('offset') or 0,
+                                        args.get('limit') or 20)
     # ── 文件类（2026-11-05）────────────────────────────────────────────
     if name == 'read_file':
         from app.secretary import tools_file
@@ -1385,7 +1361,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #      查数口径与查数手只在 use_db 时给；改库的手还没接（P2）。
     _want = []
     if _route['use_db']:
-        _want += ['kb_search', 'describe_table', 'find_column', 'run_sql', 'finish']
+        _want += ['kb_search', 'describe_table', 'find_column', 'run_sql', 'read_result', 'finish']
     if _route['use_file']:
         _want += ['kb_search', 'kb_read', 'read_file', 'run_code']
     if _route['make_file']:
@@ -1514,7 +1490,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                 continue
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
-            _body = _trim(o['name'], o['result'])
+            _body = tools_result.deliver(o['name'], o['result'], session_id=session_id)
             if o['name'] == 'run_sql':
                 _sql = (o.get('args') or {}).get('sql')
                 # ★ 2026-11-03 定稿：三条"就地提醒"（没带时间 / 没带范围 / 没带单位）全部停用。

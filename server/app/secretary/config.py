@@ -355,6 +355,19 @@ def output_tokens(explicit=None) -> int:
     """这一调用该带多少 max_tokens；<=0 表示不带（网关按模型上限）。"""
     return int(explicit) if explicit else LLM_MAX_TOKENS
 
+
+# 工具结果交付（2026-11-08，见 docs/04-计划/2026-11-08-工具结果交付层-设计.md）
+#   TOOL_RESULT_CHARS：单次工具结果交给模型的字数上限。超了不砍内容，落盘 + 给骨架
+#                     （原来写死 4000，5 条数组查询被裁成 0 条，答成「暂无数据」）。
+#   TOOL_RESULT_DIR  ：分片落盘目录（按 session 分）。
+#   READ_RESULT_CHARS：一次 read_result 最多回多少字（再按条数封顶）。
+TOOL_RESULT_CHARS = int(os.environ.get('SECRETARY_TOOL_RESULT_CHARS')
+                        or ENV.get('SECRETARY_TOOL_RESULT_CHARS') or '12000')
+TOOL_RESULT_DIR = (os.environ.get('SECRETARY_TOOL_RESULT_DIR')
+                   or ENV.get('SECRETARY_TOOL_RESULT_DIR') or 'data/tool_results').strip()
+READ_RESULT_CHARS = int(os.environ.get('SECRETARY_READ_RESULT_CHARS')
+                        or ENV.get('SECRETARY_READ_RESULT_CHARS') or '6000')
+
 # 知识库检索的超时（秒）：检索只是取切片，正常 <1 秒，不该占满 HTTP_TIMEOUT。
 # 实测两个"卡到超时、一次库都没查"的问句（「今年立的项目都干到哪一步了？」600s、
 # 「我新报的单子能过吗？」420s），就是被这类下游调用拖住的。给它短超时：失败按"没检索到"处理，

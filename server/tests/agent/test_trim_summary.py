@@ -12,8 +12,9 @@
 import json
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.stdout.reconfigure(encoding='utf-8')
 
 from app.secretary import agent
@@ -40,7 +41,7 @@ except Exception as e:
     check('1 summary 有金额合计', False, '%s: %s' % (type(e).__name__, e))
     check('2 字符串列不进 summary', False, 'skip')
 
-# 3/4. _trim 的长度闸
+# 3/4. 交付层的长度闸（2026-11-08 起：明细换成「前 k 条 + ref」，不再丢内容）
 big = {'columns': ['power_station_name', 'budget_amount'],
        'rows': [{'power_station_name': '第%d所' % i, 'budget_amount': str(400000 + i)} for i in range(300)],
        'row_count': 300,
@@ -53,11 +54,14 @@ except Exception as e:
     parsed, ok_json = None, False
     check('3a 截断后仍是合法 JSON', False, '%s' % e)
 if ok_json:
+    head = parsed.get('rows') if isinstance(parsed.get('rows'), dict) else {}
     check('3a 截断后仍是合法 JSON', True, '%d 字符' % len(t))
     check('3b row_count 保留真实行数', parsed.get('row_count') == 300, parsed.get('row_count'))
     check('3c summary 保留', float((parsed.get('summary') or {}).get('budget_amount', {}).get('sum', 0)) == 19100000.0)
-    check('3d 有截断说明', 'note' in parsed and 'summary' in str(parsed.get('note')), str(parsed.get('note'))[:120])
-    check('3e rows 变少但非空', 0 < len(parsed.get('rows') or []) < 300, len(parsed.get('rows') or []))
+    check('3d 有截断说明', 'summary' in str(head.get('note') or ''), str(head.get('note'))[:120])
+    check('3e rows 变少但非空', 0 < len(head.get('items') or []) < 300, len(head.get('items') or []))
+    check('3f 明细可再取（ref + total）', bool(head.get('ref')) and head.get('total') == 300,
+          str(head.get('ref')))
 
 # 5. 时间条件守卫：本轮口径有时间、SQL 不带时间条件 → 必须提醒这是历年累计
 SCOPE = {'time': {'period_type': 'yearToDate', 'time_text': '2026年1-9月'}}

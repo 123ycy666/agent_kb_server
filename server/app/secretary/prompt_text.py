@@ -56,6 +56,8 @@ DEFAULT_TOOLS_GUIDE = (
     '- 要交文件用 make_file（docx / pptx / xlsx），它自带自检；自检不过会返回错误，按错误改。\n'
     '- run_sql 的 sql 可以传数组：同一轮里互不依赖的查询（不同维度、不同表、不同口径）'
     '一次全放进数组，框架并发执行，别一条一条调。\n'
+    '- 工具结果里出现 ref 或 next_offset，说明还有明细没给：用 read_result(ref, offset) 接着取；'
+    'next_offset 为 null 才表示取完。\n'
     '- 能用结构化参数就别用 run_code。'
 )
 
