@@ -113,6 +113,7 @@ copy .env.example .env
 | `server/app/db_init.py` | 建表 / 扩展 / 增量迁移 / 种子管理员（**不用 alembic**） |
 | `server/app/api/v1/` | 知识库与管理面接口（`/api/v1/*`）+ 问数接口（`/api/*`） |
 | `server/app/secretary/` | 问数智能体：`agent.py`(自主循环) `qa_log.py`(记录) `semantic.py`(语义层) `tools_*.py` |
+| `server/app/workflow/` | **预警框架**（文档驱动）：`runner.py` 执行器、`tools.py` 工具、`store.py` 存取、`models.py` 表、`api.py` 接口；代码里无业务口径 |
 | `server/app/secretary/skills/` | ⚠️ **技能文档（运行时读取，勿删）** |
 | `server/app/core/` | 配置 / 双库引擎 / JWT / 权限矩阵 |
 | `server/app/providers/` | **模型适配层**（mock / local / online 三档，换模型不改业务代码） |
@@ -124,7 +125,9 @@ copy .env.example .env
 | `data/seed_docs/` | 种子文档（首次导入演示用） |
 | `data/uploads/` | 上传原件落盘（下载原文件读这里） |
 | `deploy/` `docker/` | nginx 配置 / 容器初始化 SQL |
-| `docs/` | 接口文档、内网部署指南、打包清单 |
+| `docs/` | 业务文档（索引 `docs/README.md`：00 当前预警 / 01 接口 / 02 部署 / 03 设计 / 04 计划 / 05 研究 / 06 口径 / 07 使用 / 08 历史归档） |
+| `output/` | 本地产物（验收证据、备份、归档），**不入库** |
+| `A924-POC/`、`交付/` | 外部 POC 与交付件，与主线无关 |
 
 ---
 
@@ -135,6 +138,7 @@ copy .env.example .env
 | `MODEL_CHANNEL` | **总开关**：`local`(内网自建) / `online`(公网 API) |
 | `DATABASE_URL` | PG 内容库（默认 `127.0.0.1:5433/ad_new`） |
 | `MYSQL_*` | 员工认证源 `dlj_data.t_employee`（只读） |
+| `WF_DATABASE_URL` | 预警库（默认 `127.0.0.1:5433/ad_wf`，与内容库分开；不填则按 `DATABASE_URL` 换库名推导） |
 | `LOCAL_MODELS` | 内网**实际部署**的模型清单（逗号分隔）；留空则只有 `LOCAL_LLM_MODEL` |
 | `JWT_SECRET` | 生产必须替换（`openssl rand -hex 32`） |
 | `EMBED_BATCH_CONCURRENCY` | 向量化并发度（online 单请求硬限 10 条） |
@@ -150,10 +154,12 @@ copy .env.example .env
 | 文档 | 内容 |
 |---|---|
 | `docs/01-接口/接口文档.md` | 全部 HTTP 接口、认证、错误码、调用示例 |
-| `docs/01-接口/预警与任务流转-接口文档.md` | **预警四类 + 任务流转 + 对话建任务 v1.3**（43 个接口、字段、状态机、核销规则、前端接入） |
+| `docs/03-设计/specs/2026-11-07-预警逻辑与表结构-定稿.md` | **当前预警框架定死版**：三层逻辑、两张表、9 对 9 文档、产出物清单 |
+| `docs/01-接口/工作流接口文档.md` | 工作流页面 30 个接口（文档 / 定时 / 运行 / 结果 / 通知 / 参数） |
+| `docs/01-接口/预警数据接口-前端取数.md` | 前端拿预警数据的三个接口 + 通知接口 |
 | `docs/01-接口/办公文档接口文档.md` | **办公文档能力接口文档 v1.0**（`/api/files`、带文件 `/api/ask`、`/api/docs/jobs`；字段表、错误码、示例、联调清单） |
 | `docs/02-部署/内网部署指南.md` | 内网离线部署全流程与排查 |
-| `docs/02-部署/预警与任务流转-部署说明.md` | 预警/任务功能的建表、开关、定时、验收、回滚 |
+| `docs/01-接口/预警前端对接说明.md` | 前端怎么接、字段变更与页面改动清单 |
 | `docs/02-部署/内网打包清单.md` | **交付给内网部署人员时需要打包哪些文件** |
 
 ---

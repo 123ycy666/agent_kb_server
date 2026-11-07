@@ -90,8 +90,8 @@ class FakeModel:
         self.script = list(script)
         self.calls: list[dict] = []
 
-    def __call__(self, messages, model, use_tools=True, max_tokens=4000,
-                 think=True, tool_choice=None):
+    def __call__(self, messages, model, use_tools=True, max_tokens=None,
+                 think=True, tool_choice=None, tools=None):
         self.calls.append({'use_tools': bool(use_tools), 'msgs': len(messages)})
         item = self.script.pop(0) if self.script else {'content': '（脚本用完了）', 'calls': []}
         return {'choices': [{'message': {'content': item.get('content', ''),

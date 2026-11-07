@@ -1,2 +1,0 @@
-﻿const urls=["https://ghfast.top/https://codeload.github.com/HuanzhiMao/BFCL-Result/tar.gz/refs/heads/main","https://codeload.github.com/HuanzhiMao/BFCL-Result/tar.gz/refs/heads/main"];
-(async()=>{for(const u of urls){try{const r=await fetch(u,{method:"HEAD",headers:{"User-Agent":"Mozilla/5.0"}});console.log("HEAD",r.status,u,"len=",r.headers.get("content-length"));}catch(e){console.log("FAIL",u,e.message)}}})();
