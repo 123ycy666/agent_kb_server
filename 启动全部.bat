@@ -38,12 +38,29 @@ if not exist ".env" (
 )
 
 rem ── 1. 基础设施（PostgreSQL 5433）────────────────────────
-echo [1/2] 启动数据库容器（docker compose up -d）...
+rem  本机没有装 docker：改用绿色版 PostgreSQL 16 + pgvector（免管理员、免 WSL）。
+rem  两处数据一致：库 ad_new / 用户 kb / 端口 5433，与 .env 的 DATABASE_URL 对齐。
+echo [1/2] 启动数据库（docker 优先，没有 docker 就用绿色版 PG16）...
+where docker >nul 2>&1
+if errorlevel 1 goto :portable_pg
 docker compose up -d
 if errorlevel 1 (
   echo [警告] docker 启动失败。请确认 Docker Desktop 已运行。
   echo        后端连不上 PostgreSQL 时会在启动日志报错。
 )
+goto :pg_done
+
+:portable_pg
+if not exist "D:\pg16local\pgsql\bin\pg_ctl.exe" (
+  echo [警告] 既没装 docker，也没找到绿色版 PG（D:\pg16local）。
+  echo        后端连不上 PostgreSQL 时会在启动日志报错。
+  goto :pg_done
+)
+echo   [i] 未检测到 docker，使用绿色版 PostgreSQL：D:\pg16local
+"D:\pg16local\pgsql\bin\pg_ctl.exe" -D "D:\pg16local\data" status >nul 2>&1
+if not errorlevel 1 goto :pg_done
+"D:\pg16local\pgsql\bin\pg_ctl.exe" -D "D:\pg16local\data" -l "D:\pg16local\pg.log" start
+:pg_done
 
 rem ── 2. 统一后端（:8200 = 知识库 + 问数智能体 + 前端托管）────
 rem  ★ 必须先切到 server/ 目录：app 包在那里，项目根直接跑会

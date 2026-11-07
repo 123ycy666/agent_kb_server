@@ -33,6 +33,9 @@ const DEFAULTS = {
   planGlobs: ['*.md'],
   readDedupe: false,      // v5：关掉
   planGateMinFiles: 3,    // v5：本会话第 3 个不同代码文件起才要计划
+  memoryInject: true,     // v5.1：提问时按内容捞相关记忆注入（否则那 40 条记忆永远进不来）
+  memoryInjectTop: 5,     // 最多标星几条
+  memoryInjectMinScore: 0.3,// 稀有度加权后的分数阈值（「预算」这种实词单独命中约 0.25~0.5）
   newFileAsk: true,
   reanchor: false,        // 2026-10-19 关闭：additionalContext 每步重发，600 字×N 步 = 反向浪费
   rootCauseHintOnce: true,
@@ -109,6 +112,72 @@ function targetOf(input) {
   return '';
 }
 
+// ── 记忆注入（v5.1）──────────────────────────────────────────────────
+// 为什么要有：40 条记忆只有 AGENTS.md 那 37 行每轮注入，其余全靠模型主动去翻 —— 实际从不翻。
+// 做法：读两份 MEMORY.md 索引（用户级 + 项目级），按提问的 2-gram 重合度捞最相关的几条。
+// 只在命中时注入；没命中一个字都不加，避免污染上下文。
+function bigrams(s) {
+  const t = String(s).toLowerCase();
+  const set = new Set();
+  // 英文/数字按整词取（否则 dsh_pet 会被切成 sh/et/h_ 这种碎片，命中一堆无关条目）
+  for (const m of t.matchAll(/[a-z0-9][a-z0-9_-]{1,}/g)) set.add('w:' + m[0]);
+  // 中文按 2-gram
+  const cn = t.replace(/[^\u4e00-\u9fa5]/g, '');
+  for (let i = 0; i < cn.length - 1; i++) set.add(cn.slice(i, i + 2));
+  return set;
+}
+
+function loadMemoryIndex(cwd) {
+  const dirs = [];
+  if (process.env.USERPROFILE) dirs.push(join(process.env.USERPROFILE, '.dsh', 'memory'));
+  dirs.push(join(cwd, '.dsh', 'memory'));
+  const rows = [];
+  for (const d of dirs) {
+    const f = join(d, 'MEMORY.md');
+    if (!existsSync(f)) continue;
+    let text = '';
+    try { text = readFileSync(f, 'utf8'); } catch { continue; }
+    for (const ln of text.split(/\r?\n/)) {
+      const m = ln.match(/^\s*-\s*\[(.+?)\]\((.+?\.md)\)\s*[—–\-:]+\s*(.*)$/);
+      if (!m) continue;
+      rows.push({ title: m[1].trim(), file: m[2].trim(), desc: m[3].trim(), dir: d });
+    }
+  }
+  return rows;
+}
+
+function pickMemories(cwd, prompt, top, minScore) {
+  const rows = loadMemoryIndex(cwd);
+  if (!rows.length) return { starred: [], titles: [] };
+  const pm = bigrams(prompt);
+  // 按"稀有度"加权（TF-IDF 思路）：在越多行里出现的 2-gram 越可能是虚词（怎么/这个/可以），权重越低。
+  const df = new Map();
+  const sets = rows.map((r) => {
+    const s = bigrams(r.title + ' ' + r.desc);
+    for (const g of s) df.set(g, (df.get(g) || 0) + 1);
+    return s;
+  });
+  const scored = rows.map((r, i) => {
+    let score = 0, why = '', whyW = 0;
+    for (const g of pm) {
+      if (!sets[i].has(g)) continue;
+      const w = 1 / Math.max(1, df.get(g) || 1);
+      score += w;
+      if (w > whyW) { whyW = w; why = g; }
+    }
+    return { ...r, score, why };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const picked = scored.filter((r) => r.score >= minScore).slice(0, top);
+  const starred = picked.map((r) => {
+    const d = r.desc.length > 80 ? r.desc.slice(0, 80) + '…' : r.desc;
+    return `${r.title}（命中「${r.why}」）：${d}【${r.dir.replace(/\\/g, '/')}/${r.file}】`;
+  });
+  const starredTitles = new Set(picked.map((r) => r.title));
+  const titles = rows.map((r) => (starredTitles.has(r.title) ? '★' + r.title : r.title));
+  return { starred, titles };
+}
+
 const raw = await readStdin();
 let p = {};
 try { p = JSON.parse(raw); } catch { process.exit(0); }
@@ -118,8 +187,46 @@ const tool = String(p.tool_name || '').toLowerCase();
 const cwd = p.cwd || process.cwd();
 const cfg = loadConfig(cwd);
 
-// ── UserPromptSubmit：目标重锚（默认关闭）──────────────────────────────
+// ── SessionStart：注入一次记忆索引（安全，不随提问触发，不会自激）──────
+if (evt === 'SessionStart') {
+  if (cfg.memoryIndexOnStart === false) process.exit(0);
+  try {
+    const rows = loadMemoryIndex(cwd);
+    if (rows.length) {
+      const titles = rows.map((r) => r.title);
+      context(evt, '【记忆索引】你以前记下的条目。要细节先 read 对应 md 文件，别凭印象：\n' + titles.join(' · '));
+    }
+  } catch {}
+  process.exit(0);
+}
+
+// ── UserPromptSubmit：记忆注入 + 目标重锚 ─────────────────────────────
 if (evt === 'UserPromptSubmit') {
+  // 2026-11-03 事故：additionalContext 被宿主当成新的 inbox 投递，又触发一次 UserPromptSubmit，
+  // 形成「注入→触发→再注入」的自激循环，把会话刷爆。整个分支硬关闭，等验证过不自触再开。
+  if (cfg.memoryInjectHardOff !== false) process.exit(0);
+  if (cfg.memoryInject) {
+    const prompt = String(p.prompt || '');
+    if (prompt.trim().length >= 4) {
+      const { starred, titles } = pickMemories(cwd, prompt, Number(cfg.memoryInjectTop || 3), Number(cfg.memoryInjectMinScore || 0.3));
+      const st = loadState(cwd, p.session_id);
+      const parts = [];
+      // 全量标题只在每个会话第一次注入：不占后续上下文，但保证「有哪些记忆」这件事不会再被忘掉
+      if (!st.memIndexSent && titles.length) {
+        parts.push('【记忆索引】你以前记下的条目。★=与本次提问可能相关。要用细节就 read 对应文件，别凭印象：\n' +
+          titles.join(' · '));
+        st.memIndexSent = true;
+        saveState(cwd, p.session_id, st);
+      }
+      if (starred.length) {
+        parts.push('【可能相关的记忆】★只是关键词重合、未必真相关，你自己判断；要用细节先 read 原文：\n- ' + starred.join('\n- '));
+      }
+      if (parts.length) {
+        context(evt, parts.join('\n\n'));
+        process.exit(0);
+      }
+    }
+  }
   if (!cfg.reanchor) process.exit(0);
   const plan = freshPlan(cwd, cfg);
   if (!plan) process.exit(0);
