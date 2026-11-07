@@ -341,6 +341,20 @@ SQL_MAX_ROWS = 200
 SQL_TIMEOUT_MS = 25000
 HTTP_TIMEOUT = 120
 
+# 模型输出额度（max_tokens）：**不在调用点上写死**，只走这一个口。
+# 0 = 请求里不带 max_tokens 字段，由网关按模型自己的上限给（等于"最大"）。
+# ★ 2026-11-08：原来每个调用点各写一个数（查数轮 600 / 写正文 2500 / 事实清单 1200 /
+#   进度自检 300 / 摘要 700 / 看图 800），查数轮那 600 就把正文截在半句、
+#   run_sql 一个都没发出来，用户收到的是一段"查数计划"。要收紧额度设
+#   SECRETARY_LLM_MAX_TOKENS，别回到调用点写数字。
+LLM_MAX_TOKENS = int(os.environ.get('SECRETARY_LLM_MAX_TOKENS')
+                     or ENV.get('SECRETARY_LLM_MAX_TOKENS') or '0')
+
+
+def output_tokens(explicit=None) -> int:
+    """这一调用该带多少 max_tokens；<=0 表示不带（网关按模型上限）。"""
+    return int(explicit) if explicit else LLM_MAX_TOKENS
+
 # 知识库检索的超时（秒）：检索只是取切片，正常 <1 秒，不该占满 HTTP_TIMEOUT。
 # 实测两个"卡到超时、一次库都没查"的问句（「今年立的项目都干到哪一步了？」600s、
 # 「我新报的单子能过吗？」420s），就是被这类下游调用拖住的。给它短超时：失败按"没检索到"处理，

@@ -34,7 +34,7 @@ def set_llm(fn) -> None:
     _LLM = fn
 
 
-def _llm(messages: list[dict], max_tokens: int = 2000) -> str:
+def _llm(messages: list[dict], max_tokens: int | None = None) -> str:
     if _LLM is not None:
         return _LLM(messages, max_tokens)
     from app.secretary import agent as agent_mod
@@ -79,7 +79,7 @@ def _extract_chunk(chunk: dict) -> dict:
     prompt = (f"【片段位置】{chunk['section']}\n"
               f"【片段正文】\n{chunk['text']}")
     out = _llm([{"role": "system", "content": _EXTRACT_PROMPT},
-                {"role": "user", "content": prompt}], max_tokens=1200)
+                {"role": "user", "content": prompt}])
     data = _json_of(out)
     items = data.get("items") or []
     if not isinstance(items, list):
@@ -187,7 +187,7 @@ def _summary(items: list[dict], risks: list[str], title: str) -> str:
     if risks:
         lines.append("风险点：" + "；".join(risks))
     return _llm([{"role": "system", "content": _SUMMARY_PROMPT},
-                 {"role": "user", "content": "\n".join(lines)}], max_tokens=1600)
+                 {"role": "user", "content": "\n".join(lines)}])
 
 
 def run(file_id: str, user_id: int, options: dict | None = None,

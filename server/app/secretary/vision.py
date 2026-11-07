@@ -62,7 +62,7 @@ def sniff_mime(data: bytes, filename: str = '') -> str:
 
 
 def describe(data: bytes, question: str = '', *, filename: str = '',
-             model: str | None = None, max_tokens: int = 800) -> dict:
+             model: str | None = None, max_tokens: int | None = None) -> dict:
     """让多模态模型看图回答。返回 {'text','model','ms','mime','bytes'}。"""
     if not data:
         raise VisionError('图片是空的')
@@ -82,7 +82,6 @@ def describe(data: bytes, question: str = '', *, filename: str = '',
     body = {
         'model': mid,
         'temperature': 0,
-        'max_tokens': max_tokens,
         'messages': [{
             'role': 'user',
             'content': [
@@ -93,6 +92,9 @@ def describe(data: bytes, question: str = '', *, filename: str = '',
             ],
         }],
     }
+    _mt = sec_config.output_tokens(max_tokens)
+    if _mt > 0:
+        body['max_tokens'] = _mt
     raw_body = json.dumps(body).encode('utf-8')
     req = urllib.request.Request(
         sec_config.LLM_BASE + '/chat/completions', data=raw_body,

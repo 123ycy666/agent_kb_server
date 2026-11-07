@@ -177,7 +177,7 @@ def chat(
         t1 = time.perf_counter()
         try:
             answer = bundle.llm.chat(
-                messages, temperature=payload.temperature, max_tokens=2000
+                messages, temperature=payload.temperature
             )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
@@ -200,7 +200,7 @@ def chat(
         ) + "\n\n"
         try:
             for delta in bundle.llm.chat_stream(
-                messages, temperature=payload.temperature, max_tokens=2000
+                messages, temperature=payload.temperature
             ):
                 yield "event: delta\ndata: " + json.dumps(
                     {"content": delta}, ensure_ascii=False

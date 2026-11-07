@@ -29,7 +29,7 @@ def set_llm(fn) -> None:
     _LLM = fn
 
 
-def _llm(messages: list[dict], max_tokens: int = 1200) -> str:
+def _llm(messages: list[dict], max_tokens: int | None = None) -> str:
     if _LLM is not None:
         return _LLM(messages, max_tokens)
     from app.secretary import agent as agent_mod
@@ -177,8 +177,7 @@ def _squash(s: str) -> str:
 
 def _model_chunk(chunk: dict) -> list[dict]:
     out = _llm([{"role": "system", "content": _PROMPT},
-                {"role": "user", "content": f"【位置】{chunk['section']}\n【正文】\n{chunk['text']}"}],
-               max_tokens=1000)
+                {"role": "user", "content": f"【位置】{chunk['section']}\n【正文】\n{chunk['text']}"}])
     data = _json_of(out)
     issues = data.get("issues") or []
     res = []

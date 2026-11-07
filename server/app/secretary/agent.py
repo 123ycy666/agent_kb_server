@@ -253,16 +253,20 @@ def _sanitize_messages(messages):
     return out
 
 
-def _chat(messages, model, use_tools=True, max_tokens=4000, think=True, tool_choice=None,
+def _chat(messages, model, use_tools=True, max_tokens=None, think=True, tool_choice=None,
           tools=None):
     # ★ 默认开思考（**不要**关）：关掉思考时模型没有隐藏草稿纸，过程话术会直接写进 content，
     #   正文里出现「这是对策题。回答要点：…」「让我确认一下」「现在我已经收集了…」——
     #   领导看到的就是思考过程（实测，output/probe_thinking.py、probe_final_turn.py）。
     #   开思考时过程落在 reasoning 字段，content 只剩最终回答。
-    # 代价：reasoning 也占 completion token，max_tokens 给小了会把正文挤空 —— 所以放大到 4000。
+    # 代价：reasoning 也占 completion token —— 所以额度不设死（见下面 body 里的 output_tokens）。
     # 2026-10-10：模型换百炼 deepseek-v4.1-flash（内网 v4 到期），思考开关用 enable_thinking。
     body = {'model': model, 'messages': _sanitize_messages(messages),
-            'temperature': 0, 'max_tokens': max_tokens}
+            'temperature': 0}
+    # 额度只有一个口（2026-11-08）：None / 0 = 不带这个字段，由网关按模型上限给。
+    _mt = config.output_tokens(max_tokens)
+    if _mt > 0:
+        body['max_tokens'] = _mt
     if not think:
         # ★ 只用**查数轮**（正文不要，只要 tool_calls）：关思考每轮 59 token / 1.3s，
         #   开思考同一轮 159 token / 2.6s，而实测真实链路里开思考的查数轮能涨到
@@ -326,7 +330,7 @@ def _rule_tool():
     return []
 
 
-def _final_answer(messages, model, max_tokens=2500, allow_rule=False, trace=None):
+def _final_answer(messages, model, max_tokens=None, allow_rule=False, trace=None):
     """兜底：关掉工具再明确要一次正文。
 
     用在 content 为空的场合（实测 Q10「申报有没有不该批的」跑 594s、16 次查询后返回空正文）：
@@ -344,7 +348,7 @@ def _final_answer(messages, model, max_tokens=2500, allow_rule=False, trace=None
     if allow_rule and _rule_tool():
         try:
             _r0 = _chat(msgs, model, use_tools=True, tools=_rule_tool(),
-                        max_tokens=600, think=False)
+                        think=False)
             _msg0 = _r0['choices'][0]['message']
             _calls0 = _msg0.get('tool_calls') or []
         except Exception as exc:                       # noqa: BLE001 - 取规则失败就照旧要正文
@@ -394,7 +398,7 @@ def _final_answer(messages, model, max_tokens=2500, allow_rule=False, trace=None
     return ''
 
 
-def _ask_short(system, user, model, max_tokens=400):
+def _ask_short(system, user, model, max_tokens=None):
     """一次极短的判断调用（第 1 步「要不要走」、第 6 步「问题确定」用）。
 
     关思考 + 不给工具 + 低温：要的是"一个词"或"四行定稿"，不要散文。
@@ -452,7 +456,7 @@ def _collect_facts(messages, model, trace=None) -> str:
     """
     msgs = list(messages) + [{'role': 'user', 'content': _FACTS_RULE}]
     try:
-        resp = _chat(msgs, model, use_tools=False, max_tokens=1200, think=False)
+        resp = _chat(msgs, model, use_tools=False, think=False)
         out = str(resp['choices'][0]['message'].get('content') or '').strip()
     except Exception as exc:                       # noqa: BLE001 - 列不出清单就退回原做法
         print('[agent] 列事实清单失败（退回全部工具结果）：%s: %s'
@@ -984,7 +988,7 @@ def page_get(token):
     return _PAGES.get(token)
 
 
-def render_page_async(content, extra='', model=None, max_tokens=6000, cache_key=None):
+def render_page_async(content, extra='', model=None, max_tokens=None, cache_key=None):
     """后台线程生成页面，立刻返回 token。取用见 page_get()。
 
     ★ 2026-10-19 起**整体下线**（Fred：「正常流程先把页面生成关了，这个工具先注释」）：
@@ -1006,7 +1010,7 @@ def render_page_async(content, extra='', model=None, max_tokens=6000, cache_key=
     return token
 
 
-def render_page(content, extra='', model=None, max_tokens=6000, cache_key=None):
+def render_page(content, extra='', model=None, max_tokens=None, cache_key=None):
     """分析结论 -> 单页 HTML 数据大屏。**独立的一次模型调用，与作答那次不共用。**
 
     它是附属产物：任何异常都只返回空串，绝不能因为它把回答搞丢。
@@ -1453,9 +1457,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         t0 = time.time()
         # 第 7 步 · 干活循环。工具按分流子集给；没给工具就直接要正文。
         # 查数轮关思考：实测同一轮开思考会写 240~3400 字过程散文（一轮 10~17s）。
-        # 出文件那轮要给足输出额度 —— make_file 的 spec 是整份内容，600 token 会被截断成空参数。
-        _mt = 4000 if 'make_file' in _want else 600
-        resp = _chat(messages, model, think=False, max_tokens=_mt,
+        # ★ 2026-11-08：原来按动作写死额度（查数 600 / 出文件 4000）——600 那档把正文
+        #   截在半句、工具调用发不出来，答案是一段"查数计划"。现在不写死（config.output_tokens）。
+        resp = _chat(messages, model, think=False,
                      use_tools=bool(tools), tools=tools or None)
         llm_ms = int((time.time() - t0) * 1000)
         msg = resp['choices'][0]['message']
@@ -1544,7 +1548,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                     '看下面这份进度资料，只回两行：\n已查到：…\n还缺：…\n'
                     '只写本轮要答的几个方面里哪些已经有数据、哪些还没有；没有就写"无数据"。'
                     '不要建议、不要解释、不要重复 SQL。',
-                    _progress_feed(trace, user_content), model, max_tokens=300)
+                    _progress_feed(trace, user_content), model)
             except Exception:                      # noqa: BLE001 - 进度报不出来不影响干活
                 _prog = ''
             if _prog:

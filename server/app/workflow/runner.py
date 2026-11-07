@@ -72,7 +72,7 @@ def run_doc(db: Session, doc_id: int, trigger: str = 'manual', dry: bool = False
         step = 0
         for step in range(1, max_steps + 1):
             resp = agent_mod._chat(messages, model, use_tools=True, tools=toolset,
-                                   think=False, max_tokens=2000)
+                                   think=False)
             msg = (resp.get('choices') or [{}])[0].get('message') or {}
             calls = msg.get('tool_calls') or []
             if not calls:

@@ -168,9 +168,12 @@ def recover(limit=20):
     return n
 
 
-def _chat(messages, model, max_tokens=700):
+def _chat(messages, model, max_tokens=None):
     body = {'model': model, 'messages': messages, 'enable_thinking': False,
-            'temperature': 0, 'max_tokens': max_tokens}
+            'temperature': 0}
+    _mt = config.output_tokens(max_tokens)
+    if _mt > 0:
+        body['max_tokens'] = _mt
     req = urllib.request.Request(
         config.LLM_BASE + '/chat/completions',
         data=json.dumps(body).encode('utf-8'),

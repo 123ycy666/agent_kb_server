@@ -1,4 +1,4 @@
-﻿"""存取：运行批次、结果流水、事项、发送记录、参数。存取规则全部在这里。"""
+"""存取：运行批次、结果流水、事项、发送记录、参数。存取规则全部在这里。"""
 from __future__ import annotations
 
 import uuid
@@ -39,6 +39,10 @@ def ensure_tables() -> None:
         db.execute(text('UPDATE wf_doc SET schedule_id = NULL WHERE schedule_id IS NOT NULL'))
         # 2026-11-06：推送内容（收件人看到的那句话）单独一列
         db.execute(text('ALTER TABLE wf_notify ADD COLUMN IF NOT EXISTS message text'))
+        # 2026-11-06：前端「我的通知」需要已读标记与按人检索
+        db.execute(text('ALTER TABLE wf_notify ADD COLUMN IF NOT EXISTS read_at timestamptz'))
+        db.execute(text('CREATE INDEX IF NOT EXISTS idx_wf_notify_mine '
+                        'ON wf_notify (recipient_login, read_at, sent_at DESC)'))
         for k, (v, note) in DEFAULT_PARAMS.items():
             if db.get(Param, k) is None:
                 db.add(Param(key=k, value=v, note=note))
