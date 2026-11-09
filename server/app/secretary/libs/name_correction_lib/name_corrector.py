@@ -548,9 +548,11 @@ _ABSORB_TAILS = tuple(sorted(set(UNIT_KINDS) | set(AREA_SUFFIX) | {"公司", "�
                             key=len, reverse=True))
 
 # 单字尾词（「广水所」的「所」）风险高：「广水所有台区」里的「所」是「所有」的一半。
-# 后接这些字时不吸收。
+# 后接这些字时不吸收。★ 只留真能和「所」成词的字（所有/所以/所在/所属/所谓/所长/所内…），
+# 「的、了、是、都、也、还、把、将、会、均」是纯功能字 —— 把它们算进来会让
+# 「广水所的线损」既不认级别也不吸收后缀，输出「广水供电所所的线损」（2026-11-09 实测）。
 _SINGLE_CHAR_TAILS = frozenset({"所"})
-_TAIL_BLOCK_NEXT = frozenset("有以在属述长谓需及对上下级内外的了均都也还是把将会")
+_TAIL_BLOCK_NEXT = frozenset("有以在属述需及对长谓上下级内外")
 
 
 def _absorb_tail(text: str, e: int, std: str) -> int:
@@ -690,7 +692,11 @@ def _is_glued_homophone(text: str, s: int, e: int, frag: str, hit) -> bool:
     """
     if getattr(hit, 'how', '') == '已是标准名':
         return False
-    if any(a == b for a, b in zip(_area_core(frag), _area_core(hit.std or ''))):
+    # 单位名比「核心地名」而不是整名：「广水」与「国网广水市供电公司」整名一个字都不重合，
+    # 拿整名比会把它判成噪声；而核心地名是「广水市」，一眼能对上。
+    std = hit.std or ''
+    ref = _unit_core(std) if getattr(hit, 'kind', '') in UNIT_KINDS else _area_core(std)
+    if any(a == b for a, b in zip(_area_core(frag), ref)):
         return False
     before = text[s - 1] if s > 0 else ''
     after = text[e] if e < len(text) else ''
@@ -1573,6 +1579,8 @@ class Corrector:
           1. **裸地名优先单位名**。用户只丢一个地名时，默认他问的是供电所
              （「凉水」→ 两水供电所，而不是某个台区）。
           2. **片段自带类型后缀时优先同类型**（「公家棚台区」→ 名字里也带「台区」的）。
+          2b. **裸地名是县公司地名的开头时，取县公司**（「广水」→ 国网广水市供电公司，
+              不是它下属的广水供电所）。
           3. 编号必须一致（说了「3 号」就不会给「2#」）。
           4. 再按「汉字写法接近度 → 核心词覆盖度 → 名字长度 → 字典序」，
              保证同样输入永远同样输出。
@@ -1829,6 +1837,10 @@ class Corrector:
         exact_hit = False
 
         # ① 单位名 —— 用「核心地名」前缀匹配（厉山 → 厉山供电所、凉水 → 两水供电所）
+        # unit_spans 按「核心地名的每个前缀」各存一份，同一个单位会出现多次
+        # （「广水市」的前缀「广水」「广水市」都命中）→ 候选表里重复两三行，
+        # alts 报给用户的「其他候选」也重名。这里去重。
+        seen_unit: set[str] = set()
         for code, names in self.unit_spans.items():
             if not code.startswith(qc):
                 continue
@@ -1836,6 +1848,9 @@ class Corrector:
             if cov < RESOLVE_PREFIX_MIN_COV:
                 continue
             for nm in names:
+                if nm in seen_unit:
+                    continue
+                seen_unit.add(nm)
                 uc = _unit_core(nm)
                 if uc.startswith(core):
                     exact_hit = True
@@ -1958,6 +1973,15 @@ class Corrector:
 
         q_has_digit = bool(qd)
 
+        # ★ 用户说的裸地名，若正好是某县公司核心地名的开头、且比它短
+        #   （广水 ⊂ 广水市），那说的是县公司那一级 —— 下面 rank 里给它让位。
+        #   不加这一条：单位之间只比覆盖度和名字长度，两个都奖励更短的名字，
+        #   而「广水供电所」的核心地名就是「广水」（覆盖 100%）、还比公司短，
+        #   于是问全县的事永远被查成单个所（2026-11-09 实测）。
+        #   判据只用库里的名字，不写死县名；全库 51 个单位里只有广水这一对成立。
+        county = any(len(_unit_core(nm)) > len(core) and _unit_core(nm).startswith(core)
+                     for nm, kd, *_ in cands if kd == "供电公司")
+
         def same_chars(nm: str) -> int:
             """候选核心与用户所说地名的汉字重合数。
 
@@ -1972,10 +1996,11 @@ class Corrector:
             nm, kind, cov, _how, name_has_suffix = c
             r_unit = 0 if (not has_suffix and kind in UNIT_KINDS) else 1
             r_suf = 0 if (has_suffix and name_has_suffix) else 1
+            r_lvl = (0 if kind == "供电公司" else 1) if county else 0
             # 用户点明了编号（「龚家棚3号」）时，优先带中台内部编码的条目：
             # 有 4 位以上编号说明它在中台正式登记过，比只有简称的更可能是用户指的那个。
             r_code = 0 if (q_has_digit and LONG_CODE.search(nm)) else 1
-            return (r_unit, r_suf, r_code, -same_chars(nm), -cov, len(nm), nm)
+            return (r_unit, r_suf, r_lvl, r_code, -same_chars(nm), -cov, len(nm), nm)
 
         cands.sort(key=rank)
         top = cands[0]
