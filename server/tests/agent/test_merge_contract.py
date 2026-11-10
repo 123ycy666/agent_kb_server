@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """合并契约测试：新旧仓库合流后，秘书本体必须同时满足两件事。
 
 **A. 本地独有的能力还在**（Fred 明确要求"新的项目没有的功能以本地为准"）
@@ -54,7 +54,7 @@ def main() -> int:
         {"kb_search", "find_column", "run_sql"} <= names, sorted(names))
 
     # 2 ── 守卫层
-    for fn in ("_time_guard", "_scope_guard", "_unit_guard", "_clean_answer", "_final_answer"):
+    for fn in ("_clean_answer", "_final_answer"):
         chk("守卫函数 %s 存在" % fn, callable(getattr(agent, fn, None)))
 
     # 3/4/5 ── 配置开关

@@ -362,7 +362,9 @@ def check_sql(sql) -> dict:
 # ── 时间维度的事实（唯一来源）────────────────────────────────────
 # 用途：空集判定要知道"这张表最新到哪个月"、证据包要知道"期间列是哪一列"。
 # 只在这里算一次，其它地方读缓存（60 秒），不要各自再写一遍。
-_PERIOD_NAMES = ('period_key', 'stat_month', 'month', 'period_month', 'data_month')
+# 期间列**只认字典里的说明**（中文名或字段说明里写了"月份/期间/年月/统计月"）——
+# 不再靠英文列名白名单猜（那是把他们的命名约定写死在我们代码里）。
+_PERIOD_HINTS = ('月份', '期间', '年月', '统计月')
 _PERIOD_CACHE: dict = {}
 _PERIOD_TTL = 60.0
 
@@ -370,8 +372,9 @@ _PERIOD_TTL = 60.0
 def period_facts(table) -> dict:
     """该表的时间列与最新可用期间：{'col': 'stat_month', 'max': '202610'}。
 
-    判断顺序：① 字典里登记过的列名（_PERIOD_NAMES）；② 字典里中文名含「月/期间/日期」的列；
-    ③ 猜不到返回 {'col':'', 'max':''}（调用方按"不校验期间"处理，不许自己另猜一套）。
+    期间列**只看字典说明**：中文名里有「月份/期间/年月/统计月」的优先，其次看字段说明。
+    说明里没写就返回 {'col':'','max':''}，调用方按"不校验期间"处理 —— 不许自己另猜一套，
+    也不许把他们的列名写死在代码里。
     """
     name = table_name(table)
     now = time.time()
@@ -382,14 +385,13 @@ def period_facts(table) -> dict:
     try:
         cols = table_cols(name) or {}
         col = ''
-        for c in _PERIOD_NAMES:
-            if c in cols:
-                col = c
+        for c in cols.values():                     # 先看中文名
+            if any(h in str(c.get('column_cn_name') or '') for h in _PERIOD_HINTS):
+                col = c['column_name']
                 break
-        if not col:
+        if not col:                                 # 再看字段说明
             for c in cols.values():
-                cn = str(c.get('column_cn_name') or '')
-                if '月份' in cn or '期间' in cn or '年月' in cn:
+                if any(h in str(c.get('business_desc') or '') for h in _PERIOD_HINTS):
                     col = c['column_name']
                     break
         if col:

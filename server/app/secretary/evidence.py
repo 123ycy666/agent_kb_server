@@ -21,7 +21,6 @@ _NUM = re.compile(r'^-?\d+(?:\.\d+)?$')
 _PERIOD = re.compile(r'20\d{4}')
 _UNIT = re.compile(r'单位[:：]?\s*([^\s，,。；;（()]+)')
 _DIR = re.compile(r'(越大越好|越小越好|越高越好|越低越好|正指标|逆指标|宜大|宜小)')
-_YOY = re.compile(r'^(.*)_yoy_rate$')
 _TBL = re.compile(r'\b(?:from|join)\s+([A-Za-z0-9_]+)', re.I)
 
 
@@ -71,8 +70,9 @@ def _one_result(res):
             if [r.get(c) for r in rows if r.get(c) is not None]
             and all(_NUM.match(str(r.get(c))) for r in rows if r.get(c) is not None)]
     all_zero = bool(nums) and all(float(r.get(c) or 0) == 0 for c in nums for r in rows)
-    out = ['%s 共 %d 行%s' % (head, len(rows),
-                              '。**数值全为 0/NULL，属占位行，不能当结论**' if all_zero else '')]
+    # 只陈述事实（数值全为 0/空），不下"这是占位行"之类的业务结论。
+    zeros = '。本结果所有数值均为 0 或空' if all_zero else ''
+    out = ['%s 共 %d 行%s' % (head, len(rows), zeros)]
     if len(rows) == 1:
         r0 = rows[0]
         for c in nums:
@@ -98,11 +98,6 @@ def _one_result(res):
         out.append('  库内已算：' + '；'.join(
             '%s 合计%s / 最大%s / 最小%s' % (c, _fmt(d.get('sum')), _fmt(d.get('max')), _fmt(d.get('min')))
             for c, d in list(sm.items())[:6]))
-    yoys = [(c, rows[0].get(c)) for c in cols if _YOY.match(c) and rows[0].get(c) is not None]
-    if yoys:
-        # 只原样给值，不解释正负含义 —— 那是字段说明该写清楚的（业务语义不进代码）。
-        out.append('  同比变化率：' + '，'.join(
-            '%s=%s%%' % (k[:-9], _fmt(v)) for k, v in yoys[:8]))
     return '\n'.join(out)
 
 
@@ -123,5 +118,5 @@ def text(trace):
     return ('【权威证据】（下面每个数都是本轮数据库查询的原始结果，系统直接摊出，未经转述。\n'
             '规则：① 正文只用这里的数；② 需要两次结果相减/相除做差值或占比时，'
             '这里没现成的就写「需另查」，不要自己算；'
-            '③ 查到 0 行或占位行时如实写"该期间无数据/未就绪"，不要写成"没有数据"。\n\n'
+            '③ 查到 0 行时，照结果里给的判定如实写，不要自己加工成"没有数据"或补一个 0。\n\n'
             + '\n\n'.join(parts) + '\n）')

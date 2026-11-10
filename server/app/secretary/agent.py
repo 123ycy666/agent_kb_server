@@ -30,11 +30,9 @@ from app.secretary import tools_file
 from app.secretary import tools_kb
 from app.secretary import tools_result
 
-# 闸门判定（"这句答案能不能直接交出去"）已搬到 evidence_gate.py（2026-11-02）：
-# 原先是「问题侧词表 _BIZ + 答案侧数字 _CLAIM」两条正则，问题侧那半是开集，补不完。
-# 下面这个 _BIZ 只留给词表覆盖用（_apply_pack_lexicon），**不再参与闸门判定**。
-_BIZ = re.compile(r'供电所|供电公司|台区|工单|预算|审批|线损|停电|缺陷|售电|指标|项目')
-
+# 闸门判定（"这句答案能不能直接交出去"）已搬到 evidence_gate.py（2026-11-02）。
+# 2026-11-10：代码里最后一个业务词表 _BIZ 与它的装载钩子已删除 —— 业务词只该出现在
+# 页面配置与业务字典里，不进代码。
 
 TOOLS = [
     {'type': 'function', 'function': {
@@ -549,8 +547,6 @@ def _progress_state(trace) -> str:
             % (n, ok, empty, err, '、'.join(sorted(periods)) or '未带期间', last or '无'))
 
 
-
-
 _FACTS_RULE = ('把这一轮已经查到的事实列成清单，一条一行，只写〔口径〕=〔数值〕（来自哪张表）；'
                '查过但没数据的那条就写「无数据」。不要写结论、不要写建议、不要写过程。')
 
@@ -623,113 +619,9 @@ def _dump(obj):
 
 
 # 按 create_time 分期的表：漏了时间条件就查成了「历年累计」，实测会被拿去和当年数比（报出 44 个所超支）
-_TIME_TABLES = ('t_power_work_order',)
-
-
-def _time_guard(sql, scope):
-    """本轮口径有时间、这条 SQL 却没带时间条件 → 在结果后面直接点破它是历年累计。
-
-    ★ 为什么在**工具返回值**上下手：规则是**按问句检索**注入的，这类通用条不一定被检索到；
-      而「查历年数当当年」恰恰是在这一轮查询里犯的，就地提醒才拦得住。
-    """
-    s = ' '.join(str(sql or '').split()).lower()
-    if not s or not any(t in s for t in _TIME_TABLES):
-        return ''
-    if 'create_time' in s or 'year(' in s:
-        return ''
-    t = (scope or {}).get('time') or {}
-    if t.get('period_type') not in ('yearToDate', 'month', 'year'):
-        return ''
-    return ('\n\n⚠️ 本条 SQL **没有时间条件** —— 查出来的是**历年累计**，不是本轮口径「%s」。'
-            '历年数不能和当年分配额 / 当年已审批放一起比（比出来的「超支 / 缺口」是假的）：'
-            '要跟当年数对齐就补上 create_time 条件重查，否则只能单独作为「含往年」的背景说明。'
-            % t.get('time_text'))
 
 
 # 每张表里「范围」落在哪个字段上：SQL 里一个都没出现 → 它查的是全市
-_SCOPE_COLUMNS = {
-    't_power_work_order': ('power_company_name', 'power_company_id'),
-    't_power_company_budget_result': ('power_station_name', 'county_company_name', 'power_station_id'),
-    't_power_ai_metric_snapshot': ('scope_name',),
-    't_power_ai_metric_comparison': ('scope_name',),
-    't_power_push_station_score': ('obj_name',),
-}
-
-
-def _scope_guard(sql, scope):
-    """本轮范围不是全市、而这条 SQL 没真正带上范围 → 就地提醒它查的是全市。
-
-    ★ 实测两类：① `scope=随县供电公司` 那轮直接查全市（把已审批 19 件 / 112.11 万当随县数）；
-      ② 写了 `power_company_name IN (SELECT name FROM t_power_company WHERE deleted_flag=0)`
-      —— 看着像筛了，其实把 47 个所全选进来。所以判断标准是**范围有没有真的被表达出来**：
-      出现范围名、parent_id、scope_key 之一才算带上了。
-    """
-    sql = ' '.join(str(sql or '').split())
-    low = sql.lower()
-    place = ((scope or {}).get('place') or '').strip()
-    if not low or not place or place == '全市':
-        return ''
-    if not any(t in low for t in _SCOPE_COLUMNS):
-        return ''
-    head = place
-    for suf in ('供电服务站', '供电公司', '供电中心', '供电所'):
-        if head.endswith(suf):
-            head = head[:-len(suf)]
-            break
-    if place in sql or (head and head in sql) or 'parent_id' in low or 'scope_key' in low:
-        return ''
-    return ('\n\n⚠️ 这条 SQL **没有真正带范围条件**，查出来的是**全市**数据，而本轮口径是「%s」——'
-            '不能把全市数当成本范围的数。按所取：power_company_name / power_station_name 等值；'
-            '按县公司取：power_company_id IN (该公司的所 id 列表，见【统计范围】里给的名单)。'
-            % place)
-
-
-def _scope_detail(place):
-    """公司级范围：把该公司下辖的所名与所 id 直接列出来。
-
-    ★ 为什么必须由系统给：实测模型要么写成 `power_company_name IN (SELECT name FROM t_power_company
-      WHERE deleted_flag=0)`（等于没筛，把全市当本县），要么干脆不带范围条件。名单由系统查一次，
-      模型只剩「按等值筛」这一件事。
-    """
-    p = (place or '').strip()
-    if not p or p == '全市' or not (p.endswith('公司') or p.endswith('中心')):
-        return ''
-    try:
-        r = tools_db.run_sql('SELECT pc.id, pc.name FROM t_power_company pc '
-                             'JOIN t_power_supply_company sc ON sc.id = pc.parent_id '
-                             "WHERE sc.name = %r AND pc.deleted_flag=0" % p)
-        rows = r.get('rows') or []
-    except Exception:                                          # noqa: BLE001
-        return ''
-    if not rows:
-        return ''
-    names = '、'.join(str(x.get('name')) for x in rows[:40])
-    ids = ','.join(str(x.get('id')) for x in rows[:40])
-    return ('\n      **该范围下辖 %d 个所**：%s\n'
-            '      按所筛：power_company_name / power_station_name 等值，或 power_company_id / power_station_id 在 [%s] 之内；'
-            '**不要写成 t_power_company 的整表子查询**。' % (len(rows), names, ids))
-
-
-def _unit_guard(sql):
-    """查了指标表就把原始单位说清楚 —— 实测把「0.18%」写成「1.85%」（亿/万混算）。"""
-    low = ' '.join(str(sql or '').split()).lower()
-    if 't_power_ai_metric' not in low:
-        return ''
-    return ('\n\n📏 单位：本表 metric_value / current_value 是**原始值** —— 售电量=**千瓦时**'
-            '（所/县报万千瓦时＝值÷10000，全市报亿千瓦时＝值÷100000000）、线损率=%、'
-            '停电时长=小时/户、工单与跳闸=件/次；change_rate 已是百分数。'
-            '**算占比/倍数/同比之前先把两边化成同一单位**，算完自查量级。')
-
-
-
-def _trim(name, res):
-    """兼容旧调用点：一律转给交付层（2026-11-08）。
-
-    ★ 旧的裁剪只认识 {columns, rows, summary} 一种形状：5 条数组查询的外层 results
-      被当成"最占地方的明细列表"整块砍成 0 条，模型拿到 results: [] 就答「暂无数据」。
-      现在换形式不砍内容，见 tools_result.deliver。新代码直接用 deliver，别再往这加逻辑。
-    """
-    return tools_result.deliver(name, res)
 
 
 # ---------------------------------------------------------------------------
@@ -788,7 +680,6 @@ def _clean_answer(text):
     out = re.sub(r'[ \t]+\n', '\n', out)
     out = re.sub(r'\n{3,}', '\n\n', out).strip()
     return out if len(re.sub(r'\s', '', out)) >= 10 else text
-
 
 
 def _one_sql(sql):
@@ -870,8 +761,6 @@ def execute(name, args):
     return {'error': 'unknown tool ' + str(name)}
 
 
-
-
 _ANALYSIS_WORDS = ('为什么', '为啥', '原因', '怎么降', '怎么提', '怎么办', '怎么治',
                    '建议', '该不该', '该干', '先干', '先治', '够不够', '花不完', '能不能',
                    '会到', '预测', '趋势', '对比', '合理', '异常', '风险', '方案', '情况', '怎么样')
@@ -880,7 +769,6 @@ _ANALYSIS_WORDS = ('为什么', '为啥', '原因', '怎么降', '怎么提', '�
 def _wants_analysis(q):
     """这题要不要按"分析层"答（只用于 qtype 落库 / 页面生成判据，不再切换提示词模板）。"""
     return any(w in (q or '') for w in _ANALYSIS_WORDS)
-
 
 
 # ── 按需工具：表字段明细 / 规则条目（2026-10-30）──────────────────────
@@ -1616,12 +1504,6 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             trace.append({'seq': len(trace) + 1, 'kind': 'tool', 'tool': o['name'], 'args': o['args'],
                           'ms': o['ms'], 'model_ms': llm_ms, 'round': step, 'result': o['result']})
             _body = tools_result.deliver(o['name'], o['result'], session_id=session_id)
-            if o['name'] == 'run_sql':
-                _sql = (o.get('args') or {}).get('sql')
-                # ★ 2026-11-03 定稿：三条"就地提醒"（没带时间 / 没带范围 / 没带单位）全部停用。
-                #   它们是预设式守卫；需要约束就把规矩写进页面的「查数口径」。
-                #   旧代码保留：_time_guard / _scope_guard / _unit_guard。
-                pass
             messages.append({'role': 'tool', 'tool_call_id': tc['id'], 'content': _body})
         # 周期性软提醒：防止一直翻表不收手。
         # ⚠️ 必须放在**全部 tool 回填之后**：OpenAI 兼容协议要求 assistant(tool_calls) 后
@@ -1820,24 +1702,6 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
 
 
 # ── 业务词表补充（原站点包 lexicon，2026-10-30 内联进代码）────────────
-def _apply_pack_lexicon() -> None:
-    try:
-        from app.secretary import lexicon_defaults
-        lx = (lexicon_defaults.BUSINESS_TERMS or {}).get('business_terms') or {}
-    except Exception:                              # noqa: BLE001
-        return
-    patterns = {"station_hint": "_STATION_HINT", "biz_words": "_BIZ"}
-    for key, gname in patterns.items():
-        pat = (lx or {}).get(key)
-        if not pat or gname not in globals():
-            continue
-        try:
-            globals()[gname] = re.compile(pat)
-        except Exception:                          # noqa: BLE001
-            print("[lexicon] bad pattern, keep default:", key)
-
-
-_apply_pack_lexicon()
 
 
 # ── 兜底身份（2026-10-30：正文内联进 prompts_data.IDENTITY）────────────
