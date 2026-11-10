@@ -21,6 +21,7 @@ import {
 } from 'antd'
 import { EditOutlined, LockOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons'
 import { http, getToken } from '../api/client'
+import CaliberInline from '../components/CaliberInline'
 
 const { Title, Text } = Typography
 
@@ -643,6 +644,14 @@ export default function Prompts() {
         )}
         {!current ? null : !current.editable ? null : slot ? (
           <>
+            {slot === 'fetch' && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="这段文字既是给模型看的口径，也是机器执行的口径；改完保存即生效"
+              />
+            )}
             {showImport && (
               <Card size="small" style={{ marginBottom: 12 }}>
                 <Text type="secondary">
@@ -759,6 +768,17 @@ export default function Prompts() {
                     <Button size="small" onClick={() => restoreSection(s)}>恢复</Button>
                   </Space>
                 ))}
+              </Card>
+            )}
+
+            {slot === 'fetch' && (
+              <Card size="small" style={{ marginTop: 16 }}>
+                <CaliberInline
+                  text={sections
+                    .map((s) => s.body || '')
+                    .filter((b) => b.trim())
+                    .join('\n\n')}
+                />
               </Card>
             )}
           </>

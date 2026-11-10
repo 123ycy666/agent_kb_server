@@ -15,7 +15,6 @@ import {
   ApartmentOutlined,
   AuditOutlined,
   BookOutlined,
-  CalculatorOutlined,
   ClusterOutlined,
   DashboardOutlined,
   DeploymentUnitOutlined,
@@ -72,7 +71,6 @@ export default function MainLayout() {
     { key: '/tags', icon: <TagsOutlined />, label: <Link to="/tags">标签管理</Link> },
     { key: '/tasks', icon: <DeploymentUnitOutlined />, label: <Link to="/tasks">任务中心</Link> },
     { key: '/workflows', icon: <ApartmentOutlined />, label: <Link to="/workflows">工作流</Link> },
-    { key: '/caliber', icon: <CalculatorOutlined />, label: <Link to="/caliber">指标契约</Link> },
     { type: 'divider' as const },
     {
       key: '/permissions',
