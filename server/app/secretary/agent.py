@@ -632,6 +632,23 @@ def _verify_or_rewrite(msgs, model, answer, ev, trace=None) -> str:
     return ans2
 
 
+def _caliber_echo() -> str:
+    """每一步执行前，把查数口径原文再贴一次（2026-11-10）。
+
+    为什么放这里而不是只放 system：system 那份在长对话里会被稀释，模型后面几轮
+    实际上是在按上一轮的报错反馈写 SQL（府河所那次 seq8 全错 → seq9 靠报错里的
+    字段清单改 → seq10 才写对）。贴到当前轮才拦得住这条路。
+    """
+    try:
+        from app.secretary import prompt_material as pm
+        body = (pm.text('fetch') or '').strip()
+    except Exception:                              # noqa: BLE001 - 口径读不到就不贴
+        return ''
+    if not body:
+        return ''
+    return ('【查数口径（这一步按它写；口径里没有的表和字段不要编，编了会被拦）】\n' + body)
+
+
 def _write_answer(messages, model, user_content, trace=None, need_facts=True,
                   slots=('answer',)) -> dict:
     """第 8 步：正文只按**证据包**写（代码摊出的原始结果），不再让模型转述事实清单。
@@ -1429,8 +1446,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #      查数口径与查数手只在 use_db 时给；改库的手还没接（P2）。
     _want = []
     if _route['use_db']:
-        _want += ['kb_search', 'list_tables', 'describe_table', 'find_column',
-                  'list_metrics', 'metric_query', 'run_sql',
+        _want += ['kb_search', 'list_metrics', 'metric_query', 'run_sql',
                   'read_result', 'finish']
     if _route['use_file']:
         _want += ['kb_search', 'kb_read', 'read_file', 'run_code']
@@ -1501,11 +1517,14 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                           'content': '连续 %d 轮无新数据，强制收尾' % noprogress})
             break
         t0 = time.time()
+        # ★ 2026-11-10：每一步都把查数口径贴到当前轮（只进这一次调用，不累积进 messages）。
+        _echo = _caliber_echo() if (tools and _route['use_db']) else ''
+        _msgs = list(messages) + [{'role': 'user', 'content': _echo}] if _echo else messages
         # 第 7 步 · 干活循环。工具按分流子集给；没给工具就直接要正文。
         # 查数轮关思考：实测同一轮开思考会写 240~3400 字过程散文（一轮 10~17s）。
         # ★ 2026-11-08：原来按动作写死额度（查数 600 / 出文件 4000）——600 那档把正文
         #   截在半句、工具调用发不出来，答案是一段"查数计划"。现在不写死（config.output_tokens）。
-        resp = _chat(messages, model, think=False,
+        resp = _chat((_msgs if _echo else messages), model, think=False,
                      use_tools=bool(tools), tools=tools or None)
         llm_ms = int((time.time() - t0) * 1000)
         msg = resp['choices'][0]['message']
