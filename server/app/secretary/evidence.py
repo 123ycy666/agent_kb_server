@@ -11,7 +11,12 @@
 机制叫 evidence substitution；有效修法是**内联权威输出并指明哪份是权威**，
 而"在提示词里要求正确抄写"无效。
 
-所以这里只做一件事：把 trace 里的真结果摊平给正文那次调用。**数值一律由代码填。**
+★ 2026-11-10 改两处（府河所那份日志的教训）：
+  ① 删掉「相减/相除就写需另查」那条 —— 口径里写着"这个除这个"，两条对撞，
+     模型服从了证据包，执行率答成「需另查」。派生值现在由契约（caliber）算好给。
+  ② 删掉「多行只挑最近 12 行 + 其余略」——"下降最多/上升最高"要扫全期，
+     截断后模型只能答「需另查」。现在整份摊出，并**由代码给出每列的最大/最小行**，
+     极值不再靠模型在几十行里挑。
 """
 from __future__ import annotations
 
@@ -23,14 +28,11 @@ _UNIT = re.compile(r'单位[:：]?\s*([^\s，,。；;（()]+)')
 _DIR = re.compile(r'(越大越好|越小越好|越高越好|越低越好|正指标|逆指标|宜大|宜小)')
 _TBL = re.compile(r'\b(?:from|join)\s+([A-Za-z0-9_]+)', re.I)
 
+MAX_ROWS = 60          # 超过就头尾各给一半，并写明总行数（不切在行中间）
+
 
 def _meta(table, col):
-    """(中文名, 单位, 方向) —— 全从字典/覆盖层取；取不到就空，宁可空着也不让模型猜。
-
-    方向（越大好/越小好）没有任何结构化字段，只能从字段说明里读：
-    字典 `ai_column_metadata.business_desc` 或页面「数据表」覆盖层里写「越大越好 / 越小越好」即可，
-    代码不改。写了就带上，没写就空 —— 不写死任何指标的好恶。
-    """
+    """(中文名, 单位, 方向) —— 全从字典/覆盖层取；取不到就空，宁可空着也不让模型猜。"""
     try:
         from app.secretary import semantic
         c = (semantic.table_cols(table) or {}).get(col) or {}
@@ -49,6 +51,27 @@ def _fmt(v):
         return ('%.4f' % float(v)).rstrip('0').rstrip('.')
     except (TypeError, ValueError):
         return str(v)
+
+
+def _label(row, cols, nums):
+    return ' '.join(str(row[c]) for c in cols if c not in nums)[:40] or '(行)'
+
+
+def _extremes(rows, cols, nums):
+    """每列的最大/最小各在哪一行 —— 极值由代码取，模型不用扫全表。"""
+    out = []
+    for c in nums:
+        vals = [(float(r[c]), r) for r in rows if r.get(c) is not None and _NUM.match(str(r[c]))]
+        if len(vals) < 2:
+            continue
+        hi = max(vals, key=lambda x: x[0])
+        lo = min(vals, key=lambda x: x[0])
+        if hi[0] == lo[0]:
+            continue
+        out.append('  %s：最大 %s（%s）；最小 %s（%s）'
+                   % (c, _fmt(hi[0]), _label(hi[1], cols, nums),
+                      _fmt(lo[0]), _label(lo[1], cols, nums)))
+    return out
 
 
 def _one_result(res):
@@ -70,7 +93,6 @@ def _one_result(res):
             if [r.get(c) for r in rows if r.get(c) is not None]
             and all(_NUM.match(str(r.get(c))) for r in rows if r.get(c) is not None)]
     all_zero = bool(nums) and all(float(r.get(c) or 0) == 0 for c in nums for r in rows)
-    # 只陈述事实（数值全为 0/空），不下"这是占位行"之类的业务结论。
     zeros = '。本结果所有数值均为 0 或空' if all_zero else ''
     out = ['%s 共 %d 行%s' % (head, len(rows), zeros)]
     if len(rows) == 1:
@@ -80,19 +102,23 @@ def _one_result(res):
             out.append('  %s%s = %s%s%s' % (cn or c, ('(%s)' % c) if cn else '', _fmt(r0[c]), u,
                                             ('（%s）' % dr) if dr else ''))
     else:
-        # 多行：按期间倒序挑最近的 12 行（问"多少/最新"时，答案通常就在最近几行；
-        # 原来按 SQL 返回顺序截前 12 行，实测把 202611 那行截掉了，模型只能答"需另查"）
         prow = next((c for c in cols
                      if all(_PERIOD.match(str(r.get(c))) for r in rows if r.get(c) is not None)
                      and any(r.get(c) for r in rows)), None)
         ordered = sorted(rows, key=lambda r: str(r.get(prow)), reverse=True) if prow else rows
-        for r in ordered[:12]:
-            label = ' '.join(str(r[c]) for c in cols if c not in nums)[:40] or '(行)'
+        show = ordered
+        cut = ''
+        if len(ordered) > MAX_ROWS:
+            half = MAX_ROWS // 2
+            show = ordered[:half] + ordered[-half:]
+            cut = '（共 %d 行，这里给最近 %d 行与最早 %d 行；完整明细在工具结果里）' % (
+                len(ordered), half, half)
+        if cut:
+            out[0] += cut
+        for r in show:
             kv = '，'.join('%s=%s' % (c, _fmt(r[c])) for c in nums if r.get(c) is not None)
-            out.append('  %s → %s' % (label, kv))
-        if len(rows) > 12:
-            out.append('  …其余 %d 行略（上面已按期间倒序给了最近 12 行；完整明细在工具结果里）'
-                       % (len(rows) - 12))
+            out.append('  %s → %s' % (_label(r, cols, nums), kv))
+        out.extend(_extremes(rows, cols, nums))
     sm = res.get('summary') or {}
     if sm:
         out.append('  库内已算：' + '；'.join(
@@ -116,7 +142,8 @@ def text(trace):
     if not parts:
         return ''
     return ('【权威证据】（下面每个数都是本轮数据库查询的原始结果，系统直接摊出，未经转述。\n'
-            '规则：① 正文只用这里的数；② 需要两次结果相减/相除做差值或占比时，'
-            '这里没现成的就写「需另查」，不要自己算；'
-            '③ 查到 0 行时，照结果里给的判定如实写，不要自己加工成"没有数据"或补一个 0。\n\n'
+            '规则：① 正文只用这里的数；这一份里没有的数不许写（写了会被交卷对账拦下）。'
+            '② 需要差值或占比而这里没有现成的，写「需另查」并说明缺哪个数，不要自己算。'
+            '③ 查到 0 行时，照结果里给的判定如实写，不要自己加工成"没有数据"或补一个 0。'
+            '④ 极值那几行是代码算出来的，直接引用，不要自己在明细里比较。\n\n'
             + '\n\n'.join(parts) + '\n）')

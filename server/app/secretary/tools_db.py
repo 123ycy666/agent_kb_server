@@ -148,6 +148,12 @@ def run_sql(sql):
                          + chk['hint'] + '。不确定表名就先调 list_tables / find_column，别猜。',
                 '判定': 'ERROR_DICT',
                 'sql': s, 'columns': [], 'rows': [], 'row_count': 0}
+    from app.secretary import caliber
+    ck = caliber.check_sql(s)                # 闸1：命中契约表就必须带契约声明的必需过滤
+    if not ck.get('ok'):
+        return {'error': ck['hint'], '判定': ck.get('code') or 'ERROR_CALIBER',
+                'missing': ck.get('missing') or [], 'sql': s,
+                'columns': [], 'rows': [], 'row_count': 0}
     try:
         r = _exec(s)
     except Exception as e:
@@ -298,3 +304,20 @@ def describe_table(table):
     except Exception as e:
         r['sample_error'] = str(e)[:120]
     return r
+
+
+# ── 指标契约的手（2026-11-10）────────────────────────────────────────
+# 模型只能报代号，算式与必需过滤由契约（caliber）摊开；派生值也由契约算，
+# 模型没有算式入口 —— 这比在提示词里劝它「自己算」硬。
+def metric_query(code, year=None, scope_id=None):
+    from app.secretary import caliber
+    return caliber.query(code, year=year, scope_id=scope_id)
+
+
+def list_metrics():
+    from app.secretary import caliber
+    rows = [{'code': m['code'], 'label': m['label'], 'unit': m['unit'],
+             'type': '派生' if (m['expr'] or '').strip() else '取数',
+             'expr': (m['expr'] or '').strip()} for m in caliber.metrics()]
+    return {'columns': ['code', 'label', 'unit', 'type', 'expr'],
+            'rows': rows, 'row_count': len(rows)}

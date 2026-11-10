@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     audit,
     auth,
+    caliber,
     conflicts,
     documents,
     kb,
@@ -35,5 +36,6 @@ api_router.include_router(roles.router)
 api_router.include_router(models.router)
 api_router.include_router(system.router)
 api_router.include_router(prompts.router)
+api_router.include_router(caliber.router)
 
 __all__ = ["api_router"]

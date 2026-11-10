@@ -101,6 +101,25 @@ TOOLS = [
             'topic': {'type': 'string',
                       'description': '主题名，取自 system 里的「规则目录」，如「八、审批停留」'}},
             'required': ['topic']}}},
+    # ★ 2026-11-10 指标契约：口径（必需过滤、算式）全在数据里，模型只报代号。
+    #   为什么做成工具而不是写进提示词：写在提示词里既能被绕开、又会和别的段落对撞
+    #   （府河所那次"这个除这个"就是这样被证据包的「不要自己算」压掉的）。
+    {'type': 'function', 'function': {
+        'name': 'list_metrics',
+        'description': '列出系统里已定义的指标代号（预算执行率、工单数量这类）。'
+                       '**凡是要报「预算/工单/六项指标」的数，先调它看有没有对应代号**；'
+                       '有就一律用 metric_query 取，不要自己写 SQL 拼口径。',
+        'parameters': {'type': 'object', 'properties': {}, 'required': []}}},
+    {'type': 'function', 'function': {
+        'name': 'metric_query',
+        'description': '按指标代号取数：系统按口径把过滤条件拼全、把派生值（如预算执行率）算好。'
+                       '只传代号、年份、范围 id，不要传 SQL、不要自己算。'
+                       '代号来自 list_metrics；没有对应代号时才退回 run_sql。',
+        'parameters': {'type': 'object', 'properties': {
+            'code': {'type': 'string', 'description': '指标代号，如 budget_exec_rate'},
+            'year': {'type': 'string', 'description': '年份，如 2026'},
+            'scope_id': {'type': 'integer', 'description': '范围 id：供电所 id 或县公司 id'}},
+            'required': ['code']}}},
     # ★ 收尾信号（2026-10-09 加）：查数轮强制 tool_choice=required，模型不能写散文，
     #   于是用一个空工具表示"到此为止"。数据查够就调它，之后由系统另行要一次正文。
     {'type': 'function', 'function': {
@@ -582,6 +601,37 @@ def _answer_system(messages, slots=('answer',)) -> str:
         return sys_txt
 
 
+def _verify_or_rewrite(msgs, model, answer, ev, trace=None) -> str:
+    """闸3（2026-11-10）：正文里的数必须能在证据包里找到；对不上就带着差异重写一次。
+
+    为什么要有：证据包只保证"能看到的数是对的"，管不住模型写一个"没看到的数"
+    （府河所那次 63 件、1197846.27 元就是这么来的）。这一步机器可判，不靠模型自觉。
+    """
+    try:
+        from app.secretary import caliber
+        v = caliber.verify(answer, ev)
+    except Exception as exc:                       # noqa: BLE001 - 对账坏了不阻断作答
+        print('[agent] 交卷对账失败（跳过）：%s: %s' % (type(exc).__name__, str(exc)[:100]),
+              flush=True)
+        return answer
+    if v['ok']:
+        if trace is not None:
+            trace.append({'seq': len(trace) + 1, 'kind': 'verify', 'result': {'ok': True}})
+        return answer
+    bad = '、'.join(x['text'] for x in v['missing'][:8])
+    retry = list(msgs) + [
+        {'role': 'assistant', 'content': answer},
+        {'role': 'user', 'content':
+            '上面正文里这几个数在证据里找不到出处：%s。只改这几处：有出处的照抄证据里的数，'
+            '没出处的删掉或写「需另查」，其余一字不动，重出正文。' % bad}]
+    ans2 = _final_answer(retry, model, allow_rule=True, trace=trace)
+    v2 = caliber.verify(ans2, ev)
+    if trace is not None:
+        trace.append({'seq': len(trace) + 1, 'kind': 'verify',
+                      'result': {'ok': v2['ok'], 'missing': v2['missing'][:8], 'retried': True}})
+    return ans2
+
+
 def _write_answer(messages, model, user_content, trace=None, need_facts=True,
                   slots=('answer',)) -> dict:
     """第 8 步：正文只按**证据包**写（代码摊出的原始结果），不再让模型转述事实清单。
@@ -600,7 +650,8 @@ def _write_answer(messages, model, user_content, trace=None, need_facts=True,
         msgs = [{'role': 'system', 'content': _answer_system(messages, slots)},
                 {'role': 'user', 'content': user_content},
                 {'role': 'user', 'content': '【这一轮查到的事实（数字只用这些）】\n' + ev}]
-        return {'answer': _final_answer(msgs, model, allow_rule=True, trace=trace),
+        ans = _final_answer(msgs, model, allow_rule=True, trace=trace)
+        return {'answer': _verify_or_rewrite(msgs, model, ans, ev, trace=trace),
                 'facts': ev}
     facts = _collect_facts(messages, model, trace=trace) if need_facts else ''
     if facts:
@@ -717,6 +768,11 @@ def execute(name, args):
     if name == 'get_rule':
         # 2026-10-30：规则不再靠向量检索《判据规则》，改成按主题/别名精确取。
         return get_rule(args.get('topic', ''), args.get('key', ''))
+    if name == 'list_metrics':
+        return tools_db.list_metrics()
+    if name == 'metric_query':
+        return tools_db.metric_query(args.get('code', ''), args.get('year'),
+                                     args.get('scope_id'))
     if name == 'run_sql':
         # 2026-11-05：sql 允许传数组 —— 一次调用带多条互不依赖的查询，框架内部并发跑。
         # 为什么要这样：模型经常一条一条发（每轮一条），8 轮问数就是这么来的；
@@ -1373,7 +1429,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #      查数口径与查数手只在 use_db 时给；改库的手还没接（P2）。
     _want = []
     if _route['use_db']:
-        _want += ['kb_search', 'list_tables', 'describe_table', 'find_column', 'run_sql',
+        _want += ['kb_search', 'list_tables', 'describe_table', 'find_column',
+                  'list_metrics', 'metric_query', 'run_sql',
                   'read_result', 'finish']
     if _route['use_file']:
         _want += ['kb_search', 'kb_read', 'read_file', 'run_code']
@@ -1653,7 +1710,9 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         'sql_query_count': len(sql_calls),
         'kb_query_count': len(kb_calls),
         'no_db_query': len(db_calls) == 0,
-        'unverified': blocked,
+        'unverified': blocked or any(
+            t.get('kind') == 'verify' and not (t.get('result') or {}).get('ok')
+            for t in trace if isinstance(t, dict)),
         # 闸门留痕（2026-11-02）：为什么被拦 / 为什么放行、那一轮给没给工具。
         # 内网只看得到最终 JSON，没有这一段就分不清"模型不老实"和"没给工具"。
         'evidence_gate': gate_log,
