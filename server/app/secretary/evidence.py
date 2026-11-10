@@ -32,18 +32,11 @@ MAX_ROWS = 60          # 超过就头尾各给一半，并写明总行数（不�
 
 
 def _meta(table, col):
-    """(中文名, 单位, 方向) —— 全从字典/覆盖层取；取不到就空，宁可空着也不让模型猜。"""
-    try:
-        from app.secretary import semantic
-        c = (semantic.table_cols(table) or {}).get(col) or {}
-        desc = str(c.get('business_desc') or '')
-        m = _UNIT.search(desc)
-        d = _DIR.search(desc)
-        return (str(c.get('column_cn_name') or ''),
-                (m.group(1).strip('（）()') if m else ''),
-                (d.group(1) if d else ''))
-    except Exception:                              # noqa: BLE001
-        return '', '', ''
+    """(中文名, 单位, 方向) —— 2026-11-10 起不再从字典取：口径来源只有「查数口径」那页。
+
+    取不到就空着，宁可只给列名和值，也不在代码里替业务命名、替业务定单位。
+    """
+    return '', '', ''
 
 
 def _fmt(v):

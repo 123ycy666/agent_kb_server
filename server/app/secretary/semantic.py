@@ -29,7 +29,8 @@ _CTE = re.compile(r'\bwith\s+([A-Za-z0-9_]+)\s+as\s*\(|,\s*([A-Za-z0-9_]+)\s+as\
 
 
 def _rows(sql, limit=1000):
-    return tools_db._exec(sql, limit_rows=limit)['rows']
+    """2026-11-10：字典查询全部停用 —— 口径来源只有「查数口径」那页，代码不读库里的字典表。"""
+    return []
 
 
 def table_name(x):
@@ -364,7 +365,7 @@ def check_sql(sql) -> dict:
 # 只在这里算一次，其它地方读缓存（60 秒），不要各自再写一遍。
 # 期间列**只认字典里的说明**（中文名或字段说明里写了"月份/期间/年月/统计月"）——
 # 不再靠英文列名白名单猜（那是把他们的命名约定写死在我们代码里）。
-_PERIOD_HINTS = ('月份', '期间', '年月', '统计月')
+_PERIOD_HINTS = ()      # 2026-11-10 清空：不靠中文词表猜时间列，口径来源只有查数口径那页
 _PERIOD_CACHE: dict = {}
 _PERIOD_TTL = 60.0
 
