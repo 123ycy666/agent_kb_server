@@ -100,11 +100,9 @@ def _one_result(res):
             for c, d in list(sm.items())[:6]))
     yoys = [(c, rows[0].get(c)) for c in cols if _YOY.match(c) and rows[0].get(c) is not None]
     if yoys:
-        # ★ 2026-11-10：不把带符号的原始数交给模型（实测它把 -12.1581 读成"上升12.16%"）。
-        #   代码直接标成"上升/下降 X%"，模型照抄，不解释符号。
-        out.append('  同比：' + '，'.join(
-            '%s%s%s%%' % (k[:-9], '上升' if float(v) > 0 else '下降', _fmt(abs(float(v))))
-            for k, v in yoys[:8]))
+        # 只原样给值，不解释正负含义 —— 那是字段说明该写清楚的（业务语义不进代码）。
+        out.append('  同比变化率：' + '，'.join(
+            '%s=%s%%' % (k[:-9], _fmt(v)) for k, v in yoys[:8]))
     return '\n'.join(out)
 
 
