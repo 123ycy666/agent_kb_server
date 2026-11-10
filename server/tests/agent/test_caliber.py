@@ -136,8 +136,29 @@ def t_evidence():
     chk('证据包不再禁止相除做派生', '相减/相除' not in txt)
 
 
+def t_parse():
+    inject()
+    txt = ('否则从 预算分配总额、缺陷治理工单数量（缺陷治理工单状态为2和3）、'
+           '工单预算总额（缺陷治理工单状态为2和3）、'
+           '预算执行率（工单预算总额除以预算分配总额）、'
+           '缺陷治理成效指标下降最多及上升最高的各说一个 说明即可 不要从台区表里查数据')
+    r = caliber.parse_text(txt)
+    got = {m['label']: m for m in r['metrics']}
+    chk('解析认出四个指标', len(got) >= 4, list(got))
+    cnt = got.get('缺陷治理工单数量') or {}
+    chk('解析给工单数量加状态过滤',
+        any(x['col'] == 'work_status' for x in (cnt.get('must') or [])), cnt.get('must'))
+    chk('解析把过滤也写进 base',
+        any(any(x['col'] == 'work_status' for x in (b.get('must') or []))
+            for b in (cnt.get('bases') or [])), cnt.get('bases'))
+    rate = got.get('预算执行率') or {}
+    chk('解析出执行率算式',
+        rate.get('expr') == 'defect_work_order_budget / budget_allocated * 100', rate.get('expr'))
+    chk('解析把读不懂的句子列出来', any('下降最多' in u for u in r['unresolved']), r['unresolved'])
+
+
 def main():
-    for fn in (t_gate1, t_gate2, t_gate3, t_evidence):
+    for fn in (t_gate1, t_gate2, t_gate3, t_evidence, t_parse):
         try:
             fn()
         except Exception as exc:                        # noqa: BLE001

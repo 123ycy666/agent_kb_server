@@ -354,6 +354,104 @@ def history(code: str) -> list[dict]:
         c.close()
 
 
+# ── 从那段中文口径里读出契约草稿（2026-11-10）────────────────────────
+# 为什么要有：口径只有一个配置位置（第 6 步那段材料），Fred 写的是中文句子。
+# 解析器只做"把已经登记过的指标名 + 句子里的算式/过滤读出来"，不做翻译发明：
+# 句子里出现没登记过的指标名，就进 unresolved 让他补，机器不猜。
+_SEG = re.compile(r'[。；;\n]')
+_DERIVED = re.compile(r'(?P<label>[\u4e00-\u9fa5A-Za-z]{2,16})\s*[（(]\s*'
+                      r'(?P<a>[^（）()]{2,24}?)\s*(?:除以|/|÷)\s*'
+                      r'(?P<b>[^（）()]{2,24}?)\s*[）)]')
+_STATUS = re.compile(r'状态(?:为|是|：|:)?\s*(\d(?:\s*(?:和|、|,|，|/)\s*\d)*)')
+_YEAR = re.compile(r'年份|年度|当年|\$问题年份')
+_PCT = ('率', '比例', '占比', '执行率')
+
+
+def _segments(text: str) -> list[str]:
+    """按句读切段，但**括号里不切**（「预算执行率（A 除以 B）」要留成一段）。"""
+    out, buf, depth = [], [], 0
+    for ch in str(text or ''):
+        if ch in '（(':
+            depth += 1
+        elif ch in '）)':
+            depth = max(0, depth - 1)
+        if depth == 0 and ch in '、，,。；;\n':
+            seg = ''.join(buf).strip(' \t-·')
+            if seg:
+                out.append(seg)
+            buf = []
+            continue
+        buf.append(ch)
+    seg = ''.join(buf).strip(' \t-·')
+    if seg:
+        out.append(seg)
+    return out
+
+
+def parse_text(text: str) -> dict:
+    """一段中文口径 → 契约草稿。只认已登记的指标名。"""
+    known = {m['label']: m for m in metrics(only_enabled=False)}
+    txt = str(text or '')
+    year_on = bool(_YEAR.search(txt))
+    drafts: dict[str, dict] = {}
+    unresolved: list[str] = []
+
+    for seg in _segments(txt):
+        status = _STATUS.search(seg)
+        must = []
+        if status:
+            nums = re.findall(r'\d', status.group(1))
+            if nums:
+                must.append({'col': 'work_status', 'op': 'in', 'value': nums})
+        if year_on:
+            must.append({'col': 'year', 'op': '=', 'value': YEAR_VAR})
+
+        m = _DERIVED.search(seg)
+        if m and m.group('label') in known:
+            a = m.group('a').strip()
+            b = m.group('b').strip()
+            ca = next((v['code'] for k, v in known.items() if k in a or a in k), '')
+            cb = next((v['code'] for k, v in known.items() if k in b or b in k), '')
+            label = m.group('label')
+            if ca and cb:
+                pct = any(w in label for w in _PCT)
+                cur = drafts.get(known[label]['code']) or {}
+                cur.update({'code': known[label]['code'], 'label': label, 'kind': 'derived',
+                            'expr': '%s / %s%s' % (ca, cb, ' * 100' if pct else ''),
+                            'unit': '%' if pct else (known[label]['unit'] or ''),
+                            'digits': 2 if pct else int(known[label]['digits'] or 0),
+                            'must': [], 'bases': []})
+                drafts[label] = cur
+            else:
+                unresolved.append(seg)
+            continue
+
+        hit = [k for k in known if k and k in seg]
+        if hit:
+            for label in hit:
+                mm = known[label]
+                if mm['expr']:
+                    continue
+                row = {'code': mm['code'], 'label': label, 'kind': 'base',
+                       'expr': '', 'unit': mm['unit'], 'digits': int(mm['digits'] or 0),
+                       'must': list((mm['bases'][0].get('must') if mm['bases'] else []) or []),
+                       'bases': list(mm['bases'] or [])}
+                for f in must:
+                    if not any(x['col'] == f['col'] for x in row['must']):
+                        row['must'].append(f)
+                if row['must']:
+                    for bidx, b in enumerate(row['bases']):
+                        row['bases'][bidx] = dict(b, must=list(b.get('must') or []) + [
+                            f for f in must if not any(x['col'] == f['col']
+                                                       for x in (b.get('must') or []))])
+                drafts[label] = row
+            continue
+        if len(seg) >= 6:
+            unresolved.append(seg)
+
+    return {'metrics': list(drafts.values()), 'unresolved': unresolved[:12]}
+
+
 # ── 闸3：交卷对账 ─────────────────────────────────────────────────────
 _UNIT_NUM = re.compile(r'(\d+(?:\.\d+)?)\s*(?:万元|亿元|元|%|％|件|个|条|户|次|小时|天|台|人|项)')
 _ALL_NUM = re.compile(r'\d+(?:\.\d+)?')

@@ -90,6 +90,26 @@ async def check(request: Request, actor: CurrentActor = Depends(get_current_acto
     return _jr(caliber.check_sql(str(body.get('sql') or ''), year=body.get('year')))
 
 
+@router.post('/parse', summary='从一段中文口径读出契约草稿')
+async def parse(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
+    return _jr(caliber.parse_text(str(body.get('text') or '')))
+
+
+@router.get('/try', summary='按契约取一次数（试跑）')
+async def try_query(code: str = '', year: str = '', scope_id: str = '',
+                    actor: CurrentActor = Depends(get_current_actor)):
+    sid = scope_id.strip() or None
+    if sid is not None:
+        try:
+            sid = int(sid)
+        except ValueError:
+            return _jr({'error': 'scope_id 必须是数字'}, 400)
+    return _jr(caliber.query(code, year=year.strip() or None, scope_id=sid))
+
+
 @router.get('/tables', summary='可选的表（业务字典）')
 async def tables(actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import semantic
