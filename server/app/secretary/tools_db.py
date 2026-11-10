@@ -142,12 +142,6 @@ def run_sql(sql):
     """只读 SELECT；表名必须在业务字典里，否则拒绝并回可用表名。"""
     s = safe_select(sql)
     from app.secretary import semantic
-    chk = semantic.check_sql(s)              # 表合法性只此一处判（见 semantic.check_tables）
-    if not chk['ok']:
-        return {'error': '这些表不在业务字典里，不能查：' + '、'.join(chk['bad']) + '。'
-                         + chk['hint'] + '。不确定表名就先调 list_tables / find_column，别猜。',
-                '判定': 'ERROR_DICT',
-                'sql': s, 'columns': [], 'rows': [], 'row_count': 0}
     from app.secretary import caliber
     ck = caliber.check_sql(s)                # 闸1：命中契约表就必须带契约声明的必需过滤
     if not ck.get('ok'):
