@@ -115,13 +115,38 @@ def _summarize(columns, rows):
     return out
 
 
+def empty_verdict(sql):
+    """0 行到底什么意思 —— **判定只在这一处**。
+
+    三种意思必须分开（2026-11-10）：
+      EMPTY_NOT_READY：表里有数据，但请求的期间还没有 → 不能说"没有数据"
+      EMPTY_OK       ：期间没超范围、确实是空集 → 才允许说"按某口径没有记录"
+      ERROR_DICT     ：表/字段不在字典（由 run_sql 的错误分支给，不走这里）
+    判据来自 semantic.period_facts（表的时间列与最新可用期间，带缓存）。
+    """
+    from app.secretary import semantic
+    s = str(sql or '')
+    periods = re.findall(r'\b(20\d{4})\b', s)
+    for t in sorted(semantic.tables_in_sql(s)):
+        pf = semantic.period_facts(t)
+        if not pf.get('col') or not pf.get('max'):
+            continue
+        want = max(periods) if periods else ''
+        if want and want > pf['max']:
+            return {'code': 'EMPTY_NOT_READY',
+                    'note': '%s 最新只到 %s（%s），%s 还没数据' % (t, pf['max'], pf['col'], want)}
+    return {'code': 'EMPTY_OK', 'note': ''}
+
+
 def run_sql(sql):
     """只读 SELECT；表名必须在业务字典里，否则拒绝并回可用表名。"""
     s = safe_select(sql)
     from app.secretary import semantic
-    bad = semantic.unknown_tables(s)
-    if bad:
-        return {'error': '这些表不在业务字典里，不能查：' + '、'.join(sorted(bad)) + '。' + semantic.hint(),
+    chk = semantic.check_sql(s)              # 表合法性只此一处判（见 semantic.check_tables）
+    if not chk['ok']:
+        return {'error': '这些表不在业务字典里，不能查：' + '、'.join(chk['bad']) + '。'
+                         + chk['hint'] + '。不确定表名就先调 list_tables / find_column，别猜。',
+                '判定': 'ERROR_DICT',
                 'sql': s, 'columns': [], 'rows': [], 'row_count': 0}
     try:
         r = _exec(s)
@@ -139,12 +164,19 @@ def run_sql(sql):
     return r
 
 def find_column(keyword):
-    """只在业务字典内的表里搜字段；字典命中的排前面并补中文名与示例值。"""
+    """在业务字典里按关键词搜：真实列名 / 列注释 / 字典中文名 / 表名 / 表说明。
+
+    ★ 2026-11-10 修两个缺口：
+      ① `r['rows']` 是 tuple，`.sort()` 直接崩 —— 这只工具每次必挂（实测 q2 连崩 5 次）；
+      ② 原来只 LIKE information_schema 的列名与注释，**字典里登记的中文名和表名都不参与匹配**，
+         命中字典却没进 information_schema 的行会被整条丢掉（实测「指标」「六项」→ 0 行）。
+    """
     from app.secretary import semantic
     allowed = sorted(semantic.allowed_tables())
     if not allowed:
         return {'columns': [], 'rows': [], 'row_count': 0, 'error': '业务字典为空'}
-    kw = '%' + str(keyword).strip() + '%'
+    word = str(keyword).strip()
+    kw = '%' + word + '%'
     marks = ','.join(['%s'] * len(allowed))
     r = _exec('SELECT table_name AS tbl_name, column_name AS col_name, column_type AS col_type, '
               'column_comment AS col_comment FROM information_schema.columns '
@@ -152,17 +184,47 @@ def find_column(keyword):
               'AND (column_name LIKE %s OR column_comment LIKE %s) '
               'ORDER BY table_name, ordinal_position',
               [config.SCHEMA] + allowed + [kw, kw], limit_rows=80)
-    hit = {}
-    for t, c in semantic.find_columns(str(keyword).strip()):
-        hit[(t, c['column_name'])] = c
+    dict_cols = {}
+    for t, c in semantic.find_columns(word):
+        dict_cols[(t, c['column_name'])] = c
+    out, seen = [], set()
+    # ① 真库列命中（补字典中文名/示例值）
     for row in r['rows']:
-        c = hit.get((row['tbl_name'], row['col_name']))
+        row = dict(row)
+        c = dict_cols.get((row['tbl_name'], row['col_name']))
         if c:
             row['col_cn_name'] = c['column_cn_name']
             row['col_example'] = c['example_value']
             row['in_dict'] = 1
-    r['rows'].sort(key=lambda x: (0 if x.get('in_dict') else 1, x['tbl_name'], x['col_name']))
-    return r
+        row['match'] = '字段'
+        out.append(row)
+        seen.add((row['tbl_name'], row['col_name']))
+    # ② 只在字典里有、information_schema 没匹配到的列（中文名命中就在这一类）
+    for (t, cname), c in dict_cols.items():
+        if (t, cname) in seen:
+            continue
+        out.append({'tbl_name': t, 'col_name': cname, 'col_type': c.get('data_type') or '',
+                    'col_comment': c.get('business_desc') or '',
+                    'col_cn_name': c.get('column_cn_name') or '',
+                    'col_example': c.get('example_value') or '',
+                    'in_dict': 1, 'match': '字典'})
+        seen.add((t, cname))
+    # ③ 表名 / 表说明命中：告诉它"这个词落在哪张表"
+    low = word.lower()
+    for t in semantic.table_list():
+        blob = (t['table_name'] + ' ' + (t['table_cn_name'] or '') + ' '
+                + (t['business_desc'] or '')).lower()
+        if low and low in blob:
+            out.append({'tbl_name': t['table_name'], 'col_name': '（整张表）',
+                        'col_type': '', 'col_comment': (t['business_desc'] or '')[:120],
+                        'col_cn_name': t['table_cn_name'] or '',
+                        'col_example': '', 'in_dict': 1, 'match': '表'})
+    order = {'字段': 0, '表': 1, '字典': 2}
+    out.sort(key=lambda x: (0 if x.get('in_dict') else 3, order.get(x.get('match'), 9),
+                            x.get('tbl_name') or '', x.get('col_name') or ''))
+    return {'columns': ['tbl_name', 'col_name', 'col_type', 'col_comment',
+                        'col_cn_name', 'col_example', 'in_dict', 'match'],
+            'rows': out, 'row_count': len(out)}
 
 
 def list_tables(keyword=''):
@@ -208,8 +270,9 @@ def describe_table(table):
     name = semantic.table_name(table)
     if not NAME_OK.match(name):
         raise ValueError('表名不合法：' + str(table))
-    if not semantic.is_allowed(name):
-        return {'error': '表 %s 不在业务字典里，不能查。%s' % (name, semantic.hint())}
+    chk = semantic.check_tables([name])      # 表合法性只此一处判
+    if not chk['ok']:
+        return {'error': '表 %s 不在业务字典里，不能查。%s' % (name, chk['hint'])}
     r = _exec('SELECT column_name AS col_name, column_type AS col_type, '
               'is_nullable AS is_nullable, column_comment AS col_comment '
               'FROM information_schema.columns WHERE table_schema=%s AND table_name=%s '

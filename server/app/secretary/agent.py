@@ -52,9 +52,17 @@ TOOLS = [
             'required': ['query']}}},
     {'type': 'function', 'function': {
         'name': 'find_column',
-        'description': '在业务字典内的表里，按字段名或字段中文注释搜字段，返回「表名 + 字段名 + 类型 + 注释 + 示例值」。'
-                       '当你不确定某个数据在哪个字段/哪张表时先用它（例如搜「线损」「执行金额」「台区」）。',
+        'description': '在业务字典内的表里按关键词搜，返回「表名 + 字段名/表名 + 类型 + 注释 + 中文名 + 示例值」。'
+                       '同时匹配：真实列名、列注释、字典里的中文名、表名与表说明。'
+                       '当你不确定某个数据在哪个字段/哪张表时先用它（直接用业务名词搜即可）。',
         'parameters': {'type': 'object', 'properties': {'keyword': {'type': 'string'}}, 'required': ['keyword']}}},
+    {'type': 'function', 'function': {
+        'name': 'list_tables',
+        'description': '列出业务字典里登记的全部表：表名 ｜ 中文名 ｜ 一句话说明 ｜ 行数 ｜ 最近更新。'
+                       '**不确定系统里有哪些表、或某张表叫什么名字时，先调它**（比瞎猜表名快）。'
+                       '按关键词筛选：给了 keyword 就只回名字或说明里含这个词的表。',
+        'parameters': {'type': 'object', 'properties': {
+            'keyword': {'type': 'string', 'description': '可选，按词筛选'}}, 'required': []}}},
     {'type': 'function', 'function': {
         'name': 'run_sql',
         'description': '在只读业务库执行 SELECT（只允许业务字典里的表；不支持分号与注释，最多返回 200 行）。'
@@ -81,7 +89,7 @@ TOOLS = [
     # ★ 2026-10-30：字段明细与规则条目改成"按需取"，不再全塞进 system。
     {'type': 'function', 'function': {
         'name': 'describe_table',
-        'description': '取一张表的字段清单（字段名/中文名/说明）。system 里只有表名清单，'
+        'description': '取一张表的字段清单（字段名/类型/中文名/说明/示例值/角色）。'
                        '**写 SQL 前不确定字段名就先调它**；同一张表一次问全，不要反复查。',
         'parameters': {'type': 'object', 'properties': {
             'table': {'type': 'string', 'description': '表名，如 t_power_work_order'}},
@@ -445,16 +453,102 @@ def _swap_materials(messages, slots):
 
 
 def _progress_feed(trace, user_content, limit=8):
-    """进度自评的资料：本轮要办的事（含要答的方面）+ 已经查过哪些 SQL、各回几行。"""
+    """进度自评的资料：本轮要办的事 + 已经查过的 SQL 和**查回来的值**。
+
+    ★ 2026-11-10：原来只给"SQL 前 100 字 + 行数"，模型看不到任何数值，只能回
+      「已查到：无数据」（实测 q1 连报两次，而当时已经查到 276 行 / 1089 次）。
+      现在每行带首条结果的 3 个字段值，0 行也写明是空集。
+    """
     lines = ['【本轮要办的事】' + str(user_content or '')[:400], '【已经查过的】']
     for t in (trace or []):
         if not isinstance(t, dict) or t.get('kind') != 'tool' or t.get('tool') != 'run_sql':
             continue
         res = t.get('result') or {}
-        n = len(res.get('rows') or []) if isinstance(res, dict) else 0
-        lines.append('- %s → %d 行' % (
-            str((t.get('args') or {}).get('sql') or '')[:100].replace('\n', ' '), n))
+        if not isinstance(res, dict):
+            continue
+        sql = str((t.get('args') or {}).get('sql') or '')[:80].replace('\n', ' ')
+        if res.get('error'):
+            lines.append('- %s → 报错：%s' % (sql, str(res['error'])[:80]))
+            continue
+        if res.get('multi'):
+            for i, one in enumerate(res.get('results') or [], start=1):
+                lines.append('-（第%d条）%s → %s' % (i, sql, _value_brief(one)))
+        else:
+            lines.append('- %s → %s' % (sql, _value_brief(res)))
     return '\n'.join(lines[:limit + 2])
+
+
+def _value_brief(res, k=3):
+    """一条查询结果的摘要：几行 + 首行的前几个字段值（0 行就说空集）。"""
+    if not isinstance(res, dict):
+        return str(res)[:60]
+    if res.get('error'):
+        return '报错：' + str(res['error'])[:80]
+    rows = res.get('rows') or []
+    if not rows:
+        return '0 行（空集）'
+    r0 = rows[0] if isinstance(rows[0], dict) else {}
+    parts = ['%s=%s' % (key, r0[key]) for key in list(r0)[:k]]
+    return '%d 行：%s' % (len(rows), '，'.join(parts))
+
+
+_PERIOD_RE = re.compile(r'20(?:2\d|3\d)(?:0[1-9]|1[0-2])')
+
+
+def _data_time_line():
+    """库内各表**最新可用期间**（代码算）。
+
+    ★ 2026-11-10：原来只注入【今天】，"没说时间就用最新一个月"全靠模型自己推：
+      用当月 → 撞占位行；自己 MAX(期间) → 可能取到未来月。现在把事实摊给它。
+      表名不写死：谁有期间列就列谁（事实来自 semantic.period_facts，带 60 秒缓存）。
+    """
+    try:
+        from app.secretary import semantic
+        rows = []
+        for t in sorted(semantic.allowed_tables()):
+            pf = semantic.period_facts(t)
+            if pf.get('col') and pf.get('max'):
+                rows.append('%s=%s' % (t, pf['max']))
+    except Exception:                              # noqa: BLE001 - 算不出来就不注入
+        return ''
+    if not rows:
+        return ''
+    return ('【数据时间】（各表最新可用期间。用户没说时间时按它取，'
+            '不要自己取 MAX(期间)、也不要用当月。**用户说的期间晚于这里的最大期间时，'
+            '直接答"该期间数据未就绪"——不许拿去年同月或别的月份顶替**）\n'
+            + '；'.join(rows[:8]))
+
+
+def _progress_state(trace) -> str:
+    """本轮已查到的**事实**：几条查询、有数几条、空集几条、报错几条、覆盖哪些期间。
+
+    ★ 代码生成，不经模型 —— 这就是"进度"该有的样子：只报事实，不报判断。
+    """
+    n = ok = empty = err = 0
+    periods, last = set(), ''
+    for t in (trace or []):
+        if not isinstance(t, dict) or t.get('kind') != 'tool' or t.get('tool') != 'run_sql':
+            continue
+        res = t.get('result') or {}
+        if not isinstance(res, dict):
+            continue
+        for one in (res.get('results') if res.get('multi') else [res]) or []:
+            n += 1
+            if one.get('error'):
+                err += 1
+                continue
+            if one.get('rows'):
+                ok += 1
+                last = _value_brief(one)
+            else:
+                empty += 1
+            periods |= set(_PERIOD_RE.findall(str(one.get('sql') or '')))
+    if not n:
+        return ''
+    return ('已跑 %d 条查询：有数 %d、空集 %d、报错 %d；涉及期间 %s；最后一条 %s'
+            % (n, ok, empty, err, '、'.join(sorted(periods)) or '未带期间', last or '无'))
+
+
 
 
 _FACTS_RULE = ('把这一轮已经查到的事实列成清单，一条一行，只写〔口径〕=〔数值〕（来自哪张表）；'
@@ -494,10 +588,24 @@ def _answer_system(messages, slots=('answer',)) -> str:
 
 def _write_answer(messages, model, user_content, trace=None, need_facts=True,
                   slots=('answer',)) -> dict:
-    """第 8 步：查数轮先列事实清单再写正文；读文件/出文件轮直接按清单规则写。
+    """第 8 步：正文只按**证据包**写（代码摊出的原始结果），不再让模型转述事实清单。
 
-    列不出清单（模型不可用等）就退回原做法：把全部工具结果交给它。
+    ★ 2026-11-10：原来先让模型把查询结果写成"〔口径〕=〔数值〕"清单，再只给清单写正文。
+      实测 22,116 字的工具结果被换成 6,585 字二手转述，单位/期间/基期/方向全丢
+      （见 output/test_results/2026-11-10-六项指标根因复现/）。现改为 evidence.text(trace)
+      直接内联权威结果；模型只负责组织语言。拿不到证据包时退回原做法。
     """
+    from app.secretary import evidence
+    ev = evidence.text(trace) if trace else ''
+    if ev:
+        if trace is not None:
+            trace.append({'seq': len(trace) + 1, 'kind': 'evidence',
+                          'chars': len(ev), 'content': ev[:1200]})
+        msgs = [{'role': 'system', 'content': _answer_system(messages, slots)},
+                {'role': 'user', 'content': user_content},
+                {'role': 'user', 'content': '【这一轮查到的事实（数字只用这些）】\n' + ev}]
+        return {'answer': _final_answer(msgs, model, allow_rule=True, trace=trace),
+                'facts': ev}
     facts = _collect_facts(messages, model, trace=trace) if need_facts else ''
     if facts:
         msgs = [{'role': 'system', 'content': _answer_system(messages, slots)},
@@ -684,13 +792,20 @@ def _clean_answer(text):
 
 
 def _one_sql(sql):
-    """跑一条查询；0 行时把「空集就是答案」说死（模型会摘条件凑数，见下）。"""
+    """跑一条查询；0 行时先判"这是什么空"，再决定要不要说"空集就是答案"。"""
     r = tools_db.run_sql(sql or '')
     try:
         if not r.get('error') and not (r.get('rows') or []):
+            v = tools_db.empty_verdict(sql)
             r = dict(r)
-            r['空集提示'] = ('这是 0 行 = 空集，空集就是答案。不许摘掉时间 / 状态 / 范围条件再查一遍凑数字；'
-                            '确实要改条件，必须在回答里写明改了什么、为什么。')
+            r['判定'] = v['code']
+            r['判定说明'] = v['note']
+            if v['code'] == 'EMPTY_OK':
+                r['空集提示'] = ('这是 0 行 = 空集，空集就是答案。不许摘掉时间 / 状态 / 范围条件再查一遍凑数字；'
+                                '确实要改条件，必须在回答里写明改了什么、为什么。')
+            else:
+                r['空集提示'] = ('这是 0 行，但**不是"没有数据"**：' + v['note']
+                                + '。要在回答里写成"该期间数据未就绪/还没到"，不许写成"没有数据"。')
     except Exception:                              # noqa: BLE001
         pass
     return r
@@ -701,6 +816,10 @@ def execute(name, args):
         return tools_kb.kb_search(args.get('query', ''), int(args.get('top_k') or 3))
     if name == 'find_column':
         return tools_db.find_column(args.get('keyword', ''))
+    if name == 'list_tables':
+        # 2026-11-10：函数早就在 tools_db 里，只是没有工具面 —— 模型只能靠写错表名从报错里
+        #   读可用表清单（q1 蒙对、q2 干脆 0 条 SQL）。给它一只手自己看。
+        return tools_db.list_tables(args.get('keyword', ''))
     if name == 'describe_table':
         # 2026-10-30：字段明细从"常驻提示词"改成"按需取"（system 里只留表清单）。
         return describe_table(args.get('table', ''))
@@ -1226,6 +1345,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                        (_conf.get('block') or str(question or ''))))
     # 只给一行日期：第 6 步框空着时，"上个月"要靠它自己推。这是信息，不是纪律。
     user_content += '\n\n【今天】%s' % (today or time.strftime('%Y-%m-%d'))
+    # ★ 2026-11-10：再给一行**库内数据时间**（代码算，不让模型猜哪个是最新月）。
+    #   原来只说"今天"，模型要么用当月（未结算）要么自己 MAX(期间)（可能取到未来月）。
+    _dt = _data_time_line()
+    if _dt:
+        user_content += '\n' + _dt
     # 摘要与最近几轮**不再拼进主循环**（第 6 步已经把该用的信息归整进定稿了）。
     # hist_detail 仍要算：落库结果里的 history_injected 靠它，排障要看。
     keep = max(0, int(getattr(config, 'SUMMARY_KEEP_RECENT', 2) or 0))
@@ -1361,7 +1485,8 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #      查数口径与查数手只在 use_db 时给；改库的手还没接（P2）。
     _want = []
     if _route['use_db']:
-        _want += ['kb_search', 'describe_table', 'find_column', 'run_sql', 'read_result', 'finish']
+        _want += ['kb_search', 'list_tables', 'describe_table', 'find_column', 'run_sql',
+                  'read_result', 'finish']
     if _route['use_file']:
         _want += ['kb_search', 'kb_read', 'read_file', 'run_code']
     if _route['make_file']:
@@ -1506,8 +1631,15 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         #   必答项随规则一起删了，这句在指空；代码也不再替模型管节奏。
         # ★ 2026-11-08（Fred）：本轮结果指纹 —— 连续两轮一模一样，说明它在原地打转，
         #   下一轮开头就收尾（不按轮数砍，按"有没有新数据"砍）。
+        # ★ 2026-11-10：**报错不算"新数据"、也不计入指纹**。
+        #   原来一个崩掉的工具（同一条 AttributeError）两轮就凑成"连续无新数据"，
+        #   直接把"工具坏了"翻译成"查不到"（实测 q2：17 步 0 条 SQL 就收尾了）。
         _sigs = set()
+        _n_err = 0
         for _o in outs:
+            if isinstance(_o.get('result'), dict) and _o['result'].get('error'):
+                _n_err += 1
+                continue
             try:
                 _sigs.add(json.dumps(_o.get('result'), ensure_ascii=False,
                                      sort_keys=True, default=str)[:1500])
@@ -1516,21 +1648,17 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         if _sigs:
             noprogress = (noprogress + 1) if not (_sigs - seen_sig) else 0
             seen_sig |= _sigs
-        # ★ 2026-11-08（Fred）：每 3 轮让模型自己报一次进度 —— 给它"够不够"的依据，
-        #   不给它催促。还缺什么由它自己看已经查回来的行数判断。
+        elif _n_err and not _sigs:
+            # 整轮全是报错：不算打转，但要告诉它换个手段，别继续瞎试
+            noprogress = 0
+        # ★ 2026-11-10：改成**代码生成**的进度事实，不再另调一次模型自评。
+        #   原来那次自评是让模型"看 SQL 前 100 字猜有没有数据"，实测 q06、q11 已经查到
+        #   几百行、仍回「已查到：无数据」，这条假信号还被塞回主循环。现在只报事实：
+        #   查了几次、成功几次、空集几条、报错几条、覆盖了哪些期间。
         if step % 3 == 0 and not fins and _route['use_db']:
-            try:
-                _prog = _ask_short(
-                    '看下面这份进度资料，只回两行：\n已查到：…\n还缺：…\n'
-                    '只写本轮要答的几个方面里哪些已经有数据、哪些还没有；没有就写"无数据"。'
-                    '不要建议、不要解释、不要重复 SQL。',
-                    _progress_feed(trace, user_content), model)
-            except Exception:                      # noqa: BLE001 - 进度报不出来不影响干活
-                _prog = ''
+            _prog = _progress_state(trace)
             if _prog:
-                messages.append({'role': 'user', 'content':
-                                 '【进度自检】' + _prog +
-                                 '\n照这份进度办：还缺的继续查，齐了就用 finish 收尾。'})
+                messages.append({'role': 'user', 'content': '【进度】' + _prog})
                 trace.append({'seq': len(trace) + 1, 'kind': 'progress', 'round': step,
                               'content': _prog[:600]})
         if fins:

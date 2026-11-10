@@ -225,7 +225,8 @@ def allowed_tables():
 
 
 def is_allowed(table):
-    return table_name(table) in allowed_tables()
+    """兼容旧调用点：表合法性一律走 check_tables（唯一判据）。"""
+    return check_tables([table])['ok']
 
 
 def table_cols(table):
@@ -339,3 +340,65 @@ def unknown_tables(sql):
 
 def hint():
     return '可用表：' + '、'.join(sorted(allowed_tables()))
+
+
+# ── 合法性的**唯一判据**（2026-11-10）──────────────────────────────
+# 为什么收成一个入口：原来「表能不能查」判了三遍 —— run_sql 调 unknown_tables、
+# describe_table 调 is_allowed、find_column 自己拼 allowed_tables。三处哪天不同步，
+# 就是"这里判了、那边又该回去了"。
+# 现在：只允许 check_tables / check_sql 下结论；is_allowed 退化成它的薄包装。
+def check_tables(names) -> dict:
+    """这些表名是否都在业务字典里。返回 {'ok','bad','hint'}。"""
+    allowed = allowed_tables()
+    bad = sorted({table_name(x) for x in (names or []) if table_name(x) not in allowed})
+    return {'ok': not bad, 'bad': bad, 'hint': '' if not bad else hint()}
+
+
+def check_sql(sql) -> dict:
+    """一条 SQL 能不能查：只看它引用的表在不在字典里。"""
+    return check_tables(tables_in_sql(sql))
+
+
+# ── 时间维度的事实（唯一来源）────────────────────────────────────
+# 用途：空集判定要知道"这张表最新到哪个月"、证据包要知道"期间列是哪一列"。
+# 只在这里算一次，其它地方读缓存（60 秒），不要各自再写一遍。
+_PERIOD_NAMES = ('period_key', 'stat_month', 'month', 'period_month', 'data_month')
+_PERIOD_CACHE: dict = {}
+_PERIOD_TTL = 60.0
+
+
+def period_facts(table) -> dict:
+    """该表的时间列与最新可用期间：{'col': 'stat_month', 'max': '202610'}。
+
+    判断顺序：① 字典里登记过的列名（_PERIOD_NAMES）；② 字典里中文名含「月/期间/日期」的列；
+    ③ 猜不到返回 {'col':'', 'max':''}（调用方按"不校验期间"处理，不许自己另猜一套）。
+    """
+    name = table_name(table)
+    now = time.time()
+    hit = _PERIOD_CACHE.get(name)
+    if hit and now - hit[0] < _PERIOD_TTL:
+        return hit[1]
+    out = {'col': '', 'max': ''}
+    try:
+        cols = table_cols(name) or {}
+        col = ''
+        for c in _PERIOD_NAMES:
+            if c in cols:
+                col = c
+                break
+        if not col:
+            for c in cols.values():
+                cn = str(c.get('column_cn_name') or '')
+                if '月份' in cn or '期间' in cn or '年月' in cn:
+                    col = c['column_name']
+                    break
+        if col:
+            from app.secretary import tools_db
+            got = tools_db._exec('SELECT MAX(`%s`) AS m FROM %s' % (col, name), limit_rows=1)
+            rows = got.get('rows') or []
+            out = {'col': col, 'max': str((rows[0] or {}).get('m') or '') if rows else ''}
+    except Exception as exc:                       # noqa: BLE001 - 读不到就当没有期间
+        print('[semantic] period_facts 失败（按无期间处理）：%s: %s'
+              % (name, type(exc).__name__), flush=True)
+    _PERIOD_CACHE[name] = (now, out)
+    return out
