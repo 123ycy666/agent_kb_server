@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS caliber_metric_ver (
 CREATE INDEX IF NOT EXISTS ix_caliber_ver_code ON caliber_metric_ver(code, version_no DESC);
 
 -- 初始口径：2026 年某供电所的预算/工单四项 + 派生执行率。
--- 列名按内网业务库（t_power_ai_work_order 有 power_station_id / year / work_status / deleted_flag）。
+-- 列名按 ai_data（工单表用 power_company_id；三张表都没有 deleted_flag）。
+-- 2026-11-10 切库：ai_data（原 dlj_data）。
 INSERT INTO caliber_metric (code, label, unit, digits, direction, expr, notes) VALUES
   ('defect_work_order_count', '缺陷治理工单数量', '件', 0, '', '',
    '状态 2/3 的缺陷治理工单，按问题年份与供电所过滤'),
@@ -54,10 +55,11 @@ INSERT INTO caliber_metric (code, label, unit, digits, direction, expr, notes) V
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO caliber_base (metric_code, table_name, column_name, agg, scope_col, must) VALUES
-  ('defect_work_order_count', 't_power_ai_work_order', 'id', 'count', 'power_station_id',
-   '[{"col":"year","op":"=","value":"$问题年份"},{"col":"work_status","op":"in","value":["2","3"]},{"col":"deleted_flag","op":"=","value":"0"}]'),
-  ('defect_work_order_budget', 't_power_ai_work_order', 'total_budget', 'sum', 'power_station_id',
-   '[{"col":"year","op":"=","value":"$问题年份"},{"col":"work_status","op":"in","value":["2","3"]},{"col":"deleted_flag","op":"=","value":"0"}]'),
+  ('defect_work_order_count', 't_power_ai_work_order', 'id', 'count', 'power_company_id',
+   '[{"col":"year","op":"=","value":"$问题年份"},{"col":"work_status","op":"in","value":["2","3"]}]'),
+  ('defect_work_order_budget', 't_power_ai_work_order', 'total_budget', 'sum', 'power_company_id',
+   '[{"col":"year","op":"=","value":"$问题年份"},{"col":"work_status","op":"in","value":["2","3"]}]'),
   ('budget_allocated', 't_power_ai_company_budget_result', 'budget_amount', 'sum', 'power_station_id',
-   '[{"col":"year","op":"=","value":"$问题年份"},{"col":"deleted_flag","op":"=","value":"0"}]')
-ON CONFLICT (metric_code, table_name, column_name, agg) DO NOTHING;
+   '[{"col":"year","op":"=","value":"$问题年份"}]')
+ON CONFLICT (metric_code, table_name, column_name, agg) DO UPDATE
+  SET scope_col = EXCLUDED.scope_col, must = EXCLUDED.must;
