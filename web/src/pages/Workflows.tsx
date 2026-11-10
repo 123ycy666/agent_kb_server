@@ -122,6 +122,7 @@ function DocsTab() {
   const columns: ColumnsType<WfDoc> = [
     { title: '文档名', dataIndex: 'name', render: (v, r) => <a onClick={() => setEditing(r)}>{v}</a> },
     { title: '工种', dataIndex: 'work_type_label', width: 120, render: (v) => <Tag>{v}</Tag> },
+    { title: '版本', dataIndex: 'version', width: 70, render: (v) => `v${v}` },
     {
       title: '启用', dataIndex: 'enabled', width: 90,
       render: (v, r) => <Switch size="small" checked={v} onChange={(on) => void toggle(r, on)} />,
@@ -202,6 +203,8 @@ function DocEditor({ doc, onTest, onClose }: {
   const [orig, setOrig] = useState<{ name: string; values: Record<string, string> }>({ name: '', values: {} })
   const [name, setName] = useState(doc.name)
   const [saving, setSaving] = useState(false)
+  const [histOpen, setHistOpen] = useState(false)
+  const [preview, setPreview] = useState<{ version: number; doc: Record<string, string> } | null>(null)
 
   useEffect(() => {
     void (async () => {
@@ -273,6 +276,7 @@ function DocEditor({ doc, onTest, onClose }: {
         <Tag>{detail?.work_type_label}</Tag>
       </Space>}
       extra={<Space>
+        <Button onClick={() => { setHistOpen(true); setPreview(null) }}>历史</Button>
         <Button onClick={() => void exportDoc()}>导出</Button>
         <Button type="primary" loading={saving} onClick={() => void save()}>保存</Button>
       </Space>}>
@@ -293,6 +297,36 @@ function DocEditor({ doc, onTest, onClose }: {
           </Card>
         ))}
       </Space>
+      <Drawer open={histOpen} width={640} title={`历史版本（共 ${detail?.versions?.length || 0} 版）`}
+        onClose={() => setHistOpen(false)} destroyOnClose>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Table size="small" rowKey="version" pagination={false}
+            dataSource={detail?.versions || []}
+            onRow={(r) => ({ onClick: async () => {
+              try { setPreview(await wfApi.version(doc.id, r.version)) } catch (e) { message.error(err(e)) }
+            }, style: { cursor: 'pointer' } })}
+            columns={[
+              { title: '版本', dataIndex: 'version', width: 80, render: (v) => `v${v}` },
+              { title: '保存人', dataIndex: 'updated_by', width: 120, render: (v) => v || '—' },
+              { title: '时间', dataIndex: 'at', render: dt },
+            ]} />
+          {preview && (
+            <Card size="small" title={`第 ${preview.version} 版正文`} extra={
+              <Button size="small" onClick={() => {
+                setValues({ ...preview.doc })
+                setHistOpen(false)
+                message.success(`已载入第 ${preview.version} 版，点保存后生效`)
+              }}>恢复到编辑器</Button>}>
+              {(detail?.sections || []).map((sec) => (
+                <Paragraph key={sec.key} style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>
+                  <Text strong>{sec.title}</Text>
+                  {String(preview.doc[sec.key] || '').trim() ? String(preview.doc[sec.key]) : '（这一版也是空的）'}
+                </Paragraph>
+              ))}
+            </Card>
+          )}
+        </Space>
+      </Drawer>
     </Drawer>
   )
 }

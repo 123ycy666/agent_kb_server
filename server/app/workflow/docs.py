@@ -267,6 +267,12 @@ def import_json(db, path: str) -> dict:
         d.deleted_flag = 0
         d.doc = it.get('doc') or {}
         db.commit()
+        has = db.execute(select(DocVersion).where(DocVersion.doc_id == d.id,
+                                                  DocVersion.version == int(d.version or 1))).scalars().first()
+        if has is None:
+            db.add(DocVersion(doc_id=d.id, version=int(d.version or 1), doc=d.doc or {},
+                              updated_by='import'))
+            db.commit()
     for it in items:
         if not it.get('pair_name'):
             continue
