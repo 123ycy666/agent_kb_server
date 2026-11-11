@@ -622,8 +622,9 @@ def _verify_or_rewrite(msgs, model, answer, ev, trace=None) -> str:
     retry = list(msgs) + [
         {'role': 'assistant', 'content': answer},
         {'role': 'user', 'content':
-            '上面正文里这几个数在证据里找不到出处：%s。只改这几处：有出处的照抄证据里的数，'
-            '没出处的删掉或写「需另查」，其余一字不动，重出正文。' % bad}]
+            '上面正文里这几个数在证据里找不到出处：%s。只改这几处，其余原样保留：'
+            '有出处的换成证据里的数，没出处的删掉。不要重写整段，不要补时间、前缀、背景句；'
+            '拿不准就少写一句。' % bad}]
     ans2 = _final_answer(retry, model, allow_rule=True, trace=trace)
     v2 = caliber.verify(ans2, ev)
     if trace is not None:
@@ -667,6 +668,12 @@ def _write_answer(messages, model, user_content, trace=None, need_facts=True,
         msgs = [{'role': 'system', 'content': _answer_system(messages, slots)},
                 {'role': 'user', 'content': user_content},
                 {'role': 'user', 'content': '【这一轮查到的事实（数字只用这些）】\n' + ev}]
+        if trace is not None:
+            _sys = str(msgs[0].get('content') or '')
+            trace.append({'seq': len(trace) + 1, 'kind': 'answer_system',
+                          'result': {'chars': len(_sys),
+                                     'has_answer_rule': '任务：基于已执行' in _sys,
+                                     'has_fetch': '表说明' in _sys}})
         ans = _final_answer(msgs, model, allow_rule=True, trace=trace)
         return {'answer': _verify_or_rewrite(msgs, model, ans, ev, trace=trace),
                 'facts': ev}

@@ -129,11 +129,28 @@ def t_evidence():
     res = {'sql': 'SELECT stat_month, loss_rate FROM t_power_ai_station_summary', 'rows': rows,
            'columns': ['stat_month', 'loss_rate'], 'row_count': len(rows)}
     txt = evidence.text([{'kind': 'tool', 'tool': 'run_sql', 'result': res}])
-    lines = [ln for ln in txt.splitlines() if '→' in ln]
+    lines = [ln for ln in txt.splitlines() if 'loss_rate=' in ln]
     chk('证据包 22 行不再截成 12 行', len(lines) >= 22, 'lines=%d' % len(lines))
     chk('证据包给出极值行', '最大' in txt and '最小' in txt)
-    chk('证据包不再写"其余 10 行略"', '行略' not in txt)
+    chk('证据包不写"其余 10 行略"', '行略' not in txt)
     chk('证据包不再禁止相除做派生', '相减/相除' not in txt)
+    chk('证据包不带祈使规则段', '规则：①' not in txt and '需另查' not in txt, txt[:120])
+
+
+def t_evidence_row():
+    """2026-11-11：单行结果也得带主体名 —— 原来只发数值列，主体只能由模型从定稿里编。"""
+    from app.secretary import evidence
+    one = {'sql': 'SELECT power_station_name, county_company_name, budget_amount '
+                  'FROM t_power_company_budget_result WHERE year = \'2026\' '
+                  'ORDER BY budget_amount DESC LIMIT 1',
+           'rows': [{'power_station_name': '某某供电所', 'county_company_name': '某某县供电公司',
+                     'budget_amount': '523486.84'}],
+           'columns': ['power_station_name', 'county_company_name', 'budget_amount'],
+           'row_count': 1}
+    txt = evidence.text([{'kind': 'tool', 'tool': 'run_sql', 'result': one}])
+    chk('单行结果带主体列名与值', 'power_station_name = 某某供电所' in txt, txt)
+    chk('单行结果带上级公司列', 'county_company_name = 某某县供电公司' in txt, txt)
+    chk('4 位年份也算期间', '期间 2026' in txt, txt)
 
 
 def t_parse():
@@ -158,7 +175,7 @@ def t_parse():
 
 
 def main():
-    for fn in (t_gate1, t_gate2, t_gate3, t_evidence, t_parse):
+    for fn in (t_gate1, t_gate2, t_gate3, t_evidence, t_evidence_row, t_parse):
         try:
             fn()
         except Exception as exc:                        # noqa: BLE001

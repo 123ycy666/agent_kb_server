@@ -11,6 +11,11 @@
 机制叫 evidence substitution；有效修法是**内联权威输出并指明哪份是权威**，
 而"在提示词里要求正确抄写"无效。
 
+★ 2026-11-11：证据是材料，不是规矩。① 按行发全 —— 一行里所有列都发（主体、期间、金额…），
+  不再"只挑数值列"：原来单行结果只发 budget_amount，主体名没发出去，模型只能拿定稿里的
+  "随州供电公司"顶上，错的就是这个。② 删掉 ①～④ 段祈使规则，只留一句"这里没有的数不要写" ——
+  风格（带不带时间、详略）只在页面「作答规则」一处，别处不抢话。③ 期间 4 位年份也认。
+
 ★ 2026-11-10 改两处（府河所那份日志的教训）：
   ① 删掉「相减/相除就写需另查」那条 —— 口径里写着"这个除这个"，两条对撞，
      模型服从了证据包，执行率答成「需另查」。派生值现在由契约（caliber）算好给。
@@ -23,20 +28,10 @@ from __future__ import annotations
 import re
 
 _NUM = re.compile(r'^-?\d+(?:\.\d+)?$')
-_PERIOD = re.compile(r'20\d{4}')
-_UNIT = re.compile(r'单位[:：]?\s*([^\s，,。；;（()]+)')
-_DIR = re.compile(r'(越大越好|越小越好|越高越好|越低越好|正指标|逆指标|宜大|宜小)')
+_PERIOD = re.compile(r'20\d{2}(?:0[1-9]|1[0-2])?')
 _TBL = re.compile(r'\b(?:from|join)\s+([A-Za-z0-9_]+)', re.I)
 
 MAX_ROWS = 60          # 超过就头尾各给一半，并写明总行数（不切在行中间）
-
-
-def _meta(table, col):
-    """(中文名, 单位, 方向) —— 2026-11-10 起不再从字典取：口径来源只有「查数口径」那页。
-
-    取不到就空着，宁可只给列名和值，也不在代码里替业务命名、替业务定单位。
-    """
-    return '', '', ''
 
 
 def _fmt(v):
@@ -44,6 +39,12 @@ def _fmt(v):
         return ('%.4f' % float(v)).rstrip('0').rstrip('.')
     except (TypeError, ValueError):
         return str(v)
+
+
+def _cell(v):
+    """单元格原样发：数是数，文本是文本（主体名/期间不能被裁掉）。"""
+    txt = str(v)
+    return _fmt(v) if _NUM.match(txt) else txt[:60]
 
 
 def _label(row, cols, nums):
@@ -71,7 +72,6 @@ def _one_result(res):
     """一条 SQL 结果 → 一段证据。"""
     sql = str(res.get('sql') or '')
     tables = sorted(set(_TBL.findall(sql)))
-    tbl = tables[0] if tables else ''
     periods = sorted(set(_PERIOD.findall(sql)))
     head = '【%s】期间 %s' % ('、'.join(tables) or '?', '/'.join(periods) or '未带')
     if res.get('error'):
@@ -90,10 +90,9 @@ def _one_result(res):
     out = ['%s 共 %d 行%s' % (head, len(rows), zeros)]
     if len(rows) == 1:
         r0 = rows[0]
-        for c in nums:
-            cn, u, dr = _meta(tbl, c)
-            out.append('  %s%s = %s%s%s' % (cn or c, ('(%s)' % c) if cn else '', _fmt(r0[c]), u,
-                                            ('（%s）' % dr) if dr else ''))
+        for c in cols:
+            if r0.get(c) is not None:
+                out.append('  %s = %s' % (c, _cell(r0[c])))
     else:
         prow = next((c for c in cols
                      if all(_PERIOD.match(str(r.get(c))) for r in rows if r.get(c) is not None)
@@ -109,8 +108,8 @@ def _one_result(res):
         if cut:
             out[0] += cut
         for r in show:
-            kv = '，'.join('%s=%s' % (c, _fmt(r[c])) for c in nums if r.get(c) is not None)
-            out.append('  %s → %s' % (_label(r, cols, nums), kv))
+            out.append('  ' + '，'.join('%s=%s' % (c, _cell(r[c]))
+                                       for c in cols if r.get(c) is not None))
         out.extend(_extremes(rows, cols, nums))
     sm = res.get('summary') or {}
     if sm:
@@ -134,9 +133,6 @@ def text(trace):
                 parts.append(_one_result(one))
     if not parts:
         return ''
-    return ('【权威证据】（下面每个数都是本轮数据库查询的原始结果，系统直接摊出，未经转述。\n'
-            '规则：① 正文只用这里的数；这一份里没有的数不许写（写了会被交卷对账拦下）。'
-            '② 需要差值或占比而这里没有现成的，写「需另查」并说明缺哪个数，不要自己算。'
-            '③ 查到 0 行时，照结果里给的判定如实写，不要自己加工成"没有数据"或补一个 0。'
-            '④ 极值那几行是代码算出来的，直接引用，不要自己在明细里比较。\n\n'
+    return ('【本轮查到的事实】（下面是本轮数据库查询的原始结果，系统直接摊出，未经转述。\n'
+            '这里没有的数不要写；写多少、带不带时间单位，按作答规则。\n\n'
             + '\n\n'.join(parts) + '\n）')
