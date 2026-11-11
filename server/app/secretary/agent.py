@@ -1287,25 +1287,28 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 需要判断就去查，查不到就不下判断（见回答契约第 7 条）。
     # 问题不改写：原话 + 纠错 + 补问法 + 补全表命中，一路往下传。
     t_loop = time.time()
+    # 提问时间：接口传的 `today` / `business_date`，没传就系统当天。
+    # ★ 2026-11-11：第 5 步「问题确定」要靠它默认补「上一个自然月」，所以先算好再传进去。
+    _now = today or time.strftime('%Y-%m-%d')
     # ── ⑥ 问题确定：把前面几步揉成一句问题，第 7 步只拿这一句 ────────────────
     #    判据在页面框 `confirm`；框空 = 用 confirm.settle() 收敛成一句（不再下传资料）。
     #    ★ 2026-11-03 定稿：主循环不再吃「原话 + 最近几轮 + 【统计范围】」那一堆 ——
     #      取舍只在这一处，改一处就生效。第 1 步判"不走"时（闲聊 / 明确要求）
     #      原话直接进第 7 步，缺信息由它自己反问用户。
     if allow_refine:
-        _conf = confirm.run(question, fixed, comp, history,
+        _conf = confirm.run(question, fixed, comp, history, ask_time=_now,
                             ask=lambda _s, _u: _ask_short(_s, _u, model))
     else:
         _conf = {'used': False, 'text': '', 'block': '【本轮原话】' + str(question or '')}
     trace.append({'seq': len(trace) + 1, 'kind': 'confirm', 'tool': 'confirm',
-                  'result': {'used': bool(_conf.get('used')),
+                  'result': {'used': bool(_conf.get('used')), 'ask_time': _now,
                              'passed': 'model' if _conf.get('used') else 'raw',
                              'text': str(_conf.get('text') or _conf.get('block') or '')[:800]}})
     user_content = ('【本轮要办的事】（按它办）\n'
                     + (_conf['text'] if _conf.get('used') else
                        (_conf.get('block') or str(question or ''))))
     # 只给一行日期：第 6 步框空着时，"上个月"要靠它自己推。这是信息，不是纪律。
-    user_content += '\n\n【今天】%s' % (today or time.strftime('%Y-%m-%d'))
+    user_content += '\n\n【今天】%s' % _now
     # ★ 2026-11-10：再给一行**库内数据时间**（代码算，不让模型猜哪个是最新月）。
     #   原来只说"今天"，模型要么用当月（未结算）要么自己 MAX(期间)（可能取到未来月）。
     _dt = _data_time_line()

@@ -36,7 +36,7 @@ def main() -> int:
     nodes = prompt_tree.tree()
     names = [n.get('name') for n in nodes]
     mats = [m['key'] for n in nodes for m in n['materials']]
-    chk('节点树 7 步', len(nodes) == 7, names)
+    chk('节点树 8 步（接手 + 七步）', len(nodes) == 8, names)
     chk('没有「算时间地点」这一步', all('时间地点' not in (n or '') for n in names), names)
     chk('没有 time.scope 材料', 'time.scope' not in mats, mats)
 

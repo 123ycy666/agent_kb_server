@@ -10,7 +10,9 @@
     线上「两水」两个字一个业务词都不沾，被当闲聊直答，就是漏在这里）。
 
 第 3 步（`complete` 的补问法）
-    只说了对象、没说问什么 → 补一个默认问法。逻辑没动。
+    只说了对象、没说问什么 → 补一个默认问法。
+    ★ 2026-11-11（Fred）：规则搬到页面上（`askfill` 键，第 4 步节点），词表能改，
+      也能用 `"on": false` 把这一步整个关掉 —— 关掉就是一字不加，补全表照原话查。
 
 第 4 步（`complete` 的 hits）
     拿**补问法之后**的问题去补全表里找，命中的条目原样返回（2026-11-08 改回）。
@@ -18,6 +20,8 @@
       （原来"命中即改"，表里只有一条时会把所有问题都改成那一条）。
 """
 from __future__ import annotations
+
+import json
 
 # 已经有这些，说明「在问什么」说清楚了，不用补。
 # ⚠️ 「情况」单独出现不算问清楚 —— 「两水供电所情况」还是要补成「…情况怎么样」。
@@ -33,6 +37,59 @@ _HAS_TOPIC_WORD = ('情况', '状态', '表现')
 _HAS_HOW = ('怎么样', '如何', '咋样', '好不好')
 
 _DEFAULT_ASK = '情况怎么样'
+
+# 页面 `askfill` 框空着（或哪一项没写）时用的默认规则。全是数据，没有业务词。
+_ASKFILL_DEFAULT = {
+    'on': True,
+    'default': _DEFAULT_ASK,
+    'asked': list(_ASKS),
+    'topic': list(_HAS_TOPIC_WORD),
+    'how': list(_HAS_HOW),
+}
+
+# `"on": "false" / "0" / "关" / "不补"` 都当关掉（页面上手写 JSON 什么写法都有）
+_OFF_WORDS = ('false', '0', 'off', 'no', 'none', '否', '关', '不补', '关掉')
+
+
+def _on(v) -> bool:
+    if isinstance(v, str):
+        return v.strip().lower() not in _OFF_WORDS
+    return bool(v)
+
+
+def askfill_config() -> dict:
+    """第 3 步补问法的规则：读页面 `askfill`，缺什么用默认值。
+
+    读不到 / JSON 写坏 → 用默认规则（跟以前完全一样），不许让问答崩。
+    """
+    cfg = {k: (list(v) if isinstance(v, list) else v) for k, v in _ASKFILL_DEFAULT.items()}
+    try:
+        from app.secretary import prompt_text
+        raw = str(prompt_text.get('askfill', '') or '').strip()
+    except Exception as exc:                       # noqa: BLE001 - 读不到框就用默认规则
+        print('[preprocess] 补问法规则读取失败（按默认）：%s: %s'
+              % (type(exc).__name__, str(exc)[:120]), flush=True)
+        return cfg
+    if not raw:
+        return cfg
+    try:
+        got = json.loads(raw)
+    except Exception as exc:                       # noqa: BLE001 - JSON 写坏就用默认规则
+        print('[preprocess] 补问法规则不是合法 JSON（按默认）：%s: %s'
+              % (type(exc).__name__, str(exc)[:120]), flush=True)
+        return cfg
+    if not isinstance(got, dict):
+        return cfg
+    if 'on' in got:
+        cfg['on'] = _on(got['on'])
+    d = str(got.get('default') or '').strip()
+    if d:
+        cfg['default'] = d
+    for k in ('asked', 'topic', 'how'):
+        v = got.get(k)
+        if isinstance(v, list):
+            cfg[k] = [str(x) for x in v if str(x).strip()]
+    return cfg
 
 NOT_GO = '不走'
 
@@ -169,20 +226,25 @@ def complete(question: str) -> dict:
 
     只在第 1 步判"走"之后调用 —— 否则「帮我写个通知」会被补成「通知情况怎么样」。
     `text` 是补问法之后的问题；`hits` 是**拿这句话**去补全表命中的条目（问题本身不被替换）。
+    规则来自页面 `askfill`（可改、可关）：`"on": false` = 一字不加，补全表照原话查。
     """
     q = str(question or '').strip()
     out = {'text': q, 'changed': False, 'hits': []}
     if not q:
         return out
-    # 已经说清了在问什么 → 一个字都不加
-    if any(w in q for w in _ASKS):
+    cfg = askfill_config()
+    if not cfg['on']:
         out['hits'] = hits(q)
         return out
-    if any(w in q for w in _HAS_TOPIC_WORD) and not any(w in q for w in _HAS_HOW):
+    # 已经说清了在问什么 → 一个字都不加
+    if any(w in q for w in cfg['asked']):
+        out['hits'] = hits(q)
+        return out
+    if any(w in q for w in cfg['topic']) and not any(w in q for w in cfg['how']):
         # 「两水供电所情况」→ 只补「怎么样」，不要再叠一个「情况」
         out['text'] = q + '怎么样'
     else:
-        out['text'] = q + _DEFAULT_ASK
+        out['text'] = q + cfg['default']
     out['changed'] = True
     # ★ 2026-11-08（Fred）：改回用**补问法之后**的问题查表 —— 补出来的问法也要能命中补全表。
     out['hits'] = hits(out['text'])

@@ -18,14 +18,21 @@
 from __future__ import annotations
 
 
-def raw_block(question: str, fixed: dict, comp: dict, history=None) -> str:
-    """送进 `confirm` 框的资料：六段，全是事实，不带任何"参考/兜底"字眼。"""
+def raw_block(question: str, fixed: dict, comp: dict, history=None,
+              ask_time: str = '') -> str:
+    """送进 `confirm` 框的资料：全是事实，不带任何"参考/兜底"字眼。
+
+    ★ 2026-11-11：多一段【提问时间】—— 问问题的时候带进来的（接口 `today` /
+      `business_date`，不传就按系统当天）。原话没说时间时，默认补成它的上一个
+      自然月靠这一段，模型不用再猜"今天是几号"。
+    """
     fixed_text = str((fixed or {}).get('text') or question or '').strip()
     comp = comp or {}
     comp_text = str(comp.get('text') or '').strip()
     items = [str(h.get('fill') or '').strip() for h in (comp.get('hits') or [])]
     items = [x for x in items if x]
-    lines = ['【本轮原话】%s' % (question or ''),
+    lines = ['【提问时间】%s' % (str(ask_time or '').strip() or '（没传）'),
+             '【本轮原话】%s' % (question or ''),
              '【更正后】%s' % (fixed_text or question or ''),
              '【补问法后】%s' % (comp_text or fixed_text or question or ''),
              '【补全表命中】%s' % ('\n'.join(items) if items else '（无）')]
@@ -44,13 +51,14 @@ def raw_block(question: str, fixed: dict, comp: dict, history=None) -> str:
 
 
 def run(question: str, fixed: dict, comp: dict, history=None,
-        ask=None) -> dict:
+        ask=None, ask_time: str = '') -> dict:
     """跑第 5 步。返回 {'used': bool, 'text': 整理后的问题 / 空, 'block': 资料}。
 
     `ask(system, user)` 由调用方注入（agent 的一次模型调用）；框空或没有 ask → 不调模型，
     原路下发（block 就是第 6 步的输入）。
+    `ask_time` = 提问时间（YYYY-MM-DD），原话没说时间时「默认上一个月」的基准。
     """
-    block = raw_block(question, fixed, comp, history)
+    block = raw_block(question, fixed, comp, history, ask_time)
     out = {'used': False, 'text': '', 'block': block}
     try:
         from app.secretary import prompt_text

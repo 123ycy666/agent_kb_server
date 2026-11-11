@@ -32,7 +32,11 @@ TEXT_KEYS = {
     # 这两段原来是代码里的词表匹配（`modes.judge`）和散在 agent 里的判断，改一次要发版。
     # 现在都是纯文本，填什么生效什么；空着 = 这一步不做判断（见 preprocess / confirm）。
     'intent': '① 要不要走预处理（空 = 全部走：纠错+补全+补时间地点）',
-    'confirm': '⑥ 问题确定（空 = 不归整，原样往下传）',
+    # ★ 2026-11-11（Fred）：补问法原来是代码里的词表（preprocess._ASKS），改一次要发版。
+    #   现在整份规则是页面上的 JSON：哪些词算"已经说清在问什么"、默认补哪句，
+    #   以及 `"on": false` 把这一步整个关掉（关掉 = 一字不加）。
+    'askfill': '③ 补问法（JSON：on / default / asked / topic / how）',
+    'confirm': '⑤ 问题确定（空 = 不归整，原样往下传）',
     # 工具说明（2026-11-05）：告诉模型「动手前先 kb_search 取做法」。
     # 这是机制说明，不是业务规则；页面上可改可清空。
     'tools': '工具说明（空 = 用代码里的默认段；页面上可改）',
@@ -42,7 +46,7 @@ TEXT_KEYS = {
 }
 
 # 这些 key 存 JSON，保存时校验结构和可计算的值。
-_JSON_KEYS = {'modes', 'keywords'}
+_JSON_KEYS = {'modes', 'keywords', 'askfill'}
 
 _TTL = 60.0
 _CACHE: dict = {}
@@ -144,7 +148,7 @@ def keywords() -> dict:
 
 def all_texts() -> list[dict]:
     """给页面：每个 key 的当前正文、是否被覆盖、字数。"""
-    from app.secretary import prompts_data
+    from app.secretary import preprocess, prompts_data
     defaults = {
         'identity': prompts_data.IDENTITY,
         'redlines': '',          # 2026-11-03 起默认空（代码原文已移到 docs 备份）
@@ -154,6 +158,8 @@ def all_texts() -> list[dict]:
         'keywords': '',
         # 2026-11-03：两个流程判断框，默认空（空 = 不做判断）
         'intent': '',
+        # ★ 2026-11-11：补问法默认给代码里那套词表（页面上改，或 "on": false 关掉）
+        'askfill': json.dumps(preprocess._ASKFILL_DEFAULT, ensure_ascii=False, indent=2),
         'confirm': '',
         # 2026-11-05：工具说明，默认给一段机制说明
         'tools': DEFAULT_TOOLS_GUIDE,
@@ -200,6 +206,9 @@ def save(key: str, body: str, user: str = '') -> dict:
             # 词表既是 {"说法": ["…"]} 的对象，也可以直接给数组 —— 两种都收（2026-11-05）。
             if not isinstance(parsed, (dict, list)):
                 return {'error': '这个 key 要 JSON 对象或数组'}
+        elif key == 'askfill':
+            if not isinstance(parsed, dict):
+                return {'error': '补问法要 JSON 对象（{"on": true, "default": "情况怎么样", …}）'}
         elif not isinstance(parsed, list):
             return {'error': '这个 key 要 JSON 数组（["说法", …]）'}
     try:

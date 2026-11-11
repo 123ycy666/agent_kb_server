@@ -15,6 +15,7 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -63,6 +64,47 @@ const SLOT_KEYS: Record<string, string> = {
   'mat.check': 'check',
 }
 
+// ── 补问法（2026-11-11）：存的是 JSON，但**不给 Fred 看 JSON** —— 页面上就是开关 + 几行词表。
+type AskFill = {
+  on: boolean
+  default: string
+  asked: string[]
+  topic: string[]
+  how: string[]
+}
+
+const ASKFILL_OFF = ['false', '0', 'off', 'no', 'none', '否', '关', '不补', '关掉']
+
+function parseAskfill(text: string): AskFill | null {
+  let o: any
+  try {
+    o = JSON.parse(text || '{}')
+  } catch {
+    return null
+  }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null
+  const out: AskFill = { on: true, default: '情况怎么样', asked: [], topic: [], how: [] }
+  if ('on' in o) {
+    out.on =
+      typeof o.on === 'string' ? !ASKFILL_OFF.includes(o.on.trim().toLowerCase()) : !!o.on
+  }
+  if (typeof o.default === 'string' && o.default.trim()) out.default = o.default.trim()
+  for (const k of ['asked', 'topic', 'how'] as const) {
+    if (Array.isArray(o[k])) {
+      out[k] = o[k].map((x: any) => String(x).trim()).filter((x: string) => x)
+    }
+  }
+  return out
+}
+
+function dumpAskfill(v: AskFill): string {
+  return JSON.stringify(
+    { on: v.on, default: v.default, asked: v.asked, topic: v.topic, how: v.how },
+    null,
+    2
+  )
+}
+
 export default function Prompts() {
   const [nodes, setNodes] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(true)
@@ -86,6 +128,8 @@ export default function Prompts() {
   const [txtBody, setTxtBody] = useState('')
   const [txtOverridden, setTxtOverridden] = useState(false)
   const [txtSaving, setTxtSaving] = useState(false)
+  // 补问法的表单（txtKey === 'askfill' 时用；null = 原文不是合法 JSON，退回文本框改）
+  const [askForm, setAskForm] = useState<AskFill | null>(null)
 
   // ── 纠错词典（2026-11-02）────────────────────────────────
   const [lexOpen, setLexOpen] = useState(false)
@@ -113,6 +157,7 @@ export default function Prompts() {
       setTxtName(name || hit.name)
       setTxtBody(hit.body || '')
       setTxtOverridden(!!hit.overridden)
+      setAskForm(key === 'askfill' ? parseAskfill(hit.body || '') : null)
       setTxtOpen(true)
     } catch (e) {
       message.error((e as Error).message)
@@ -122,7 +167,9 @@ export default function Prompts() {
   const saveText = async () => {
     setTxtSaving(true)
     try {
-      const r: any = await http.put(`/prompts/texts/${txtKey}`, { body: txtBody })
+      // 补问法：把表单拼回 JSON 再存，页面上的文本版不参与
+      const body = txtKey === 'askfill' && askForm ? dumpAskfill(askForm) : txtBody
+      const r: any = await http.put(`/prompts/texts/${txtKey}`, { body })
       if (r?.ok) {
         message.success('已保存，下一轮问答生效')
         setTxtOverridden(true)
@@ -824,14 +871,127 @@ export default function Prompts() {
               ? '当前用的是你改过的版本（存 prompt_text 表）；点「恢复默认」回到代码里的原文。'
               : '当前用的是代码里的原文；保存后就用你改的版本，下一轮问答生效。'
           }
-          description="模式做法和词表是 JSON，改值就行；身份是纯文本。"
+          description={
+            txtKey === 'askfill'
+              ? '这一步只管"补哪句问法"。要补成什么口径、几个方面，在上一行的「④ 补全表」里配。'
+              : '模式做法和词表是 JSON，改值就行；身份是纯文本。'
+          }
         />
-        <Input.TextArea
-          value={txtBody}
-          onChange={(e) => setTxtBody(e.target.value)}
-          autoSize={{ minRows: 18, maxRows: 30 }}
-          style={{ fontSize: 12 }}
-        />
+        {txtKey === 'askfill' && askForm ? (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Card size="small">
+              <Space align="center" wrap>
+                <Switch
+                  checked={askForm.on}
+                  onChange={(v) => setAskForm({ ...askForm, on: v })}
+                />
+                <Text strong>这一步做不做</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {askForm.on
+                    ? '开：只说了对象、没说问什么 → 补一句问法'
+                    : '关：问题一个字不加，补全表照原话查'}
+                </Text>
+              </Space>
+            </Card>
+
+            <div>
+              <Text strong>没问什么时，补这句话</Text>
+              <Input
+                value={askForm.default}
+                disabled={!askForm.on}
+                placeholder="情况怎么样"
+                style={{ marginTop: 6 }}
+                onChange={(e) => setAskForm({ ...askForm, default: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <Text strong>已经说清在问什么（沾上这些词就不补）</Text>
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  打一个词按回车加进去，点 × 删掉；共 {askForm.asked.length} 个
+                </Text>
+              </div>
+              <Select
+                mode="tags"
+                style={{ width: '100%', marginTop: 6 }}
+                value={askForm.asked}
+                disabled={!askForm.on}
+                tokenSeparators={[',', '，', '、', ' ']}
+                placeholder="多少 / 占比 / 同比 / 排名 …"
+                onChange={(v: string[]) => setAskForm({ ...askForm, asked: v })}
+              />
+            </div>
+
+            <div>
+              <Text strong>说了这些词，就只补「怎么样」</Text>
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  避免「两水供电所情况」被补成「…情况情况怎么样」；共 {askForm.topic.length} 个
+                </Text>
+              </div>
+              <Select
+                mode="tags"
+                style={{ width: '100%', marginTop: 6 }}
+                value={askForm.topic}
+                disabled={!askForm.on}
+                tokenSeparators={[',', '，', '、', ' ']}
+                placeholder="情况 / 状态 / 表现"
+                onChange={(v: string[]) => setAskForm({ ...askForm, topic: v })}
+              />
+            </div>
+
+            <div>
+              <Text strong>已经在问「怎么样」的说法（有它就不再补）</Text>
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  共 {askForm.how.length} 个
+                </Text>
+              </div>
+              <Select
+                mode="tags"
+                style={{ width: '100%', marginTop: 6 }}
+                value={askForm.how}
+                disabled={!askForm.on}
+                tokenSeparators={[',', '，', '、', ' ']}
+                placeholder="怎么样 / 如何 / 咋样"
+                onChange={(v: string[]) => setAskForm({ ...askForm, how: v })}
+              />
+            </div>
+
+            <Card size="small" title="这一轮会怎么用（按现在的设置）">
+              <Space direction="vertical" size={2}>
+                <Text style={{ fontSize: 12 }}>
+                  「两水」→ {(askForm.on ? '两水' + (askForm.default || '') : '两水')}
+                </Text>
+                <Text style={{ fontSize: 12 }}>
+                  「两水供电所情况」→{' '}
+                  {askForm.on ? '两水供电所情况怎么样' : '两水供电所情况'}
+                </Text>
+                <Text style={{ fontSize: 12 }}>
+                  「两水供电所有多少户」→ 两水供电所有多少户（说清了，不加）
+                </Text>
+              </Space>
+            </Card>
+          </Space>
+        ) : (
+          <>
+            {txtKey === 'askfill' && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="这份不是合法的 JSON（页面认不出），先在下面按原文改对再保存。"
+              />
+            )}
+            <Input.TextArea
+              value={txtBody}
+              onChange={(e) => setTxtBody(e.target.value)}
+              autoSize={{ minRows: 18, maxRows: 30 }}
+              style={{ fontSize: 12 }}
+            />
+          </>
+        )}
       </Drawer>
 
       {/* 纠错词典 */}

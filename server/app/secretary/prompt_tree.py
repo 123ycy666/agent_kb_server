@@ -36,36 +36,44 @@ NODES = [
         ],
     },
     {
-        'id': 'p4', 'no': 4, 'name': '补问法 + 查补全表', 'desc': '补默认问法；拿原问题和补后问题去表里找命中（只查不改）',
+        'id': 'p4', 'no': 4, 'name': '补问法', 'desc': '只说了对象、没说问什么 → 补一个默认问法；补什么、补不补都在页面上配',
         'materials': [
-            {'key': 'mat.complete', 'name': '③ 补全表（时间地点也在这里配）', 'editable': True},
+            # ★ 2026-11-11（Fred）：补问法是**独立一步**（纠错之后），词表搬到页面上 ——
+            #   能改词、能用 "on": false 把这一步整个关掉。
+            {'key': 'base.askfill', 'name': '③ 补问法（可改可关）', 'editable': True},
         ],
     },
     {
-        'id': 'p5', 'no': 5, 'name': '问题确定', 'desc': '把前面几步揉成四行定稿：要什么 / 时间 / 范围 / 其它要求',
+        'id': 'p5', 'no': 5, 'name': '查补全表', 'desc': '拿原话和补后问题去表里找命中（只查不改，命中的条目就是"要答哪些方面"）',
         'materials': [
-            {'key': 'base.confirm', 'name': '④ 问题确定', 'editable': True},
+            {'key': 'mat.complete', 'name': '④ 补全表（时间地点也在这里配）', 'editable': True},
         ],
     },
     {
-        'id': 'p6', 'no': 6, 'name': '干活（主循环）', 'desc': '拿定稿自己决定查字段 / 查知识库 / 查数 / 写文档；信息不够就反问用户',
+        'id': 'p6', 'no': 6, 'name': '问题确定', 'desc': '把前面几步揉成四行定稿：要什么 / 时间 / 范围 / 其它要求',
         'materials': [
-            {'key': 'mat.fetch', 'name': '⑤ 查数口径', 'editable': True},
+            {'key': 'base.confirm', 'name': '⑤ 问题确定', 'editable': True},
+        ],
+    },
+    {
+        'id': 'p7', 'no': 7, 'name': '干活（主循环）', 'desc': '拿定稿自己决定查字段 / 查知识库 / 查数 / 写文档；信息不够就反问用户',
+        'materials': [
+            {'key': 'mat.fetch', 'name': '⑥ 查数口径', 'editable': True},
             {'key': 'semantic.tables', 'name': '数据表清单', 'editable': False},
             {'key': 'semantic.columns', 'name': '字段说明', 'editable': False},
             {'key': 'semantic.codes', 'name': '字典表', 'editable': False},
         ],
     },
     {
-        'id': 'p7', 'no': 7, 'name': '回答', 'desc': '拿查回来的信息，按回答规则写成回答',
+        'id': 'p8', 'no': 8, 'name': '回答', 'desc': '拿查回来的信息，按回答规则写成回答',
         'materials': [
-            {'key': 'mat.answer', 'name': '⑥ 回答规则', 'editable': True},
+            {'key': 'mat.answer', 'name': '⑦ 回答规则', 'editable': True},
         ],
     },
 ]
 
 # ★ 2026-11-03（Fred）：第 5 步「算时间地点」整块删除 —— 代码不再换算月份/年份，也不补默认。
-#   要补什么由 Fred 在「补全表」（第 4 步）里自己配，命中后交给第 5 步「问题确定」判断怎么用。
+#   要补什么由 Fred 在「补全表」（现在的第 5 步）里自己配，命中后交给「问题确定」判断怎么用。
 
 
 
@@ -104,6 +112,13 @@ def _code_text(key: str) -> str:
     if key == 'base.intent':
         from app.secretary import prompt_text
         return prompt_text.get('intent', '')
+    if key == 'base.askfill':
+        import json as _json
+        from app.secretary import preprocess, prompt_text
+        raw = (prompt_text.get('askfill', '') or '').strip()
+        if raw:
+            return raw
+        return _json.dumps(preprocess._ASKFILL_DEFAULT, ensure_ascii=False, indent=2)
     if key == 'base.confirm':
         from app.secretary import prompt_text
         return prompt_text.get('confirm', '')
@@ -176,7 +191,8 @@ WHEN = {
     'base.identity': '每条消息都在',
     'base.redlines': '填了才注入（每条消息）',
     'base.priority': '填了才注入（每条消息）',
-    'base.intent': '第 1 步：每次调用一次模型判断',
+    'base.intent': '第 2 步：每次调用一次模型判断',
+    'base.askfill': '第 4 步：预处理里代码读；改了下一轮生效，"on": false = 不补问法',
     'base.confirm': '第 6 步：每次调用一次模型归整',
     'modes.text': '每条消息都在（基础流程那段）',
     'mat.fetch': '第 7 步干活循环里',
@@ -184,8 +200,8 @@ WHEN = {
     'semantic.tables': '干活循环里（工具目录）',
     'semantic.columns': '不进提示词：describe_table 按需取',
     'semantic.codes': '干活循环里（业务码表）',
-    'nc.typo': '预处理：代码读；页面可增删改，60 秒内生效',
-    'mat.complete': '预处理：代码查表，不进提示词；命中只作参考',
+    'nc.typo': '第 3 步：预处理代码读；页面可增删改，60 秒内生效',
+    'mat.complete': '第 5 步：预处理代码查表，不进提示词；命中只作参考',
     'modes.keywords': '已不参与链路（词表匹配已删）',
 }
 
@@ -196,6 +212,7 @@ TEXT_KEY = {
     'base.redlines': 'redlines',
     'base.priority': 'priority',
     'base.intent': 'intent',
+    'base.askfill': 'askfill',
     'base.confirm': 'confirm',
     'modes.text': 'modes',
     'modes.keywords': 'keywords',
