@@ -443,7 +443,7 @@ async def _ask_entry(request: Request, actor: CurrentActor, force_data: bool = F
     # 比原始问法更容易被对方识别（「环谭」已纠成「环潭」、「今年」已补成具体年份）。
     # 结果**平铺**进响应（layer / method / mainId / data，字段名与对方一致）；
     # 调用失败或没识别就什么都不加 —— 前端没有 method 即不跳转，正常看问答。
-    if want_screen and not force_data and screen_intent_svc.enabled():
+    if want_screen and screen_intent_svc.enabled():
         try:
             _si = await run_in_threadpool(
                 screen_intent_svc.preview,
