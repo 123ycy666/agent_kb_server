@@ -2,14 +2,16 @@
 """办公线（2026-11-11）：办事题自己一条线，不经过查数的 2–6 步预处理。
 
 一条线做的事：
-    取做法（howto） → 计划（代码生成，记 trace） → 工具循环（可查库、可读文件）
-    → 必须交出产物（docx / xlsx） → 自检 → 产物卡
+    取做法（howto） → 计划（记 trace） → 循环（可查库、可读文件、可读本会话前几轮）
+    → 交出产物（docx / xlsx） → 自检 → 产物卡
 
 三条分支（同一套循环，契约不同）：
-    office  要有文件     read  要清单（不需要文件）   chat  直接答（0 工具）
+    office  要有文件     read  要清单     chat  直接答（0 工具）
 
-和查数线的关系：**不共用编排**。证据包、交卷对账、写正文一概不用；
-`run_sql` 是共用实现，但取数口径不注入这条线。
+2026-11-12 按 Fred 的要求改：**不加安全网**。
+原先那套「时间预算 / 查库次数上限 / 原地打转检测 / 缺产物催办」全删了——
+那些是代码替模型管节奏，模型不行就该暴露出来，再一个个解；靠催办遮住只是把问题推迟。
+现在只保留两件框架必需：步数上限（防死循环）和模型不再发工具时结束。
 """
 from __future__ import annotations
 
@@ -30,13 +32,11 @@ KIND_HINT = {
             '"widths": [14, 10], "total_row": true, "freeze": "A3"}]}',
 }
 
-CONTRACT = ('【交付契约】本轮必须交出文件，不能只写文字。'
-            '内容想好后调 make_file(kind="%s", spec={...})；'
+CONTRACT = ('【交付契约】本轮要交出文件：内容想好后调 make_file(kind="%s", spec={...})。'
             '版式（字体/字号/行距/页边距/落款/页码）由系统按做法自动套，你不用写格式代码。'
-            '出完文件后只回一句话说明做了什么，不要把正文再贴一遍。')
+            '出完文件后一句话说明做了什么，不要把正文再贴一遍。')
 
-READ_CONTRACT = ('【交付契约】本轮交清单，不生成文件。每条按做法给的字段写：'
-                 '结论 / 出处 / 谁做 / 时限；读完全文（read_file 的 next_offset 到 null）再写。')
+READ_CONTRACT = '【交付契约】本轮交清单：每条按做法给的字段写（结论 / 出处 / 谁做 / 时限）。'
 
 
 def _identity() -> str:
@@ -59,15 +59,12 @@ def _system(block: str, product: str, lane: str, has_files: bool) -> str:
         return '\n'.join(parts)
     if lane == 'read':
         parts += ['【这条线是读件】把文件里跟用户有关的东西挑出来，一条一结论，带出处。',
-                  '只依据读到的文件内容；文件里没有的写「文件中未提及」，不许用常识或业务库补。']
+                  '只依据读到的文件内容；文件里没有的写「文件中未提及」。']
     else:
-        parts += ['【这条线是办事】用户要的是一份能拿走的东西，不是一段说明。',
-                  '做法比你的习惯优先：做法里定的结构、字体、篇幅、口吻，一律照做。',
-                  '数字只用工具查回来的原始结果；查不到就写「需另行核实」，不许自己补一个。',
-                  '用户说「刚才问的」「上面这些」「这批」时，指【本会话前几轮】里的内容——'
-                  '把那里已有的数字和明细照搬进文件，**不要**答「会话里没有上一轮数据」，'
-                  '也不要因为没重查就说「需另行核实」。',
-                  '不要在正文里复述思考过程，不要写「好的，我来帮你」。']
+        parts += ['【这条线是办事】用户要的是一份能拿走的东西。',
+                  '做法比习惯优先：做法里定的结构、字体、篇幅、口吻，一律照做。',
+                  '数字只用查回来的原始结果；查不到就写「需另行核实」。',
+                  '用户说「刚才问的」「上面这些」「这批」时，指【本会话前几轮】里的内容。']
     if block:
         parts += ['', block]
     if lane == 'office':
@@ -80,6 +77,24 @@ def _system(block: str, product: str, lane: str, has_files: bool) -> str:
     if has_files:
         parts += ['', '【本轮带来了文件】正文用 read_file(file_id) 分页读到 next_offset 为 null 为止。']
     return '\n'.join(parts)
+
+
+def _history_block(session_id) -> str:
+    """本会话前几轮：用户说「把刚才那些做成 Excel」时，模型得看得见上一轮查回了什么。"""
+    if not session_id:
+        return ''
+    try:
+        from app.secretary import qa_log
+        hist = qa_log.load_context(session_id, limit=5) or []
+    except Exception:                               # noqa: BLE001 - 读不到按无历史
+        return ''
+    if not hist:
+        return ''
+    lines = []
+    for h in hist[-5:]:
+        lines.append('上一轮问：%s\n上一轮答：%s' % (
+            str(h.get('raw_question') or '')[:200], str(h.get('answer') or '')[:1500]))
+    return '\n\n【本会话前几轮】\n' + '\n\n'.join(lines)
 
 
 def ask_office(question, routed, *, lane='office', model, session_id=None, user_id=None,
@@ -99,7 +114,7 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
         product = 'text'
     elif product not in ('docx', 'xlsx'):
         product = 'docx'
-    max_steps = int(max_steps or (8 if lane == 'read' else 12))
+    max_steps = int(max_steps or (8 if lane == 'read' else 14))
 
     hp = {'item': {}, 'block': ''}
     if lane != 'chat':
@@ -109,8 +124,8 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
         trace.append({'seq': len(trace) + 1, 'kind': 'plan', 'tool': 'plan',
                       'result': {'做法': item.get('task') or '（没匹配到做法，按通用版式）',
                                  '产物': product,
-                                 '步骤': ['取做法', '查数/读文件', '按做法成文',
-                                          '生成文件', '自检', '交付'] if lane == 'office'
+                                 '步骤': ['取做法', '查数/读文件', '按做法成文', '生成文件',
+                                          '自检', '交付'] if lane == 'office'
                                  else ['取做法', '读全文', '按字段出清单']}})
     tools_file.set_ctx(user_id=user_id,
                        out_dir='data/agent_out/%s' % (session_id or 'anon'),
@@ -118,24 +133,7 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
 
     user_content = '【本轮要办的事】\n' + str(question or '')
     user_content += '\n\n【今天】%s' % (today or time.strftime('%Y-%m-%d'))
-    # ★ 2026-11-12：本会话前几轮 ——「把刚才问的这些做成 Excel」全靠它。
-    #   不注入的话办公线看不见上一轮查回来的数，只能答「会话里没有上一轮数据」。
-    history = []
-    if session_id:
-        try:
-            from app.secretary import qa_log as _qa
-            history = _qa.load_context(session_id, limit=5) or []
-        except Exception:                           # noqa: BLE001 - 读不到历史按无历史
-            history = []
-    if history:
-        lines = []
-        for h in history[-5:]:
-            lines.append('上一轮问：%s\n上一轮答：%s' % (
-                str(h.get('raw_question') or '')[:200],
-                str(h.get('answer') or '')[:1500]))
-        user_content += ('\n\n【本会话前几轮】（用户说「刚才」「上面这些」「这批」时指这里；'
-                         '里面已有的数字和明细可以直接拿来用，不必重查；'
-                         '若本轮工具查回了新数，以本轮结果为准）\n' + '\n\n'.join(lines))
+    user_content += _history_block(session_id)
     files = list(doc_files or [])
     if files:
         lines = ['【文件%d】《%s》 约 %s 字，file_id=%s'
@@ -145,70 +143,31 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
     elif doc_context:
         user_content += '\n\n【用户上传的文件】\n' + str(doc_context)[:20000]
 
-    system = _system(hp.get('block') or '', product, lane, bool(files))
-    messages = [{'role': 'system', 'content': system},
+    messages = [{'role': 'system',
+                 'content': _system(hp.get('block') or '', product, lane, bool(files))},
                 {'role': 'user', 'content': user_content}]
 
     names = READ_TOOLS if lane == 'read' else OFFICE_TOOLS
     tools = [] if lane == 'chat' else [t for t in A.TOOLS if t['function']['name'] in names]
-    answer, artifacts = '', []
-    nudges = 0
-    sql_calls = 0
-    seen = set()
-    stuck = 0
-    budget_s = float((routed or {}).get('budget_s') or 100)
-
-    def _nudge(why: str) -> None:
-        messages.append({'role': 'user', 'content':
-                         '【收尾】%s 数据已经够用，不要再查。立刻调 make_file(kind="%s", spec={...}) '
-                         '把文件生成出来，缺的数字在正文里写「需另行核实」。' % (why, product)})
+    answer = ''
 
     for step in range(1, max_steps + 1):
         if should_stop is not None and should_stop():
             answer = '（已停止生成）'
             break
-        over_time = budget_s > 0 and (time.time() - t_all) > budget_s
-        resp = A._chat(messages, model, think=False, use_tools=bool(tools),
-                       tools=tools or None)
+        resp = A._chat(messages, model, think=False, use_tools=bool(tools), tools=tools or None)
         msg = resp['choices'][0]['message']
         calls = msg.get('tool_calls') or []
-        if over_time and lane == 'office' and calls and nudges < 2:
-            nudges += 1
-            messages.append({'role': 'assistant', 'content': msg.get('content') or '',
-                             'tool_calls': calls})
-            for tc in calls:
-                messages.append({'role': 'tool', 'tool_call_id': tc.get('id'),
-                                 'content': '{"skipped":true,"reason":"时间预算已到，本轮不再查"}'})
-            _nudge('时间预算（%ds）到了。' % budget_s)
-            trace.append({'seq': len(trace) + 1, 'kind': 'budget', 'tool': 'time',
-                          'content': '到时间预算，催出文件'})
-            continue
         if not calls:
             answer = (msg.get('content') or '').strip()
-            if lane != 'office':
-                break
-            if any(t.get('tool') == 'make_file' and not (t.get('result') or {}).get('error')
-                   for t in trace):
-                break
-            if nudges >= 2:
-                answer = (answer + '\n\n（文件没生成成功，上面是文书内容，可直接复制使用。）').strip()
-                break
-            nudges += 1
-            messages.append({'role': 'assistant', 'content': answer or '（未产出文件）'})
-            messages.append({'role': 'user', 'content':
-                             '【还差交付物】文件还没生成。请立刻调 make_file(kind="%s", spec={...})，'
-                             '内容用你已经查到或已知的素材；不要只写文字。' % product})
-            trace.append({'seq': len(trace) + 1, 'kind': 'nudge', 'tool': 'contract',
-                          'content': '未产出交付物，催一轮（第 %d 次）' % nudges})
-            continue
+            break
         messages.append({'role': 'assistant', 'content': msg.get('content') or '',
                          'tool_calls': calls})
         live = [c for c in calls if ((c.get('function') or {}).get('name')) != 'finish']
         outs = A._exec_calls(live) if live else []
         by_id = {tc.get('id'): o for tc, o in zip(live, outs)}
         for tc in calls:
-            name = (tc.get('function') or {}).get('name')
-            if name == 'finish':
+            if ((tc.get('function') or {}).get('name')) == 'finish':
                 messages.append({'role': 'tool', 'tool_call_id': tc.get('id'),
                                  'content': '{"ok":true}'})
                 continue
@@ -221,36 +180,10 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
             messages.append({'role': 'tool', 'tool_call_id': tc['id'],
                              'content': tools_result.deliver(o['name'], o['result'],
                                                              session_id=session_id)})
-        sql_calls += len([o for o in outs if o.get('name') == 'run_sql'])
-        if lane == 'office' and nudges < 2:
-            if sql_calls >= 10:
-                nudges += 1
-                _nudge('这一轮已经查了 %d 次库。' % sql_calls)
-                trace.append({'seq': len(trace) + 1, 'kind': 'budget', 'tool': 'sql_cap',
-                              'content': '查库 %d 次，催出文件' % sql_calls})
-                continue
-            sigs = {json.dumps(o.get('result'), ensure_ascii=False, sort_keys=True, default=str)[:800]
-                    for o in outs
-                    if not (isinstance(o.get('result'), dict) and o['result'].get('error'))}
-            if sigs:
-                stuck = stuck + 1 if not (sigs - seen) else 0
-                seen |= sigs
-            if stuck >= 2:
-                nudges += 1
-                _nudge('连续两轮查回来的是同一批数据。')
-                trace.append({'seq': len(trace) + 1, 'kind': 'budget', 'tool': 'stuck',
-                              'content': '原地打转，催出文件'})
-                continue
         if any(((c.get('function') or {}).get('name')) == 'finish' for c in calls):
-            if lane == 'office' and not any(
-                    t.get('tool') == 'make_file' and not (t.get('result') or {}).get('error')
-                    for t in trace) and nudges < 2:
-                nudges += 1
-                messages.append({'role': 'user', 'content':
-                                 '【还差交付物】文件还没生成，请调 make_file(kind="%s")。' % product})
-                continue
             break
 
+    artifacts = []
     for t in trace:
         r = t.get('result') or {}
         if t.get('kind') == 'tool' and t.get('tool') == 'make_file' and r.get('url'):
@@ -264,15 +197,15 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
                                   'name': o.get('name'), 'file_id': o.get('file_id'),
                                   'url': o.get('url'), 'self_check': '未自检'})
 
+    if not answer:
+        answer = ('文件已生成：' + artifacts[0]['name']) if artifacts else '本轮没有给出内容。'
     result = {
         'input_question': question,
-        'answer': answer or (('文件已生成：' + artifacts[0]['name']) if artifacts
-                             else '文件没生成成功：本轮查到/写出的内容没有落成文件，'
-                                  '请换个说法再试，或把要的内容直接贴给我。'),
+        'answer': answer,
         'lane': lane,
         'product': product,
         'howto': item.get('task') or '',
-        'plan': (trace[1].get('result') if len(trace) > 1 else {}),
+        'plan': (trace[0].get('result') if trace else {}),
         'artifacts': artifacts,
         'trace': trace,
         'steps': len(trace),
