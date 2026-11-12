@@ -64,6 +64,9 @@ def _system(block: str, product: str, lane: str, has_files: bool) -> str:
         parts += ['【这条线是办事】用户要的是一份能拿走的东西，不是一段说明。',
                   '做法比你的习惯优先：做法里定的结构、字体、篇幅、口吻，一律照做。',
                   '数字只用工具查回来的原始结果；查不到就写「需另行核实」，不许自己补一个。',
+                  '用户说「刚才问的」「上面这些」「这批」时，指【本会话前几轮】里的内容——'
+                  '把那里已有的数字和明细照搬进文件，**不要**答「会话里没有上一轮数据」，'
+                  '也不要因为没重查就说「需另行核实」。',
                   '不要在正文里复述思考过程，不要写「好的，我来帮你」。']
     if block:
         parts += ['', block]
@@ -115,6 +118,24 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
 
     user_content = '【本轮要办的事】\n' + str(question or '')
     user_content += '\n\n【今天】%s' % (today or time.strftime('%Y-%m-%d'))
+    # ★ 2026-11-12：本会话前几轮 ——「把刚才问的这些做成 Excel」全靠它。
+    #   不注入的话办公线看不见上一轮查回来的数，只能答「会话里没有上一轮数据」。
+    history = []
+    if session_id:
+        try:
+            from app.secretary import qa_log as _qa
+            history = _qa.load_context(session_id, limit=5) or []
+        except Exception:                           # noqa: BLE001 - 读不到历史按无历史
+            history = []
+    if history:
+        lines = []
+        for h in history[-5:]:
+            lines.append('上一轮问：%s\n上一轮答：%s' % (
+                str(h.get('raw_question') or '')[:200],
+                str(h.get('answer') or '')[:1500]))
+        user_content += ('\n\n【本会话前几轮】（用户说「刚才」「上面这些」「这批」时指这里；'
+                         '里面已有的数字和明细可以直接拿来用，不必重查；'
+                         '若本轮工具查回了新数，以本轮结果为准）\n' + '\n\n'.join(lines))
     files = list(doc_files or [])
     if files:
         lines = ['【文件%d】《%s》 约 %s 字，file_id=%s'
