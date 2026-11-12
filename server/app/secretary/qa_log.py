@@ -216,6 +216,12 @@ def _save_sync(result, sid, user_id, user_code, client_ip, channel):
                  2 if unverified else 1,
                  '未调用工具即下结论，已拦下' if unverified else None))
             ai_msg_id = cur.lastrowid
+            # 本轮的附件记到消息上（2026-11-12）：下一轮用户说「这个文章」时，
+            # 后端要能从会话里找回 file_id —— 只在提示词里给「没有上一轮」是没用的。
+            _files = result.get('files') or []
+            if _files:
+                cur.execute('UPDATE t_chat_message SET meta_json=%s WHERE id=%s',
+                            (json.dumps({'files': _files}, ensure_ascii=False), ai_msg_id))
             # trace 主行
             cur.execute(
                 'INSERT INTO t_chat_query_trace '
@@ -285,6 +291,47 @@ def _save_steps(qa_id, trace):
 
 
 # ---------------------------------------------------------------- 读（历史会话）
+
+def session_files(session_id, limit=20):
+    """本会话此前带来过的文件（按出现顺序去重，最近的在后）。
+
+    为什么要有（2026-11-12）：用户传完文件、下一轮说「这个文章里面说了什么」，
+    那一轮请求里没有 file_ids。只在提示词里写「看上一轮」不够 —— 模型要拿到
+    file_id 才能 read_file，所以后端得从会话历史里把附件找回来。
+    """
+    if not session_id:
+        return []
+    c = _conn()
+    try:
+        cur = c.cursor()
+        cur.execute(
+            'SELECT meta_json FROM t_chat_message '
+            'WHERE chat_session_id=%s AND deleted_flag=0 AND meta_json IS NOT NULL '
+            'ORDER BY seq_no DESC LIMIT %s', (session_id, max(1, int(limit or 20))))
+        out, seen = [], set()
+        for r in cur.fetchall()[::-1]:
+            raw = r.get('meta_json')
+            if isinstance(raw, str):
+                try:
+                    meta = json.loads(raw)
+                except Exception:                   # noqa: BLE001 - 坏数据跳过
+                    continue
+            else:
+                meta = raw or {}
+            for f in (meta.get('files') or []):
+                fid = f.get('file_id')
+                if fid and fid not in seen:
+                    seen.add(fid)
+                    out.append({'file_id': fid, 'name': f.get('name'),
+                                'chars': f.get('chars') or 0, 'prev': True})
+        return out
+    except Exception as exc:                        # noqa: BLE001 - 读不到按无附件
+        print('[qa_log] 读会话附件失败（忽略）：%s: %s'
+              % (type(exc).__name__, str(exc)[:120]), flush=True)
+        return []
+    finally:
+        c.close()
+
 
 def load_context(session_id, limit=5, answer_chars=400):
     """取同一场会话最近的 N 轮问答，用作**多轮上下文**。返回按时间正序（旧 → 新）。

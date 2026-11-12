@@ -368,10 +368,16 @@ function uploadDoc(inp){
   var fd=new FormData(); fd.append('file',f);
   fetch('/api/files',{method:'POST',body:fd})
    .then(function(r){return r.json();})
-   .then(function(d){
-     if(d && d.file_id){ DOCFILES.push(d); renderFiles(); }
-     else { tip.textContent='上传失败：'+((d&&d.detail&&d.detail.message)||JSON.stringify(d)); }
-   })
+     .then(function(d){
+       if(d && d.file_id){
+         DOCFILES.push(d); renderFiles();
+         /* 2026-11-12：上传的文件同时记进本会话附件，下一轮说「这个文章」时能自动带上。
+            原来只进 DOCFILES，发送后就被清空，等于每个文件只能在这一轮用一次。 */
+         if(!SESSFILES.some(function(x){return x.file_id===d.file_id;})) SESSFILES.push(d);
+         renderSessFiles();
+       }
+       else { tip.textContent='上传失败：'+((d&&d.detail&&d.detail.message)||JSON.stringify(d)); }
+     })
    .catch(function(e){tip.textContent='上传失败：'+e;});
 }
 function saveBlob(url,name){

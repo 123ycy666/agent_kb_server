@@ -1213,11 +1213,30 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #    查数线（下面第 2–6 步预处理 + 证据包 + 写正文）**原样保留、一行不动**。
     #    关掉：SECRETARY_ROUTER=0（整条链路回退到 2026-11-11 之前）。
     _lane = None
+    # 本会话此前的附件（2026-11-12）：用户上一轮传过文件、这一轮说「这个文章」时，
+    # 请求里没有 file_ids。从会话历史把 file_id 找回来，只有这句话在指代文件时才算数，
+    # 免得传过一次文件之后所有问数题都被拉进读件线。
+    _hist_files = []
+    _all_files = list(doc_files or [])
+    if session_id:
+        try:
+            from app.secretary import qa_log as _qa_mod
+            _hist_files = _qa_mod.session_files(session_id) or []
+        except Exception:                           # noqa: BLE001 - 读不到按无附件
+            _hist_files = []
+        try:
+            from app.secretary import router as _router0
+            _ref = _router0.refers_file(question)
+        except Exception:                           # noqa: BLE001
+            _ref = False
+        if _hist_files and _ref:
+            _cur_ids = {str(f.get('file_id')) for f in _all_files}
+            _all_files += [f for f in _hist_files if str(f.get('file_id')) not in _cur_ids]
     if (os.environ.get('SECRETARY_ROUTER') or '1').strip().lower() not in ('0', 'false', 'off'):
         try:
             from app.secretary import router as _router
             _lane = _router.attach_howto(
-                _router.route(question, has_files=bool(doc_files),
+                _router.route(question, has_files=bool(_all_files),
                               ask=lambda _s, _u: _ask_short(_s, _u, model)), question)
         except Exception as _exc:                   # noqa: BLE001 - 路由坏了回退原链路
             print('[agent] 入口路由失败（回退查数线）：%s: %s'
@@ -1228,10 +1247,15 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                       'result': _lane})
     if _lane and _lane.get('lane') in ('office', 'read', 'chat'):
         from app.secretary import agent_office
+        trace.append({'seq': len(trace) + 1, 'kind': 'files', 'tool': 'files',
+                      'result': {'本轮': len(doc_files or []),
+                                 '会话此前': max(0, len(_all_files) - len(doc_files or [])),
+                                 '清单': [{'name': f.get('name'), 'file_id': f.get('file_id'),
+                                          'prev': bool(f.get('prev'))} for f in _all_files]}})
         return agent_office.ask_office(
             question, _lane, lane=_lane['lane'], model=model, session_id=session_id,
             user_id=user_id, user_code=user_code, client_ip=client_ip, channel=channel,
-            doc_files=doc_files, doc_context=doc_context, trace=trace,
+            doc_files=_all_files or None, doc_context=doc_context, trace=trace,
             should_stop=should_stop, max_steps=max_steps, today=today)
     # 上游（业务系统）指定的数据范围：提问人是谁、在哪个页面只有上游知道，所以它**强制**。
     # 上游强制的数据范围（业务系统传的，只记录、不再注入提示词）

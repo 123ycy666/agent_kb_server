@@ -75,7 +75,10 @@ def _system(block: str, product: str, lane: str, has_files: bool) -> str:
     if lane == 'read':
         parts += ['', READ_CONTRACT]
     if has_files:
-        parts += ['', '【本轮带来了文件】正文用 read_file(file_id) 分页读到 next_offset 为 null 为止。']
+        parts += ['', '【可用文件】清单里既有本轮带来的，也有本会话此前带来的（标「此前」）。'
+                      '用户说「这个文章」「这份材料」「刚才那个」时，指清单里的文件——'
+                      '用 read_file(file_id) 把正文读出来（分页读到 next_offset 为 null）；'
+                      '只有真的读不出来，才说读不到。']
     return '\n'.join(parts)
 
 
@@ -136,10 +139,11 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
     user_content += _history_block(session_id)
     files = list(doc_files or [])
     if files:
-        lines = ['【文件%d】《%s》 约 %s 字，file_id=%s'
-                 % (i, f.get('name'), f.get('chars'), f.get('file_id'))
+        lines = ['【文件%d】《%s》 约 %s 字，file_id=%s%s'
+                 % (i, f.get('name'), f.get('chars'), f.get('file_id'),
+                    '（本会话此前带来的）' if f.get('prev') else '')
                  for i, f in enumerate(files, 1)]
-        user_content += '\n\n【本轮带来的文件】\n' + '\n'.join(lines)
+        user_content += '\n\n【可用的文件】\n' + '\n'.join(lines)
     elif doc_context:
         user_content += '\n\n【用户上传的文件】\n' + str(doc_context)[:20000]
 
