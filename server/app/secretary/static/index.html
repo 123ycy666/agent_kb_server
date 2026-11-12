@@ -175,7 +175,8 @@ try{
         <button id="stop" class="stopbtn" onclick="stopGen()" style="display:none">停止</button>
         <button id="go" class="send" onclick="ask()">发送</button>
       </div>
-      <div id="presets" class="presets"></div>
+      <!-- 2026-11-12：预设问题区块先隐藏（Fred），不渲染、不请求 /api/presets -->
+    <div id="presets" class="presets" style="display:none"></div>
       <details class="profilebox">
         <summary>用户画像（可选）</summary>
         <textarea id="profile" rows="2" placeholder="例如：我是市公司运检部专责，只看全市和随县，重点看线损与工单"></textarea>
@@ -248,7 +249,7 @@ function updateKbHint(){
     n===0 ? '⚠️ 未勾选任何库：将按系统默认范围检索' : ('已选 '+n+' / '+all+' 个');
 }
 loadKbs();
-loadPresets();
+/* loadPresets(); —— 2026-11-12 Fred：预设问题区块先隐藏，连请求也不发 */
 setSession(getSession());
 
 /* ---------------- 预设问题（2026-10-20 新增） ----------------
