@@ -60,6 +60,10 @@ def _system(block: str, product: str, lane: str, has_files: bool) -> str:
     if lane == 'read':
         parts += ['【这条线是读件】把文件里跟用户有关的东西挑出来，一条一结论，带出处。',
                   '只依据读到的文件内容；文件里没有的写「文件中未提及」。']
+        if not has_files:
+            parts += ['【这一轮没有文件】清单里一个文件都没有，不要调 read_file、'
+                      '也不要自己编 file_id —— 直接说清这次没收到文件，请用户把文件发过来，'
+                      '或把正文贴进来。']
     else:
         parts += ['【这条线是办事】用户要的是一份能拿走的东西。',
                   '做法比习惯优先：做法里定的结构、字体、篇幅、口吻，一律照做。',
@@ -120,12 +124,20 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
     max_steps = int(max_steps or (8 if lane == 'read' else 14))
 
     hp = {'item': {}, 'block': ''}
-    if lane != 'chat':
+    if lane == 'read':
+        # 读件线只按这句话准确匹配（命中「速读」「校对」这类），
+        # 不按产物兜底 —— 兜底会把「这个文章说了什么」硬套成《文章纠错》
+        hit = HT.match(question) or {}
+        if hit:
+            hp = HT.for_prompt(hit.get('task') or '', '', question)
+    elif lane != 'chat':
         hp = HT.for_prompt((routed or {}).get('howto') or '', product, question)
     item = hp.get('item') or {}
     if lane != 'chat':
         trace.append({'seq': len(trace) + 1, 'kind': 'plan', 'tool': 'plan',
-                      'result': {'做法': item.get('task') or '（没匹配到做法，按通用版式）',
+                      'result': {'做法': item.get('task') or (
+                                     '（无做法，按通用流程）' if lane == 'read'
+                                     else '（没匹配到做法，按通用版式）'),
                                  '产物': product,
                                  '步骤': ['取做法', '查数/读文件', '按做法成文', '生成文件',
                                           '自检', '交付'] if lane == 'office'
@@ -152,7 +164,11 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
                 {'role': 'user', 'content': user_content}]
 
     names = READ_TOOLS if lane == 'read' else OFFICE_TOOLS
-    tools = [] if lane == 'chat' else [t for t in A.TOOLS if t['function']['name'] in names]
+    if lane == 'chat' or (lane == 'read' and not files):
+        # 没文件就别给 read_file：给一只手它就会自己编 file_id 去读（实测编成 file_id=1）
+        tools = []
+    else:
+        tools = [t for t in A.TOOLS if t['function']['name'] in names]
     answer = ''
 
     for step in range(1, max_steps + 1):

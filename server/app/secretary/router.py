@@ -95,7 +95,11 @@ def _wants_deliver(q: str, cfg: dict) -> bool:
         return True
     # 没有产物名但说了"发我 / 交上去 / 导出"这类，也算要交付（产物默认 docx）
     tail = ('发我', '给我', '交上去', '报上去', '导出', '发过来', '传给我')
-    return any(t in (q or '') for t in tail) and not any(h in (q or '') for h in _ASK_HINT)
+    hit = any(t in (q or '') for t in tail) and not any(h in (q or '') for h in _ASK_HINT)
+    if hit and refers_file(q) and not product:
+        # 「这个文章里面说了什么 直接输出给我」——"给我"要的是内容，不是一份文件
+        return False
+    return hit
 
 
 def _ask_lane(question: str, ask) -> tuple[str, str]:
@@ -134,10 +138,13 @@ def route(question: str, has_files: bool = False, ask=None) -> dict:
                 'howto': '', 'need': need,
                 'why': '产出性动词 + %s' % (product or '交付要求')}
 
-    # ② 带了文件 → 读件线
-    if has_files:
+    # ② 带了文件，或这句话在指代一份文件 → 读件线
+    #    （即使这次没带文件也要走这条：它有 read_file 和会话附件，
+    #      走查数线会先跑一遍纠错/补问/问题确定，最后答"未上传文件"，白绕一圈）
+    if has_files or refers_file(q):
         return {'lane': 'read', 'product': 'checklist', 'howto': '',
-                'need': ['file_read'], 'why': '本轮带了文件'}
+                'need': ['file_read'],
+                'why': '本轮带了文件' if has_files else '在指代文件'}
 
     # ③ 剩下的：查数 / 聊天
     lane, why = _ask_lane(q, ask)
