@@ -1213,13 +1213,18 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         page_async=False,
         session_id=None, user_id=None, user_code=None, client_ip=None, channel=None,
         history_turns=None,
-        doc_context=None, doc_files=None, persona=None, trace=None, should_stop=None):
+        doc_context=None, doc_files=None, persona=None, trace=None, should_stop=None,
+        force_data=False):
     """question = 用户的原话（不需要上游预处理）。
 
     本服务依次做：**载入多轮上下文** → 字面纠错与名称归一 → 时间与地点补全 →
     问题补全 → 模型循环查数作答 → 落库（问答/会话/消息/执行明细写进 agent_data）。
 
     profile = 用户画像（可选）：补全阶段不使用；与补全后的问题一起交给模型拆解任务。
+
+    force_data = True（`POST /api/ask/data` 专用）：跳过入口分线，固定"只问数"——
+      查库=是、读文件=否、出文件=否，工具只有查数那几只，不读文件、不出文件。
+      预处理（纠错 / 补问法 / 问题确定）与查数循环一行不动。
 
     session_id / user_id / user_code / client_ip / channel = 记录用（可选）：
       - session_id 不传则服务端生成一个（UUID），无论落库成败都会回在返回值里
@@ -1257,17 +1262,23 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     # 只有判明「这句不需要业务数据」或「会话里有文件」，才交给统一循环
     # （它有一整套工具和做法目录）。问数逻辑本身一行没改。
     _need_db = True
-    try:
-        from app.secretary import router as _router
-        _r = _router.route(question, has_files=bool(_all_files),
-                          ask=lambda _s, _u: _ask_short(_s, _u, model))
-        _need_db = (_r.get('lane') == 'ask_db')
+    if force_data:
+        # 只问数的接口：不判走哪条线，直接进查数线。
         trace.append({'seq': len(trace) + 1, 'kind': 'route', 'tool': 'router',
-                      'result': _r})
-    except Exception as _exc:                       # noqa: BLE001 - 判不了就走查数线
-        print('[agent] 入口判断失败（走查数线）：%s: %s'
-              % (type(_exc).__name__, str(_exc)[:120]), flush=True)
-        _need_db = True
+                      'result': {'lane': 'ask_db', 'why': '本接口只问数，不分线',
+                                 'forced': True}})
+    else:
+        try:
+            from app.secretary import router as _router
+            _r = _router.route(question, has_files=bool(_all_files),
+                              ask=lambda _s, _u: _ask_short(_s, _u, model))
+            _need_db = (_r.get('lane') == 'ask_db')
+            trace.append({'seq': len(trace) + 1, 'kind': 'route', 'tool': 'router',
+                          'result': _r})
+        except Exception as _exc:                   # noqa: BLE001 - 判不了就走查数线
+            print('[agent] 入口判断失败（走查数线）：%s: %s'
+                  % (type(_exc).__name__, str(_exc)[:120]), flush=True)
+            _need_db = True
     if not _need_db:
         from app.secretary import agent_office
         trace.append({'seq': len(trace) + 1, 'kind': 'files', 'tool': 'files',
@@ -1306,8 +1317,12 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #   沿用与否由第 6 步「问题确定」按上下文判断。
     # ── ① 分流（2026-11-05）：三个是/否 → 第 7 步按它给工具子集 ────────────
     #    查库 / 读文件 / 出文件。物理规则：本轮带了文件 → 读文件一律为是。
-    _route = _pre.route(question, history, has_files=bool(doc_files),
-                        ask=lambda _s, _u: _ask_short(_s, _u, model))
+    if force_data:
+        _route = {'use_db': True, 'use_file': False, 'make_file': False,
+                  'reason': '本接口只问数（查库、不读文件、不出文件）'}
+    else:
+        _route = _pre.route(question, history, has_files=bool(doc_files),
+                            ask=lambda _s, _u: _ask_short(_s, _u, model))
     tools_file.set_ctx(user_id=user_id,
                        out_dir='data/agent_out/%s' % (session_id or 'anon'))
     trace.append({'seq': len(trace) + 1, 'kind': 'intent', 'tool': 'intent',

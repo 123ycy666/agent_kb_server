@@ -204,6 +204,26 @@ def health():
     responses={403: {"description": "所选知识库全部不可用（不存在 / 已停用 / 无权限）"}},
 )
 async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    return await _ask_entry(request, actor)
+
+
+@router.post(
+    "/ask/data",
+    summary="问数（只查数作答：不分线、不读文件、不出文件、不拟办）",
+    response_model=AskResponse,
+    responses={403: {"description": "所选知识库全部不可用（不存在 / 已停用 / 无权限）"}},
+)
+async def ask_data(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    """只问数的入口：同一套预处理（纠错 / 补问法 / 问题确定）+ 查数循环。
+
+    与 /api/ask 的唯一差别是**不进入口分线**、也不做「查库 / 读文件 / 出文件」判据：
+    固定查库=是、读文件=否、出文件=否 ⇒ 这个接口不会去读文件、不会产出 docx/xlsx，
+    也不会拟办任务。分线那份能力留在 /api/ask。
+    """
+    return await _ask_entry(request, actor, force_data=True)
+
+
+async def _ask_entry(request: Request, actor: CurrentActor, force_data: bool = False):
     # ★ 同一个 URL 收两种请求（2026-10-19 加，见 docs/03-设计/办公文档能力-接口设计.md）：
     #   ① application/json           —— 现状，纯问答 / 带 file_ids 引用已上传的文件
     #   ② multipart/form-data        —— "文件 + 问题一起发"（豆包式一步到位）
@@ -242,8 +262,16 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
     # 两种进法都收：① JSON 里的 file_ids（前端先调 /api/files 上传）
     #              ② multipart 直接带文件（一步式，外部系统最爱用）
     # 短文件整篇给、长文件按问题召回章节 —— 逻辑在 doc_context，这里只做编排。
-    file_ids = _parse_file_ids(data.get("file_ids"))
+    _want_ids = _parse_file_ids(data.get("file_ids"))
     file_warnings: list[str] = []
+    # 只问数的接口不收文件（它没有读文件那只手）：照实说一句，不要静默丢掉。
+    if force_data:
+        if uploaded or _want_ids:
+            file_warnings.append(
+                '本接口只问数：忽略随附的 %d 个文件' % (len(uploaded) + len(_want_ids)))
+        uploaded, file_ids = [], []
+    else:
+        file_ids = _want_ids
     for up in uploaded:
         try:
             max_bytes = settings.max_upload_mb * 1024 * 1024
@@ -316,7 +344,8 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
                     doc_context=ctx.get("context") or None,
                     doc_files=ctx.get("files") or None,
                     trace=state["trace"],
-                    should_stop=lambda: bool(state.get("stop")))
+                    should_stop=lambda: bool(state.get("stop")),
+                    force_data=force_data)
             except Exception as e:                 # noqa: BLE001
                 rr = {"input_question": q, "session_id": session_id,
                       "answer": (str(e) if isinstance(e, agent_mod.ModelUnavailable)
@@ -356,6 +385,7 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
             # 2026-10-21 恢复：形参传不进去那一步，kb_search 由模型自主调用）。
             doc_context=ctx.get("context") or None,
             doc_files=ctx.get("files") or None,
+            force_data=force_data,
         )
     except Exception as e:                         # noqa: BLE001
         # 模型不可用（网关没这个模型 / 连不上）时说人话，不要把 HTTPError 抛给用户看
@@ -388,12 +418,13 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
     # 对话建任务：回答后再看一眼"这句话是不是要办一件事" → 拟草稿（**不建任务**）
     # 严格模式：必须明说"建任务/下发/派给"或带明确时限，避免每句闲聊都弹草稿。
     # 拟办失败绝不影响问答：只打日志，不抛。
+    # 只问数的接口不拟办（那是智能体分支的能力）。
     try:
         from app.core.database import SessionLocal as _SessionLocal
         from app.services import dispatch_service as _ds
 
         sid_for_task = r.get("session_id") or session_id
-        if sid_for_task and r.get("answer"):
+        if not force_data and sid_for_task and r.get("answer"):
             _db = _SessionLocal()
             try:
                 prop = _ds.propose_from_chat(
@@ -412,7 +443,7 @@ async def ask(request: Request, actor: CurrentActor = Depends(get_current_actor)
     # 比原始问法更容易被对方识别（「环谭」已纠成「环潭」、「今年」已补成具体年份）。
     # 结果**平铺**进响应（layer / method / mainId / data，字段名与对方一致）；
     # 调用失败或没识别就什么都不加 —— 前端没有 method 即不跳转，正常看问答。
-    if want_screen and screen_intent_svc.enabled():
+    if want_screen and not force_data and screen_intent_svc.enabled():
         try:
             _si = await run_in_threadpool(
                 screen_intent_svc.preview,
