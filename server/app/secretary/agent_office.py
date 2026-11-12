@@ -57,32 +57,30 @@ def _system(block: str, product: str, lane: str, has_files: bool) -> str:
     if lane == 'chat':
         parts += ['【这条线是闲聊】直接用一两句话回答，不查库、不调工具。']
         return '\n'.join(parts)
-    if lane == 'read':
-        parts += ['【这条线是读件】把文件里跟用户有关的东西挑出来，一条一结论，带出处。',
-                  '只依据读到的文件内容；文件里没有的写「文件中未提及」。']
-        if not has_files:
-            parts += ['【这一轮没有文件】清单里一个文件都没有，不要调 read_file、'
-                      '也不要自己编 file_id —— 直接说清这次没收到文件，请用户把文件发过来，'
-                      '或把正文贴进来。']
-    else:
-        parts += ['【这条线是办事】用户要的是一份能拿走的东西。',
+    if product:
+        parts += ['【这一轮要交东西】用户要的是一份能拿走的东西。',
                   '做法比习惯优先：做法里定的结构、字体、篇幅、口吻，一律照做。',
+                  '数字只用查回来的原始结果；查不到就写「需另行核实」。']
+    else:
+        parts += ['【这一轮按用户说的办】要读文件就读、要查数就查、要出文件就出；'
+                  '用户没要文件就给结论，不要硬做一份文件。',
                   '数字只用查回来的原始结果；查不到就写「需另行核实」。',
-                  '用户说「刚才问的」「上面这些」「这批」时，指【本会话前几轮】里的内容。']
+                  '用户说「刚才问的」「上面这些」「这个文件」时，指【本会话前几轮】与【可用的文件】里的内容。']
     if block:
         parts += ['', block]
-    if lane == 'office':
+    if product:
         hint = KIND_HINT.get(product)
         if hint:
             parts += ['', '【产物参数】' + hint]
         parts += ['', CONTRACT % product]
-    if lane == 'read':
-        parts += ['', READ_CONTRACT]
     if has_files:
-        parts += ['', '【可用文件】清单里既有本轮带来的，也有本会话此前带来的（标「此前」）。'
-                      '用户说「这个文章」「这份材料」「刚才那个」时，指清单里的文件——'
+        parts += ['', '【可用的文件】清单里既有本轮带来的，也有本会话此前上传或产出的（标「此前」）。'
+                      '用户说「这个文章」「这份材料」「刚才那个文件」时，指清单里的文件——'
                       '用 read_file(file_id) 把正文读出来（分页读到 next_offset 为 null）；'
                       '只有真的读不出来，才说读不到。']
+    elif not product:
+        parts += ['', '【没有可用文件】本会话没有可读的文件。用户提到文件时，'
+                      '直接说这次没收到，请他把文件发过来或把正文贴进来，不要编 file_id。']
     return '\n'.join(parts)
 
 
@@ -114,34 +112,30 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
 
     trace = trace if trace is not None else []
     t_all = time.time()
-    product = (routed or {}).get('product') or 'docx'
-    if lane == 'read':
-        product = 'checklist'
-    elif lane == 'chat':
-        product = 'text'
-    elif product not in ('docx', 'xlsx'):
+    product = (routed or {}).get('product') or ''
+    if lane == 'chat':
+        product = ''
+    elif product and product not in ('docx', 'xlsx'):
         product = 'docx'
-    max_steps = int(max_steps or (8 if lane == 'read' else 14))
+    max_steps = int(max_steps or 14)
 
     hp = {'item': {}, 'block': ''}
-    if lane == 'read':
-        # 读件线只按这句话准确匹配（命中「速读」「校对」这类），
-        # 不按产物兜底 —— 兜底会把「这个文章说了什么」硬套成《文章纠错》
+    if lane != 'chat':
+        # 做法按这句话准确匹配（「写汇报」「出 Excel」「校对」这类）；
+        # 没匹配上就是空 —— 不按产物兜底，否则「这个文章说了什么」会被硬套成《文章纠错》
         hit = HT.match(question) or {}
+        if not hit and product:
+            hit = HT.get('', product)
         if hit:
-            hp = HT.for_prompt(hit.get('task') or '', '', question)
-    elif lane != 'chat':
-        hp = HT.for_prompt((routed or {}).get('howto') or '', product, question)
+            hp = HT.for_prompt(hit.get('task') or '', product, question)
     item = hp.get('item') or {}
     if lane != 'chat':
         trace.append({'seq': len(trace) + 1, 'kind': 'plan', 'tool': 'plan',
-                      'result': {'做法': item.get('task') or (
-                                     '（无做法，按通用流程）' if lane == 'read'
-                                     else '（没匹配到做法，按通用版式）'),
-                                 '产物': product,
-                                 '步骤': ['取做法', '查数/读文件', '按做法成文', '生成文件',
-                                          '自检', '交付'] if lane == 'office'
-                                 else ['取做法', '读全文', '按字段出清单']}})
+                      'result': {'做法': item.get('task') or '（无做法，按通用流程）',
+                                 '产物': product or '（用户没要文件）',
+                                 '步骤': (['取做法', '查数/读文件', '按做法成文', '生成文件',
+                                          '自检', '交付'] if product
+                                         else ['判断用户要什么', '读文件 / 查数', '按要求回答'])} })
     tools_file.set_ctx(user_id=user_id,
                        out_dir='data/agent_out/%s' % (session_id or 'anon'),
                        howto=item.get('task') or '')
@@ -163,10 +157,13 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
                  'content': _system(hp.get('block') or '', product, lane, bool(files))},
                 {'role': 'user', 'content': user_content}]
 
-    names = READ_TOOLS if lane == 'read' else OFFICE_TOOLS
-    if lane == 'chat' or (lane == 'read' and not files):
-        # 没文件就别给 read_file：给一只手它就会自己编 file_id 去读（实测编成 file_id=1）
-        tools = []
+    names = OFFICE_TOOLS
+    if lane == 'chat' or not files:
+        # 没有文件就别给 read_file：给一只手它就会自己编 file_id 去读（实测编成 file_id=1）
+        tools = [] if lane == 'chat' else [
+            t for t in A.TOOLS if t['function']['name'] in
+            ('run_sql', 'read_result', 'describe_table', 'find_column', 'list_tables',
+             'list_metrics', 'metric_query', 'kb_search', 'make_file', 'run_code', 'finish')]
     else:
         tools = [t for t in A.TOOLS if t['function']['name'] in names]
     answer = ''
@@ -219,6 +216,15 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
 
     if not answer:
         answer = ('文件已生成：' + artifacts[0]['name']) if artifacts else '本轮没有给出内容。'
+    # 本轮产出的文件也记进会话文件清单：下一轮用户说「这个文件的详细内容」时，
+    # 后端要能把刚生成的那份找回来（只记上传的附件是不够的）。
+    session_files = list(files)
+    _have = {str(f.get('file_id')) for f in session_files}
+    for a in artifacts:
+        if a.get('file_id') and str(a['file_id']) not in _have:
+            session_files.append({'file_id': a['file_id'], 'name': a.get('name'),
+                                  'chars': 0, 'product': True})
+            _have.add(str(a['file_id']))
     result = {
         'input_question': question,
         'answer': answer,
@@ -233,9 +239,9 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
         'db_query_count': len([t for t in trace if t.get('tool') == 'run_sql']),
         'kb_query_count': len([t for t in trace if t.get('tool') == 'kb_search']),
         'no_db_query': not any(t.get('tool') == 'run_sql' for t in trace),
-        'qtype': '办公' if lane == 'office' else ('读件' if lane == 'read' else '闲聊'),
+        'qtype': '办公' if lane == 'office' else ('闲聊' if lane == 'chat' else '读件'),
         'today': today or time.strftime('%Y-%m-%d'),
-        'files': files,
+        'files': session_files,
         'elapsed_ms': int((time.time() - t_all) * 1000),
         'session_id': session_id,
         'qa_id': None,

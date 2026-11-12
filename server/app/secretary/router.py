@@ -125,28 +125,31 @@ def _ask_lane(question: str, ask) -> tuple[str, str]:
 
 
 def route(question: str, has_files: bool = False, ask=None) -> dict:
-    """返回 {lane, product, howto, need, why}。"""
+    """返回 {lane, product, howto, need, why}。
+
+    2026-11-12 改法（Fred 的意见）：不再按关键词猜「这句话是不是在说文件」。
+    把「读件」并进办公线 —— 办公线本来就有全套工具（读文件 / 查库 / 出文件），
+    会话里有哪些文件一并交给它，让它自己判断用户在说哪份、要不要读。
+    路由只剩三件事：要不要交东西、要不要查数、是不是闲聊。
+    """
     q = str(question or '').strip()
     cfg = _cfg()
     product = _product_of(q, cfg)
     deliver = _wants_deliver(q, cfg)
 
-    # ① 明确要交付物 → 办公线（带文件的话同时要读）
+    # ① 要交付物 → 办公线，必须出文件
     if deliver:
         need = ['data', 'file_write'] + (['file_read'] if has_files else [])
         return {'lane': 'office', 'product': product or 'docx',
                 'howto': '', 'need': need,
                 'why': '产出性动词 + %s' % (product or '交付要求')}
 
-    # ② 带了文件，或这句话在指代一份文件 → 读件线
-    #    （即使这次没带文件也要走这条：它有 read_file 和会话附件，
-    #      走查数线会先跑一遍纠错/补问/问题确定，最后答"未上传文件"，白绕一圈）
-    if has_files or refers_file(q):
-        return {'lane': 'read', 'product': 'checklist', 'howto': '',
-                'need': ['file_read'],
-                'why': '本轮带了文件' if has_files else '在指代文件'}
+    # ② 这类会话里有文件（本轮带来的、或之前上传/产出的）→ 办公线，但不强制出文件
+    if has_files:
+        return {'lane': 'office', 'product': '', 'howto': '',
+                'need': ['file_read', 'data'], 'why': '会话里有文件'}
 
-    # ③ 剩下的：查数 / 聊天
+    # ③ 剩下的：查数 / 闲聊（交给模型判）
     lane, why = _ask_lane(q, ask)
     return {'lane': lane, 'product': 'text', 'howto': '',
             'need': ['data'] if lane == 'ask_db' else [], 'why': why}

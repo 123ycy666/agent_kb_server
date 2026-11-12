@@ -1221,15 +1221,11 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     if session_id:
         try:
             from app.secretary import qa_log as _qa_mod
-            _hist_files = _qa_mod.session_files(session_id) or []
+            # 只回看最近几轮：不然几个月前传过的文件会一直把后面所有问题都拉进办公线
+            _hist_files = _qa_mod.session_files(session_id, limit=6) or []
         except Exception:                           # noqa: BLE001 - 读不到按无附件
             _hist_files = []
-        try:
-            from app.secretary import router as _router0
-            _ref = _router0.refers_file(question)
-        except Exception:                           # noqa: BLE001
-            _ref = False
-        if _hist_files and _ref:
+        if _hist_files:
             _cur_ids = {str(f.get('file_id')) for f in _all_files}
             _all_files += [f for f in _hist_files if str(f.get('file_id')) not in _cur_ids]
     if (os.environ.get('SECRETARY_ROUTER') or '1').strip().lower() not in ('0', 'false', 'off'):
