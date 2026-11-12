@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import time
 
-OFFICE_TOOLS = ('kb_search', 'kb_read', 'read_file', 'run_sql', 'read_result',
+OFFICE_TOOLS = ('read_howto', 'kb_search', 'kb_read', 'read_file', 'run_sql', 'read_result',
                 'describe_table', 'find_column', 'list_tables', 'list_metrics',
                 'metric_query', 'make_file', 'run_code', 'finish')
 READ_TOOLS = ('read_file', 'kb_read', 'kb_search', 'finish')
@@ -52,7 +52,7 @@ def _identity() -> str:
     return '你是随州供电公司的办公智能助手，负责把活做成能直接用的东西。'
 
 
-def _system(block: str, product: str, lane: str, has_files: bool) -> str:
+def _system(block: str, product: str, lane: str, has_files: bool, menu: str = '') -> str:
     parts = [_identity(), '']
     if lane == 'chat':
         parts += ['【这条线是闲聊】直接用一两句话回答，不查库、不调工具。']
@@ -62,10 +62,17 @@ def _system(block: str, product: str, lane: str, has_files: bool) -> str:
                   '做法比习惯优先：做法里定的结构、字体、篇幅、口吻，一律照做。',
                   '数字只用查回来的原始结果；查不到就写「需另行核实」。']
     else:
-        parts += ['【这一轮按用户说的办】要读文件就读、要查数就查、要出文件就出；'
-                  '用户没要文件就给结论，不要硬做一份文件。',
+        parts += ['【按用户说的办】要读文件就读、要查数就查、要出文件就出、要聊天就聊天；'
+                  '不需要工具的时候直接回答，不要为了显得忙去查库或出文件。',
                   '数字只用查回来的原始结果；查不到就写「需另行核实」。',
                   '用户说「刚才问的」「上面这些」「这个文件」时，指【本会话前几轮】与【可用的文件】里的内容。']
+    if menu:
+        parts += ['', '【做法目录】下面是用户配置的说明书，讲某类活该怎么做'
+                      '（格式、口吻、篇幅、先查哪些数、怎么自检）。'
+                      '要写文件/表格/汇报、校对、速读之前先扫一眼：',
+                  menu,
+                  '有对应的就 read_howto(task) 取正文，按里面的步骤和格式做（它优先于你的习惯）；'
+                  '没有对应的就按你自己的判断做。']
     if block:
         parts += ['', block]
     if product:
@@ -119,23 +126,25 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
         product = 'docx'
     max_steps = int(max_steps or 14)
 
+    # 2026-11-12：代码不替模型挑做法 —— 只把目录给它，读哪份由它自己决定（read_howto）。
+    # make_file 用哪套版式，也由它读了哪份做法决定（tools_file.set_howto 记）。
     hp = {'item': {}, 'block': ''}
+    item = {}
+    menu = ''
     if lane != 'chat':
-        # 做法按这句话准确匹配（「写汇报」「出 Excel」「校对」这类）；
-        # 没匹配上就是空 —— 不按产物兜底，否则「这个文章说了什么」会被硬套成《文章纠错》
-        hit = HT.match(question) or {}
-        if not hit and product:
-            hit = HT.get('', product)
-        if hit:
-            hp = HT.for_prompt(hit.get('task') or '', product, question)
-    item = hp.get('item') or {}
+        try:
+            menu = HT.menu_text()
+        except Exception:                           # noqa: BLE001 - 目录读不到就空着
+            menu = ''
     if lane != 'chat':
         trace.append({'seq': len(trace) + 1, 'kind': 'plan', 'tool': 'plan',
-                      'result': {'做法': item.get('task') or '（无做法，按通用流程）',
-                                 '产物': product or '（用户没要文件）',
-                                 '步骤': (['取做法', '查数/读文件', '按做法成文', '生成文件',
-                                          '自检', '交付'] if product
-                                         else ['判断用户要什么', '读文件 / 查数', '按要求回答'])} })
+                      'result': {'做法': '（做法目录 %d 篇，由模型按需读）' % len(menu.splitlines())
+                                 if menu else '（做法库为空，按模型自己的判断）',
+                                 '产物': product or '（由用户诉求决定）',
+                                 '步骤': (['看做法目录', '读做法（有就照做）', '查数/读文件',
+                                          '按做法成文', '出文件+自检', '交付'] if product
+                                         else ['看做法目录', '读做法（有就照做）',
+                                               '读文件 / 查数', '按要求回答'])} })
     tools_file.set_ctx(user_id=user_id,
                        out_dir='data/agent_out/%s' % (session_id or 'anon'),
                        howto=item.get('task') or '')
@@ -154,7 +163,7 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
         user_content += '\n\n【用户上传的文件】\n' + str(doc_context)[:20000]
 
     messages = [{'role': 'system',
-                 'content': _system(hp.get('block') or '', product, lane, bool(files))},
+                 'content': _system(hp.get('block') or '', product, lane, bool(files), menu)},
                 {'role': 'user', 'content': user_content}]
 
     names = OFFICE_TOOLS

@@ -164,6 +164,19 @@ TOOLS = [
             'spec': {'type': 'object', 'description': '按上面的形状给内容'},
             'self_check': {'type': 'boolean', 'description': '是否过自检，默认 true'}},
             'required': ['kind', 'spec']}}},
+    # ★ 2026-11-12（Fred）：做法就是一册「用户配的说明书」。
+    #   目录常驻 system，正文用这只手按需读；读了之后 make_file 自动按它的版式出。
+    #   代码里不判断"这是什么任务"——判断留给模型。
+    {'type': 'function', 'function': {
+        'name': 'read_howto',
+        'description': '读用户的「做法」文档（用户自己配置的办事规范：格式、口吻、篇幅、'
+                       '该先查哪些数、怎么自检）。不传 task 先看目录。'
+                       '★ 要写文件、做表格、写汇报、校对、速读之前，先看目录里有没有对应做法；'
+                       '有就按它做（它写的步骤优先于你的习惯），没有就按你自己的判断做。',
+        'parameters': {'type': 'object', 'properties': {
+            'task': {'type': 'string',
+                     'description': '做法名（见做法目录）；不传 = 返回目录'}},
+            'required': []}}},
     {'type': 'function', 'function': {
         'name': 'run_code',
         'description': '在沙箱里跑一段 python（docx/pptx/openpyxl 可用，产物从 out/ 取）。'
@@ -829,6 +842,23 @@ def execute(name, args):
         return tools_result.read_result(args.get('ref', ''), args.get('offset') or 0,
                                         args.get('limit') or 20)
     # ── 文件类（2026-11-05）────────────────────────────────────────────
+    if name == 'read_howto':
+        # 2026-11-12：做法就是用户配的说明书，模型自己按需读；读了之后出文件自动按它套版式。
+        from app.secretary import howto as _ht
+        from app.secretary import tools_file as _tf
+        task = str(args.get('task') or '').strip()
+        if not task:
+            return {'menu': _ht.menu(), 'text': _ht.menu_text(),
+                    'note': '上面是做法目录。要写文件/表格/汇报、校对、速读前，先看有没有对应的；'
+                            '有就 read_howto(task) 取正文照做，没有就按你自己的判断做。'}
+        item = _ht.get(task) or _ht.match(task)
+        if not item:
+            return {'error': '没有这份做法：%s' % task, 'menu': _ht.tasks()}
+        _tf.set_howto(item['task'])
+        return {'task': item['task'], 'product': item['product'],
+                'tone': item.get('tone') or '', 'outline': item.get('outline') or [],
+                'length': item.get('length') or {}, 'check': item.get('check') or [],
+                'body': _ht.body(item.get('doc_id'))}
     if name == 'read_file':
         from app.secretary import tools_file
         return tools_file.read_file(args.get('file_id', ''), args.get('offset') or 0,
@@ -1208,40 +1238,23 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #   用于「实时运行步骤」——接口那边轮询这个 list 就能看到每一步。
     trace = trace if trace is not None else []
     raw_question = question
-    # ── 入口路由（2026-11-11）：只分线，不改任何线的内部 ────────────────────
-    #    办事题去办公线（做法 → 计划 → 工具循环 → 产物），读件去读件线，闲聊零工具；
-    #    查数线（下面第 2–6 步预处理 + 证据包 + 写正文）**原样保留、一行不动**。
-    #    关掉：SECRETARY_ROUTER=0（整条链路回退到 2026-11-11 之前）。
-    _lane = None
-    # 本会话此前的附件（2026-11-12）：用户上一轮传过文件、这一轮说「这个文章」时，
-    # 请求里没有 file_ids。从会话历史把 file_id 找回来，只有这句话在指代文件时才算数，
-    # 免得传过一次文件之后所有问数题都被拉进读件线。
-    _hist_files = []
+    # ── 一条循环（2026-11-12 按 Fred 的要求重构）─────────────────────────
+    #    不分线、不判任务类型：给模型一套工具 + 做法目录 + 会话上下文，
+    #    它自己决定读哪份做法、查不查库、出不出文件。代码只提供能力。
+    #    查数线（下面第 2–6 步预处理 + 证据包 + 写正文）保留：SECRETARY_LEGACY_DB=1 时走它。
     _all_files = list(doc_files or [])
     if session_id:
         try:
             from app.secretary import qa_log as _qa_mod
-            # 只回看最近几轮：不然几个月前传过的文件会一直把后面所有问题都拉进办公线
+            # 只回看最近几轮：几个月前传过的文件不必一直带着
             _hist_files = _qa_mod.session_files(session_id, limit=6) or []
         except Exception:                           # noqa: BLE001 - 读不到按无附件
             _hist_files = []
         if _hist_files:
             _cur_ids = {str(f.get('file_id')) for f in _all_files}
             _all_files += [f for f in _hist_files if str(f.get('file_id')) not in _cur_ids]
-    if (os.environ.get('SECRETARY_ROUTER') or '1').strip().lower() not in ('0', 'false', 'off'):
-        try:
-            from app.secretary import router as _router
-            _lane = _router.attach_howto(
-                _router.route(question, has_files=bool(_all_files),
-                              ask=lambda _s, _u: _ask_short(_s, _u, model)), question)
-        except Exception as _exc:                   # noqa: BLE001 - 路由坏了回退原链路
-            print('[agent] 入口路由失败（回退查数线）：%s: %s'
-                  % (type(_exc).__name__, str(_exc)[:120]), flush=True)
-            _lane = None
-    if _lane:
-        trace.append({'seq': len(trace) + 1, 'kind': 'route', 'tool': 'router',
-                      'result': _lane})
-    if _lane and _lane.get('lane') in ('office', 'read', 'chat'):
+    _legacy = (os.environ.get('SECRETARY_LEGACY_DB') or '').strip().lower() in ('1', 'true', 'on')
+    if not _legacy:
         from app.secretary import agent_office
         trace.append({'seq': len(trace) + 1, 'kind': 'files', 'tool': 'files',
                       'result': {'本轮': len(doc_files or []),
@@ -1249,7 +1262,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                                  '清单': [{'name': f.get('name'), 'file_id': f.get('file_id'),
                                           'prev': bool(f.get('prev'))} for f in _all_files]}})
         return agent_office.ask_office(
-            question, _lane, lane=_lane['lane'], model=model, session_id=session_id,
+            question, {'lane': 'office'}, lane='office', model=model, session_id=session_id,
             user_id=user_id, user_code=user_code, client_ip=client_ip, channel=channel,
             doc_files=_all_files or None, doc_context=doc_context, trace=trace,
             should_stop=should_stop, max_steps=max_steps, today=today)

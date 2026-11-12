@@ -27,6 +27,13 @@ def set_ctx(user_id=None, out_dir=None, howto=None) -> None:
     _CTX.set({'user_id': user_id, 'out_dir': str(out_dir or ''), 'howto': str(howto or '')})
 
 
+def set_howto(task: str) -> None:
+    """模型读了某份做法之后调它：后面 make_file 就按这份做法的版式出文件。"""
+    ctx = dict(_CTX.get() or {})
+    ctx['howto'] = str(task or '')
+    _CTX.set(ctx)
+
+
 def get_ctx() -> dict:
     return _CTX.get() or {}
 

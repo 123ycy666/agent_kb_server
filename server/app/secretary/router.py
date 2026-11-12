@@ -51,10 +51,10 @@ def refers_file(q: str) -> bool:
 
 _DEFAULT_ROUTE_RULE = (
     '只回答一行，不要解释：\n'
-    '分流=查数 或 聊天\n'
-    '查数：需要本单位业务数据才能答（金额、工单、预算、进度、指标、排名这类）。\n'
-    '聊天：打招呼、与业务无关、只让写字且不需要任何业务数字。\n'
-    '拿不准一律回「查数」。'
+    '分流=查数 或 不查数\n'
+    '查数：必须拿到本单位的业务数据才能答（金额、工单、预算、进度、指标、排名、哪个所多少）。\n'
+    '不查数：写文件、整理材料、看用户给的文件、校对、闲聊，以及其它一切。\n'
+    '拿不准一律回「不查数」。'
 )
 
 
@@ -103,9 +103,14 @@ def _wants_deliver(q: str, cfg: dict) -> bool:
 
 
 def _ask_lane(question: str, ask) -> tuple[str, str]:
-    """剩下的在 查数 / 聊天 之间判；判不出 → 查数。"""
+    """只判一件事：这句要不要本单位的业务数据。
+
+    判「查数」→ 走查数线（那条链路的预处理/证据包是它的强项）。
+    其余（写东西、看文件、闲聊、别的）→ 统一办公线，由模型自己看做法、自己决定做什么。
+    判不出 → 办公线：它有全套工具，什么都能干；查数线没有 read_file，判断错更贵。
+    """
     if ask is None:
-        return 'ask_db', '无模型可判，默认查数'
+        return 'office', '无模型可判，默认办公线'
     try:
         from app.secretary import prompt_text
         rule = str(prompt_text.get('router') or '').strip() or _DEFAULT_ROUTE_RULE
@@ -116,43 +121,31 @@ def _ask_lane(question: str, ask) -> tuple[str, str]:
     try:
         got = str(ask(rule, '本轮原话：%s' % (question or '')) or '')
     except Exception as exc:                        # noqa: BLE001
-        print('[router] 分流判断失败（按查数）：%s: %s' % (type(exc).__name__, str(exc)[:100]),
+        print('[router] 分流判断失败（按办公线）：%s: %s' % (type(exc).__name__, str(exc)[:100]),
               flush=True)
-        return 'ask_db', '判断失败，默认查数'
-    if '聊天' in got and '查数' not in got:
-        return 'chat', got.strip()[:80]
-    return 'ask_db', got.strip()[:80]
+        return 'office', '判断失败，默认办公线'
+    if '查数' in got and '不查数' not in got and '非查数' not in got:
+        return 'ask_db', got.strip()[:80]
+    return 'office', got.strip()[:80]
 
 
 def route(question: str, has_files: bool = False, ask=None) -> dict:
     """返回 {lane, product, howto, need, why}。
 
-    2026-11-12 改法（Fred 的意见）：不再按关键词猜「这句话是不是在说文件」。
-    把「读件」并进办公线 —— 办公线本来就有全套工具（读文件 / 查库 / 出文件），
-    会话里有哪些文件一并交给它，让它自己判断用户在说哪份、要不要读。
-    路由只剩三件事：要不要交东西、要不要查数、是不是闲聊。
+    只有两种去向（2026-11-12 按 Fred 的要求重构）：
+      · ask_db   —— 要本单位业务数据，走查数线（那条链路一行没动）
+      · office   —— 其余全部：写东西、看文件、做表格、校对、闲聊、任何没见过的活，
+                    由模型自己看做法目录、自己决定怎么做。代码不判断"这是什么任务"。
+    会话里有文件 → 一定是办公线（查数线没有 read_file）。
     """
     q = str(question or '').strip()
-    cfg = _cfg()
-    product = _product_of(q, cfg)
-    deliver = _wants_deliver(q, cfg)
-
-    # ① 要交付物 → 办公线，必须出文件
-    if deliver:
-        need = ['data', 'file_write'] + (['file_read'] if has_files else [])
-        return {'lane': 'office', 'product': product or 'docx',
-                'howto': '', 'need': need,
-                'why': '产出性动词 + %s' % (product or '交付要求')}
-
-    # ② 这类会话里有文件（本轮带来的、或之前上传/产出的）→ 办公线，但不强制出文件
     if has_files:
         return {'lane': 'office', 'product': '', 'howto': '',
                 'need': ['file_read', 'data'], 'why': '会话里有文件'}
-
-    # ③ 剩下的：查数 / 闲聊（交给模型判）
     lane, why = _ask_lane(q, ask)
-    return {'lane': lane, 'product': 'text', 'howto': '',
-            'need': ['data'] if lane == 'ask_db' else [], 'why': why}
+    return {'lane': lane, 'product': '', 'howto': '',
+            'need': ['data'] if lane == 'ask_db' else ['data', 'file_read', 'file_write'],
+            'why': why}
 
 
 def attach_howto(routed: dict, question: str) -> dict:
