@@ -125,6 +125,10 @@ try{
       .steps{width:330px;flex:none;background:#fff;border-left:1px solid #eef0f3;display:flex;flex-direction:column;padding:10px;overflow:hidden}
       .trace{flex:1;overflow:auto}
       .trace .step{border-bottom:1px solid #f7f8fa;padding:5px 2px;font-size:12.5px;color:#4a5560}
+      .trace details.step>summary{cursor:pointer;list-style:none}
+      .trace details.step>summary::-webkit-details-marker{display:none}
+      .stepraw{margin:4px 0 2px;padding:8px 10px;background:#fbfcfd;border:1px solid #eef1f5;border-radius:6px;
+               font-size:11.5px;line-height:1.55;white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto;color:#41505f}
       .tag{display:inline-block;padding:1px 6px;border-radius:6px;font-size:11px;color:#fff;margin-right:6px}
       .t-kb{background:#2f9e44}.t-db{background:#1971c2}.t-ans{background:#e8590c}.t-meta{background:#868e96}
       .ms{color:#a8b3bf;font-size:11px;margin-left:6px}
@@ -413,7 +417,14 @@ function stepLine(s){
   var name=(s.kind==='tool'||s.tool)?(s.tool||s.kind):(s.kind||'');
   var sum='';
   var r=s.result||{};
-  if(r.error)sum='错误：'+r.error;
+  var args='';
+  try{args=(s.args&&Object.keys(s.args).length)?JSON.stringify(s.args):'';}catch(e){args='';}
+  if(s.kind==='route')sum='分线='+(r.lane||'')+' 产物='+(r.product||'')
+    +((r.howto)?(' 做法='+r.howto):'')+((r.why)?(' ｜ '+r.why):'')
+    +((r.need&&r.need.length)?(' ｜ 需要='+r.need.join(',')):'');
+  else if(s.kind==='plan')sum=(r['做法']||'')+((r['产物'])?(' → '+r['产物']):'')
+    +((r['步骤']&&r['步骤'].length)?(' ｜ '+r['步骤'].join(' → ')):'');
+  else if(r.error)sum='错误：'+r.error;
   else if(s.kind==='intent')sum='查库='+(r.use_db?'是':'否')+' 读文件='+(r.use_file?'是':'否')+' 出文件='+(r.make_file?'是':'否')+(r.reason?(' ｜ '+r.reason):'');
   else if(s.kind==='namefix')sum=(r.used?('改成：'+r.fixed):'没改')+(r.names&&r.names.length?(' ｜ 名称：'+r.names.join('/')):'');
   else if(s.kind==='complete')sum=(r.text||'');
@@ -421,6 +432,7 @@ function stepLine(s){
   else if(s.kind==='system')sum=r.chars+' 字'+(r.has_caliber?'（带查数口径）':'');
   else if(s.kind==='tools')sum='给的工具：'+((r.tools||[]).join(' '));
   else if(s.kind==='progress')sum=(s.content||'');
+  else if(s.kind==='nudge'||s.kind==='budget')sum=(s.content||'');
   else if(r.multi)sum=r.count+' 条 SQL 并发';
   else if(r.rows)sum=r.rows.length+' 行';
   else if(r.name&&r.url)sum=r.name+' '+(r.bytes||0)+' B 自检='+((r.self_check||{}).verdict||'-');
@@ -428,14 +440,23 @@ function stepLine(s){
   else if(r.chunks)sum=r.chunks.length+' 块，next='+r.next_offset;
   else if(r.nodes)sum=r.nodes.length+' 条切片';
   else if(typeof s.content==='string')sum=s.content;
+  if(!sum&&args)sum='参数：'+args;
   return '<span class="tag '+tagCls(s.tool||s.kind)+'">'+esc(name||'-')+'</span> '
        +'<span style="color:#5b6b7c">'+esc(String(sum||'').slice(0,220))+'</span>'
        +(s.ms?('<span class="ms">'+s.ms+' ms</span>'):'');
 }
+function stepDetail(s){
+  var o={kind:s.kind,tool:s.tool,round:s.round,ms:s.ms};
+  if(s.args!==undefined)o.args=s.args;
+  if(s.result!==undefined)o.result=s.result;
+  if(s.content!==undefined)o.content=s.content;
+  try{return JSON.stringify(o,null,1);}catch(e){return String(s.result||s.content||'');}
+}
 function renderSteps(steps){
   var h='';
   (steps||[]).forEach(function(s){
-    h+='<div class="step">'+stepLine(s)+'</div>';
+    h+='<details class="step"><summary>'+stepLine(s)+'</summary>'
+      +'<div class="stepraw">'+esc(stepDetail(s).slice(0,6000))+'</div></details>';
   });
   document.getElementById('trace').innerHTML=h||'<span class="hint">等待第一步…</span>';
 }
