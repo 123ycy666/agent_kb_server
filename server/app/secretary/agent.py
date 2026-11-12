@@ -1253,8 +1253,22 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         if _hist_files:
             _cur_ids = {str(f.get('file_id')) for f in _all_files}
             _all_files += [f for f in _hist_files if str(f.get('file_id')) not in _cur_ids]
-    _legacy = (os.environ.get('SECRETARY_LEGACY_DB') or '').strip().lower() in ('1', 'true', 'on')
-    if not _legacy:
+    # 查数线是既有链路，**默认就走它**（2026-11-12 恢复）：
+    # 只有判明「这句不需要业务数据」或「会话里有文件」，才交给统一循环
+    # （它有一整套工具和做法目录）。问数逻辑本身一行没改。
+    _need_db = True
+    try:
+        from app.secretary import router as _router
+        _r = _router.route(question, has_files=bool(_all_files),
+                          ask=lambda _s, _u: _ask_short(_s, _u, model))
+        _need_db = (_r.get('lane') == 'ask_db')
+        trace.append({'seq': len(trace) + 1, 'kind': 'route', 'tool': 'router',
+                      'result': _r})
+    except Exception as _exc:                       # noqa: BLE001 - 判不了就走查数线
+        print('[agent] 入口判断失败（走查数线）：%s: %s'
+              % (type(_exc).__name__, str(_exc)[:120]), flush=True)
+        _need_db = True
+    if not _need_db:
         from app.secretary import agent_office
         trace.append({'seq': len(trace) + 1, 'kind': 'files', 'tool': 'files',
                       'result': {'本轮': len(doc_files or []),
