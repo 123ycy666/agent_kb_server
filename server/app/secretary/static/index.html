@@ -488,6 +488,17 @@ function artFromSteps(steps){
   });
   return out;
 }
+function planHtml(d){
+  var p=(d&&d.plan)||{};
+  if(!p['做法'])return '';
+  var steps=(p['步骤']||[]).join(' → ');
+  return '<div style="margin-bottom:10px;padding:8px 10px;border-left:3px solid #1677ff;'
+    +'background:#f5f9ff;border-radius:6px;font-size:13px">'
+    +'<b>按《'+esc(p['做法'])+'》做</b>'
+    +(p['产物']?(' · 产物 '+esc(p['产物'])):'')
+    +(steps?('<div style="color:#7a869a;font-size:12px;margin-top:2px">'+esc(steps)+'</div>'):'')
+    +'</div>';
+}
 function artHtml(arts){
   var h='';
   (arts||[]).forEach(function(r){
@@ -518,9 +529,9 @@ function renderResult(d){
   if(d.session_id)setSession(d.session_id);
   document.getElementById('completed').textContent=(d.user_profile?('用户画像：'+d.user_profile+String.fromCharCode(10)):'')+(d.completed_question?('补全参考（仅参考，以问题为准）：'+d.completed_question):'');
   var _arts=(d.artifacts&&d.artifacts.length)?d.artifacts:artFromSteps(d.trace||[]);
-  var _ph=artHtml(_arts);
+  var _ph=artHtml(_arts), _pl=planHtml(d);
   loadMyFiles();
-  document.getElementById('answer').innerHTML=renderAnswer(d.answer||'（空）')+_ph;
+  document.getElementById('answer').innerHTML=_pl+renderAnswer(d.answer||'（空）')+_ph;
   var w=d.no_db_query?'<span class="warn">本次未查询数据库</span>':'';
   var tm=d.timings||{};
   var gap=d.recorded_as_gap?'<span class="warn" style="background:#fff1f0;color:#a12a20">已记入缺口清单</span>':'';
@@ -528,7 +539,7 @@ function renderResult(d){
      +(d.db_query_count||0)+' 次 / 知识库 '+(d.kb_query_count||0)+' 次）· 总耗时 '+(((d.elapsed_ms||0))/1000).toFixed(1)+' 秒'
      +w+gap;
   document.getElementById('meta').innerHTML=meta;
-  var body=renderAnswer(d.answer||'（空）')+_ph;
+  var body=_pl+renderAnswer(d.answer||'（空）')+_ph;
   if(CUR){
     var a=CUR.querySelector('.conv-a'); if(a)a.innerHTML=body;
     var m=CUR.querySelector('.conv-m'); if(m)m.innerHTML=meta;

@@ -13,6 +13,7 @@ import threading
 import uuid
 from contextvars import copy_context
 import json
+import os
 import re
 import ssl
 import time
@@ -149,9 +150,14 @@ TOOLS = [
             'required': []}}},
     {'type': 'function', 'function': {
         'name': 'make_file',
-        'description': '生成文件并交付下载。kind=docx 给 {title, sections:[[小节,正文]]}；'
+        'description': '生成文件并交付下载。版式（字体/字号/行距/页边距/落款/页码）由系统按做法自动套，'
+                       '你只给内容。'
+                       'kind=docx 给 {title, sections:[[小节标题,正文]], sign_off:[单位,日期], '
+                       'tables:[{header:[列],rows:[[值]]}]}；'
                        'kind=pptx 给 {title, slides:[{layout:cover|section|bullets|end,title,bullets}]}；'
-                       'kind=xlsx 给 {sheets:[{name, rows:[[...]]}]}。生成后自动过自检，不通过不给文件。'
+                       'kind=xlsx 给 {sheets:[{name,title,header:[列名],rows:[[值]],'
+                       'formats:["#,##0.00","0.00%"],widths:[14],total_row:true,freeze:"A3"}]}。'
+                       '生成后自动过自检，不通过不给文件。'
                        '★ 内容要精简：一份文件一次给完，别超过 20 页/12 行；超了分两次调用。',
         'parameters': {'type': 'object', 'properties': {
             'kind': {'type': 'string', 'enum': ['docx', 'pptx', 'xlsx']},
@@ -856,14 +862,31 @@ def _wants_analysis(q):
 # 规则靠 0.18 分的向量检索命中。改成"目录常驻 + 按需精确取"后，system 从 3.1 万字
 # 降到 1 万以内，且规则命中从"看运气"变成"有确定答案"。
 def describe_table(table):
-    """取一张表的字段明细（只允许业务字典里的表）。"""
+    """取一张表的字段明细（只允许业务字典里的表）。
+
+    2026-11-11：业务字典为空/没登记这张表时，退回直读 information_schema ——
+    否则模型只能靠报错猜列名（实测一次任务连猜 3 个不存在的列、废掉 17 条 SQL）。
+    """
     name = semantic.table_name(table or '')
     if not name:
         return {'error': '缺少表名'}
     cols = semantic.table_cols(name)
     if not cols:
-        return {'error': '表不在业务字典里：%s' % name,
-                'available': sorted(semantic.allowed_tables())[:30]}
+        try:
+            rows = tools_db._exec(
+                'SELECT column_name AS c, data_type AS dt, column_comment AS cm '
+                'FROM information_schema.columns WHERE table_schema=%s AND table_name=%s '
+                'ORDER BY ordinal_position', [config.SCHEMA, name], limit_rows=300)['rows']
+        except Exception as exc:                    # noqa: BLE001 - 查不到就如实说
+            return {'error': '字段读不出来：%s: %s' % (type(exc).__name__, str(exc)[:120])}
+        if not rows:
+            return {'error': '库里没有这张表（或没有权限）：%s' % name,
+                    'available': sorted(semantic.allowed_tables())[:20]}
+        lines = ['- %s（%s）%s' % (r['c'], r.get('dt') or '',
+                                   ('：' + r['cm'][:80]) if r.get('cm') else '')
+                 for r in rows]
+        return {'table': name, 'fields': len(rows), 'source': 'information_schema',
+                'text': '\n'.join(lines)}
     lines = []
     for c in cols.values():
         item = c['column_name']
@@ -1185,6 +1208,31 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     #   用于「实时运行步骤」——接口那边轮询这个 list 就能看到每一步。
     trace = trace if trace is not None else []
     raw_question = question
+    # ── 入口路由（2026-11-11）：只分线，不改任何线的内部 ────────────────────
+    #    办事题去办公线（做法 → 计划 → 工具循环 → 产物），读件去读件线，闲聊零工具；
+    #    查数线（下面第 2–6 步预处理 + 证据包 + 写正文）**原样保留、一行不动**。
+    #    关掉：SECRETARY_ROUTER=0（整条链路回退到 2026-11-11 之前）。
+    _lane = None
+    if (os.environ.get('SECRETARY_ROUTER') or '1').strip().lower() not in ('0', 'false', 'off'):
+        try:
+            from app.secretary import router as _router
+            _lane = _router.attach_howto(
+                _router.route(question, has_files=bool(doc_files),
+                              ask=lambda _s, _u: _ask_short(_s, _u, model)), question)
+        except Exception as _exc:                   # noqa: BLE001 - 路由坏了回退原链路
+            print('[agent] 入口路由失败（回退查数线）：%s: %s'
+                  % (type(_exc).__name__, str(_exc)[:120]), flush=True)
+            _lane = None
+    if _lane:
+        trace.append({'seq': len(trace) + 1, 'kind': 'route', 'tool': 'router',
+                      'result': _lane})
+    if _lane and _lane.get('lane') in ('office', 'read', 'chat'):
+        from app.secretary import agent_office
+        return agent_office.ask_office(
+            question, _lane, lane=_lane['lane'], model=model, session_id=session_id,
+            user_id=user_id, user_code=user_code, client_ip=client_ip, channel=channel,
+            doc_files=doc_files, doc_context=doc_context, trace=trace,
+            should_stop=should_stop, max_steps=max_steps, today=today)
     # 上游（业务系统）指定的数据范围：提问人是谁、在哪个页面只有上游知道，所以它**强制**。
     # 上游强制的数据范围（业务系统传的，只记录、不再注入提示词）
     # （曾经的 bug：传了范围却全按「全市」作答，证据 output/test_results/…/EV-0003）。

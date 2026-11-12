@@ -240,8 +240,13 @@ def list_tables(keyword=''):
     except Exception:
         pass
     kw = str(keyword or '').strip().lower()
+    listed = semantic.table_list()
+    if not listed:
+        # 2026-11-11：业务字典没数据时退回 information_schema 直读（只读，办公线用）
+        listed = [{'table_name': n, 'table_cn_name': '', 'business_desc': '（字典未登记）',
+                   'note': '字典为空，表名取自库内实况'} for n in sorted(info)]
     out = []
-    for t in semantic.table_list():
+    for t in listed:
         name = t['table_name']
         if kw and kw not in (name + ' ' + (t['table_cn_name'] or '') + ' ' + t['business_desc']).lower():
             continue

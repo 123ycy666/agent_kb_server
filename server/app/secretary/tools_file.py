@@ -23,8 +23,8 @@ MAX_CHARS = 6000          # 单次返回给模型的正文上限
 DEFAULT_LIMIT = 40        # 一次读多少块
 
 
-def set_ctx(user_id=None, out_dir=None) -> None:
-    _CTX.set({'user_id': user_id, 'out_dir': str(out_dir or '')})
+def set_ctx(user_id=None, out_dir=None, howto=None) -> None:
+    _CTX.set({'user_id': user_id, 'out_dir': str(out_dir or ''), 'howto': str(howto or '')})
 
 
 def get_ctx() -> dict:
@@ -149,13 +149,114 @@ print("built", OUT)
 '''
 
 
+_DEFAULT_DOCX_FMT = {
+    'page': {'size': 'A4', 'width': 21.0, 'height': 29.7, 'top': 3.7, 'bottom': 3.5,
+             'left': 2.8, 'right': 2.6},
+    'title': {'font': '方正小标宋简体', 'pt': 22, 'bold': False, 'align': 'center',
+              'before': 24, 'after': 18},
+    'h1': {'font': '黑体', 'pt': 16, 'bold': False, 'before': 12, 'after': 6, 'line': 28},
+    'h2': {'font': '楷体_GB2312', 'pt': 16, 'bold': False, 'before': 6, 'after': 6, 'line': 28},
+    'h3': {'font': '仿宋_GB2312', 'pt': 16, 'bold': True, 'before': 0, 'after': 0, 'line': 28},
+    'body': {'font': '仿宋_GB2312', 'pt': 16, 'line': 28, 'indent_chars': 2,
+             'before': 0, 'after': 0, 'table_pt': 14},
+    'sign_off': {'font': '仿宋_GB2312', 'pt': 16, 'blank_lines': 2},
+    'page_number': {'on': True, 'font': '宋体', 'pt': 14, 'align': 'center'},
+}
+_DEFAULT_XLSX_FMT = {'header': {'font': '宋体', 'pt': 11, 'bold': True, 'fill': 'DDEBF7',
+                                'align': 'center'},
+                     'body': {'font': '宋体', 'pt': 10}, 'freeze': 'A3'}
+
+
+def _doc_fmt(kind, howto_task=''):
+    """做法给的版式 → 生成器参数；做法没给就用国标默认档，个人偏好最后覆盖。"""
+    fmt = {}
+    try:
+        from app.secretary import howto as HT
+        fmt = dict((HT.get(howto_task, kind).get('fmt') or {}))
+    except Exception:                               # noqa: BLE001 - 做法读不到不阻断出文件
+        fmt = {}
+    if not fmt:
+        fmt = dict(_DEFAULT_DOCX_FMT if kind == 'docx' else _DEFAULT_XLSX_FMT)
+    if kind == 'docx':
+        uid = get_ctx().get('user_id')
+        try:
+            from app.secretary import prefs as _prefs
+            p = (_prefs.get(uid) or {}) if uid else {}
+            body = dict(fmt.get('body') or {})
+            title = dict(fmt.get('title') or {})
+            if p.get('body_font_cn'):
+                body['font'] = p['body_font_cn']
+            if p.get('body_pt'):
+                body['pt'] = p['body_pt']
+            if p.get('title_pt'):
+                title['pt'] = p['title_pt']
+            if p.get('line_spacing_pt'):
+                body['line'] = p['line_spacing_pt']
+            fmt['body'], fmt['title'] = body, title
+        except Exception:                           # noqa: BLE001 - 偏好读不到按做法
+            pass
+    return fmt
+
+
+def _norm_docx(spec, title):
+    sections = spec.get('sections')
+    if not sections:
+        body = spec.get('text') or spec.get('body') or ''
+        sections = [['', body]]
+    out = []
+    for sec in sections:
+        if isinstance(sec, (list, tuple)) and len(sec) >= 2:
+            out.append([str(sec[0] or ''), str(sec[1] or '')])
+        elif isinstance(sec, dict):
+            out.append([str(sec.get('heading') or ''), str(sec.get('body') or '')])
+    return {'title': spec.get('title') or title, 'sections': out,
+            'sign_off': spec.get('sign_off') or [], 'tables': spec.get('tables') or []}
+
+
+def _norm_xlsx(spec, title):
+    sheets = []
+    for sh in (spec.get('sheets') or [{}]):
+        sh = sh or {}
+        header = sh.get('header') or []
+        rows = list(sh.get('rows') or [])
+        if not header and rows:
+            header = [str(c) for c in rows[0]]
+            rows = rows[1:]
+        sheets.append({'name': sh.get('name') or (title or 'Sheet1'),
+                       'title': sh.get('title') or '',
+                       'header': header, 'rows': rows,
+                       'formats': sh.get('formats') or [],
+                       'widths': sh.get('widths') or [],
+                       'total_row': bool(sh.get('total_row')),
+                       'freeze': sh.get('freeze') or ''})
+    return {'sheets': sheets, 'title': spec.get('title') or title}
+
+
+def _build(kind, spec, out_path, wd):
+    """调 howto_build 的模板生成文件，返回 runner 结果。"""
+    from app.secretary import howto_build as HB
+    from app.secretary import office_runner as R
+    task = get_ctx().get('howto') or ''
+    fmt = _doc_fmt(kind, task)
+    norm = _norm_docx(spec, out_path.stem) if kind == 'docx' else _norm_xlsx(spec, out_path.stem)
+    tpl = HB.DOCX_CODE if kind == 'docx' else HB.XLSX_CODE
+    code = (tpl.replace('@SPEC@', repr(json.dumps(norm, ensure_ascii=False)))
+               .replace('@FMT@', repr(json.dumps(fmt, ensure_ascii=False)))
+               .replace('@OUT@', repr(str(out_path))))
+    return R.run_code(code, wd, timeout=180), fmt
+
+
 def make_file(kind: str, spec: dict, self_check: bool = True) -> dict:
-    """出 docx / pptx / xlsx：走技能包 + inspect 自检，产物落成可下载文件。
+    """出 docx / pptx / xlsx：套做法版式 + inspect 自检，产物落成可下载文件。
 
     spec 形状（与内容直接对应，模型不用写代码）：
-        docx  {'title': '', 'sections': [[小节标题, 正文], ...]}
-        pptx  {'title': '', 'slides': [{'layout':'cover|section|bullets|end', 'title':'', 'bullets':[..]}]}
-        xlsx  {'sheets': [{'name': '', 'rows': [[...], ...]}]}
+        docx  {'title': '', 'sections': [[小节标题, 正文], ...], 'sign_off': [...],
+               'tables': [{'header': [...], 'rows': [[...]]}]}
+        pptx  {'title': '', 'slides': [{'layout':'cover|section|bullets|end', ...}]}
+        xlsx  {'sheets': [{'name': '', 'title': '', 'header': [...], 'rows': [[...]],
+                           'formats': ['#,##0.00'], 'widths': [14], 'total_row': true,
+                           'freeze': 'A3'}]}
+    版式来源（2026-11-11）：做法库 howto.get(task) 的 fmt → 个人偏好 → 国标默认。
     """
     from app.secretary import doc_files, office_runner as R
     uid = get_ctx().get('user_id')
@@ -174,15 +275,8 @@ def make_file(kind: str, spec: dict, self_check: bool = True) -> dict:
         title = ' '.join(str((_first or {}).get('name') or '').split())[:40] or '产物'
 
     if kind == 'docx':
-        from app.secretary.pipeline_doc_write import _BUILD_CODE as code_tpl
         out_path = out_dir / ('%s.docx' % title)
-        code = (code_tpl
-                .replace('{spec_json!r}', repr(json.dumps(
-                    {'title': spec.get('title') or title,
-                     'sections': spec.get('sections') or [[ '', spec.get('text') or '' ]]},
-                    ensure_ascii=False)))
-                .replace('{out!r}', repr(str(out_path)))
-                .replace('{fmt_json!r}', repr(json.dumps({}, ensure_ascii=False))))
+        res, fmt = _build('docx', spec, out_path, wd)
         script = R.DOCX_SCRIPTS / 'inspect_docx.py'
     elif kind == 'pptx':
         from app.secretary.pipeline_deck import _BUILD_CODE as code_tpl
@@ -193,22 +287,22 @@ def make_file(kind: str, spec: dict, self_check: bool = True) -> dict:
                      'slides': spec.get('slides') or [{'layout': 'cover', 'title': title}]},
                     ensure_ascii=False)))
                 .replace('{out!r}', repr(str(out_path))))
+        res = R.run_code(code, wd, timeout=180)
+        fmt = {}
         script = R.PPTX_SCRIPTS / 'inspect_deck.py'
     elif kind == 'xlsx':
         out_path = out_dir / ('%s.xlsx' % title)
-        code = _XLSX_CODE.replace('{spec_json!r}', repr(json.dumps(spec, ensure_ascii=False))) \
-                         .replace('{out!r}', repr(str(out_path)))
+        res, fmt = _build('xlsx', spec, out_path, wd)
         script = R.XLSX_SCRIPTS / 'inspect_workbook.py'
     else:
         return {'error': 'kind 只能是 docx / pptx / xlsx'}
 
-    res = R.run_code(code, wd, timeout=180)
     if not res['ok']:
         return {'error': '生成失败：%s' % ((res['stderr'] or res['stdout'] or '')[-400:])}
     verdict, tail = '未自检', ''
     if self_check and script is not None:
         insp = R.run_script(script, [str(out_path)], wd, timeout=180)
-        tail = (insp['stdout'] or insp['stderr'] or '')[-500:]
+        tail = (insp['stdout'] or insp['stderr'] or '')[-600:]
         verdict = '通过' if '结论: 通过' in (insp['stdout'] or '') else '不通过'
         if verdict != '通过':
             return {'error': '自检不通过，已拦下交付', 'self_check': {'verdict': verdict, 'tail': tail}}
@@ -217,6 +311,7 @@ def make_file(kind: str, spec: dict, self_check: bool = True) -> dict:
     meta = doc_files.save(uid, out_path.name, data, purpose='chat')
     return {'kind': kind, 'name': out_path.name, 'bytes': len(data),
             'file_id': meta['file_id'], 'url': '/api/files/%s/download' % meta['file_id'],
+            'fmt_used': {'body': (fmt.get('body') or {}), 'page': (fmt.get('page') or {})},
             'self_check': {'verdict': verdict, 'tail': tail}}
 
 
