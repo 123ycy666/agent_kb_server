@@ -25,6 +25,11 @@ LABEL = {
 MENU_MAX = 30
 HISTORY_TURNS = 5
 
+# 每段的来源：页面上要能看出「这段是库里配的、还是代码兜底的、还是这一轮自动生成的」。
+# 静态来源；`tools` 段要看库里那行有没有内容，在 build() 里现算。
+SOURCE = {'identity': '库', 'discipline': '库', 'menu': '自动生成', 'summary': '自动生成',
+          'history': '自动生成', 'files': '自动生成', 'spec': '自动生成', 'tools': '代码兜底'}
+
 
 def _fallback_identity() -> str:
     try:
@@ -162,13 +167,20 @@ def build(user_id, session_id, question, *, spec=None, history=None, files=None,
                            'from': before, 'to': total()})
 
     blocks, rows = [], []
+    src = dict(SOURCE)
+    if (tools or '').strip():
+        src['tools'] = '调用方传入'
+    elif inject_store.get('tools_guide').strip():
+        src['tools'] = '库'
     for k in ORDER:
         body = (parts.get(k) or '').strip()
         if not body:
-            rows.append({'name': k, 'label': LABEL[k], 'chars': 0, 'injected': False})
+            rows.append({'name': k, 'label': LABEL[k], 'chars': 0, 'injected': False,
+                         'source': src[k]})
             continue
         blocks.append(body)
-        rows.append({'name': k, 'label': LABEL[k], 'chars': len(body), 'injected': True})
+        rows.append({'name': k, 'label': LABEL[k], 'chars': len(body), 'injected': True,
+                     'source': src[k]})
     system = '\n\n'.join(blocks)
     return {'system': system, 'parts': rows, 'total': len(system), 'budget': budget,
             'over_budget': len(system) > budget, 'compressed': compressed,
