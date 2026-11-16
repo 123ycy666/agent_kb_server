@@ -35,6 +35,15 @@ def items(actor: CurrentActor = Depends(get_current_actor)):
                 'note': '问数链路的口径材料在「问数」页，不在这里。'})
 
 
+@router.get('/text', summary='读一项注入文本（页面编辑抽屉回显用）')
+def get_text(k: str = 'identity', actor: CurrentActor = Depends(get_current_actor)):
+    inject_store.ensure()
+    return _jr({'k': k, 'body': inject_store.get(k),
+                'label': inject_store.KEYS.get(k, ('', '', ''))[0],
+                'chars': len(inject_store.get(k)),
+                'source': '库 · cfg.inject_text', 'state': '可改'})
+
+
 @router.post('/text', summary='保存一项注入文本')
 async def save_text(request: Request, actor: CurrentActor = Depends(get_current_actor)):
     body = await request.json()

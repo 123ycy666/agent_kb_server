@@ -12,6 +12,7 @@ import {
   Popconfirm,
   Space,
   Spin,
+  Tabs,
   Tag,
   Typography,
   message,
@@ -27,13 +28,16 @@ import {
 import dayjs from 'dayjs'
 import {
   chatHistoryApi,
+  injectApi,
   type ChatHistoryResult,
   type ChatMessage,
   type ChatSession,
   type TraceStep,
 } from '../api'
+import { FourPack } from '../components/SelfCheckPanel'
+import AuditLogs from './AuditLogs'
 
-const { Text, Paragraph } = Typography
+const { Title, Text, Paragraph } = Typography
 
 function fmt(s?: string | null, f = 'MM-DD HH:mm') {
   return s ? dayjs(s).format(f) : ''
@@ -70,7 +74,9 @@ export default function ChatHistory() {
     setListLoading(true)
     try {
       const r = await chatHistoryApi.sessions({ allUsers })
-      setSessions(r.sessions || [])
+      const list = r.sessions || []
+      setSessions(list)
+      setActiveId((cur) => cur || list[0]?.session_id || '')
       setCanViewAll(Boolean(r.can_view_all))
       if (r.error) message.warning('会话列表加载异常：' + r.error)
     } catch (e) {
@@ -141,7 +147,7 @@ export default function ChatHistory() {
     } catch {
       /* 隐私模式下 localStorage 不可用，忽略 */
     }
-    navigate('/agent')
+    navigate('/chat')
   }
 
   /**
@@ -504,7 +510,155 @@ function MessageBubble({ m }: { m: ChatMessage }) {
             ]}
           />
         )}
+        {!isUser && m.qa_id ? <MessageReport qaId={m.qa_id} /> : null}
       </div>
     </div>
+  )
+}
+
+function MessageReport({ qaId }: { qaId: number }) {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      setData(await injectApi.report({ qa_id: qaId }))
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Collapse
+      ghost
+      size="small"
+      items={[
+        {
+          key: 'four',
+          label: (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              查看本轮四件套（说明书 / 自检 / 数字来源 / 答案）
+            </Text>
+          ),
+          children: loading ? (
+            <Spin size="small" />
+          ) : data ? (
+            <FourPack data={data} />
+          ) : (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              点开加载…
+            </Text>
+          ),
+        },
+      ]}
+      onChange={(keys) => {
+        if (keys.length > 0 && !data && !loading) void load()
+      }}
+    />
+  )
+}
+
+function ReportIndex() {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r: any = await injectApi.report({ limit: 50 })
+      setRows(r.items ?? [])
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+  }, [])
+
+  if (loading) {
+    return (
+      <Card>
+        <div style={{ textAlign: 'center', padding: 40 }}>
+          <Spin />
+        </div>
+      </Card>
+    )
+  }
+
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <Empty description="还没有带四件套的问答记录" />
+      </Card>
+    )
+  }
+
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message={`四件套记录（最近 ${rows.length} 条）`}
+        description="每条都来自 /api/v1/inject/report，点开即可看说明书、自检、数字来源与答案字段。"
+      />
+      {rows.map((r) => (
+        <Collapse
+          key={r.id}
+          items={[
+            {
+              key: String(r.id),
+              label: (
+                <Space wrap size={6}>
+                  <Text strong ellipsis style={{ maxWidth: 560 }}>
+                    {r.raw_question || '（无问题文本）'}
+                  </Text>
+                  {r.spec_used?.name ? <Tag color="blue">《{r.spec_used.name}》</Tag> : <Tag>未命中</Tag>}
+                  <Tag color={r.self_check?.ok ? 'green' : 'red'}>
+                    自检 {r.self_check?.ok ? '通过' : '不通过'}
+                  </Tag>
+                  <Tag>{r.number_sources?.length ?? 0} 个来源</Tag>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    qa_id {r.id}
+                  </Text>
+                </Space>
+              ),
+              children: <FourPack data={r} />,
+            },
+          ]}
+        />
+      ))}
+    </Space>
+  )
+}
+
+export function RecordsPage() {
+  return (
+    <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      <div>
+        <Title level={4} style={{ margin: 0 }}>
+          记录
+        </Title>
+        <Text type="secondary">会话回放、四件套与审计日志集中在同一页。</Text>
+      </div>
+      <Alert
+        type="info"
+        showIcon
+        message="每条问答都能展开四件套"
+        description="会话回放里每条 AI 回答下方新增「查看本轮四件套」；四件套页签可按 qa_id 逐条核对。"
+      />
+      <Tabs
+        items={[
+          { key: 'sessions', label: '会话与回放', children: <ChatHistory /> },
+          { key: 'four', label: '四件套', children: <ReportIndex /> },
+          { key: 'audit', label: '审计', children: <AuditLogs /> },
+        ]}
+      />
+    </Space>
   )
 }

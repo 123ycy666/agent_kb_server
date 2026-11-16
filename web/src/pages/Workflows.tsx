@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Alert, Button, Card, Collapse, Descriptions, Drawer, Empty, Form, Input, InputNumber,
   Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Typography, message,
@@ -60,7 +60,7 @@ function LogsTable({ logs }: { logs: WfRun['logs'] }) {
 }
 
 // ══════════════════════════════════════════════ 1 规则文档
-function DocsTab() {
+function DocsTab({ readOnly = false }: { readOnly?: boolean }) {
   const [docs, setDocs] = useState<WfDoc[]>([])
   const [loading, setLoading] = useState(false)
   const [openNew, setOpenNew] = useState(false)
@@ -120,24 +120,26 @@ function DocsTab() {
   }
 
   const columns: ColumnsType<WfDoc> = [
-    { title: '文档名', dataIndex: 'name', render: (v, r) => <a onClick={() => setEditing(r)}>{v}</a> },
+    { title: '文档名', dataIndex: 'name', render: (v, r) => <a onClick={readOnly ? undefined : () => setEditing(r)}>{v}</a> },
     { title: '工种', dataIndex: 'work_type_label', width: 120, render: (v) => <Tag>{v}</Tag> },
     { title: '版本', dataIndex: 'version', width: 70, render: (v) => `v${v}` },
     {
       title: '启用', dataIndex: 'enabled', width: 90,
-      render: (v, r) => <Switch size="small" checked={v} onChange={(on) => void toggle(r, on)} />,
+      render: (v, r) => <Switch size="small" disabled={readOnly} checked={v} onChange={(on) => void toggle(r, on)} />,
     },
     { title: '更新时间', dataIndex: 'updated_at', width: 170, render: dt },
     {
       title: '操作', width: 210,
       render: (_, r) => (
         <Space size="middle">
-          <a onClick={() => setEditing(r)}>编辑</a>
-          <a onClick={() => void doTest(r)}>测试</a>
+          {!readOnly ? <a onClick={() => setEditing(r)}>编辑</a> : null}
+          {!readOnly ? <a onClick={() => void doTest(r)}>测试</a> : null}
           <a onClick={() => void exportDoc(r)}>导出</a>
-          <Popconfirm title={`删除「${r.name}」？`} onConfirm={async () => {
-            try { await wfApi.deleteDoc(r.id); await load(); message.success('已删除') } catch (e) { message.error(err(e)) }
-          }}><a>删除</a></Popconfirm>
+          {!readOnly ? (
+            <Popconfirm title={`删除「${r.name}」？`} onConfirm={async () => {
+              try { await wfApi.deleteDoc(r.id); await load(); message.success('已删除') } catch (e) { message.error(err(e)) }
+            }}><a>删除</a></Popconfirm>
+          ) : null}
         </Space>
       ),
     },
@@ -146,7 +148,7 @@ function DocsTab() {
   return (
     <Card title="规则文档" extra={<Space>
       <Button onClick={() => void load()}>刷新</Button>
-      <Button type="primary" onClick={() => setOpenNew(true)}>新建文档</Button>
+      {!readOnly ? <Button type="primary" onClick={() => setOpenNew(true)}>新建文档</Button> : <Tag>只读</Tag>}
     </Space>}>
       <Table rowKey="id" size="small" loading={loading} dataSource={docs} columns={columns}
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
@@ -331,7 +333,7 @@ function DocEditor({ doc, onTest, onClose }: {
   )
 }
 
-function SchedulesTab({ docs }: { docs: WfDoc[] }) {
+function SchedulesTab({ docs, readOnly = false }: { docs: WfDoc[]; readOnly?: boolean }) {
   type T = { unit: string; n: number; hh: number; mm: number; dow: number; dom: number }
   const [list, setList] = useState<WfSchedule[]>([])
   const [open, setOpen] = useState(false)
@@ -404,14 +406,14 @@ function SchedulesTab({ docs }: { docs: WfDoc[] }) {
     {
       title: '启用', dataIndex: 'enabled', width: 80,
       render: (v, r) => (
-        <Switch size="small" checked={v} onChange={async (on) => {
+        <Switch size="small" disabled={readOnly} checked={v} onChange={async (on) => {
           try { await wfApi.saveSchedule(r.id, { enabled: on }); await load() } catch (e) { message.error(err(e)) }
         }} />
       ),
     },
     {
       title: '操作', width: 190,
-      render: (_, r) => (
+      render: (_, r) => readOnly ? <Tag>只读</Tag> : (
         <Space size="middle">
           <a onClick={() => openEdit(r)}>编辑</a>
           <Popconfirm title="立刻按这个方案跑一遍？" onConfirm={async () => {
@@ -432,7 +434,7 @@ function SchedulesTab({ docs }: { docs: WfDoc[] }) {
   return (
     <Card title="定时任务" extra={<Space>
       <Button onClick={() => void load()}>刷新</Button>
-      <Button type="primary" onClick={openNew}>新建定时方案</Button>
+      {!readOnly ? <Button type="primary" onClick={openNew}>新建定时方案</Button> : <Tag>只读</Tag>}
     </Space>}>
       <Table rowKey="id" size="small" dataSource={list} columns={columns}
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
@@ -572,7 +574,7 @@ function RunsTab() {
 }
 
 // ══════════════════════════════════════════════ 4 事项
-function ItemsTab() {
+function ItemsTab({ readOnly = false }: { readOnly?: boolean }) {
   const [rows, setRows] = useState<WfItem[]>([])
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState<string | undefined>('open')
@@ -607,16 +609,16 @@ function ItemsTab() {
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
         locale={{ emptyText: <Empty description="暂时没有问题" /> }} />
       <Drawer open={!!detail} width={720} title={detail?.object_name} onClose={() => setDetail(null)} destroyOnClose
-        extra={detail && (
+        extra={detail && !readOnly ? (
           <Space>
             <Button onClick={async () => {
-              try { const r = await wfApi.itemChat(detail.id); message.success('会话：' + r.session_id); navigate('/agent') } catch (e) { message.error(err(e)) }
+              try { const r = await wfApi.itemChat(detail.id); message.success('会话：' + r.session_id); navigate('/chat') } catch (e) { message.error(err(e)) }
             }}>进对话</Button>
             <Popconfirm title="关闭这条事项？" onConfirm={async () => {
               try { await wfApi.closeItem(detail.id, '人工关闭'); setDetail(null); await load(); message.success('已关闭') } catch (e) { message.error(err(e)) }
             }}><Button danger>关闭</Button></Popconfirm>
           </Space>
-        )}>
+        ) : null}>
         {detail && (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Descriptions size="small" column={2} items={[
@@ -677,7 +679,7 @@ function NotifyTab() {
   )
 }
 
-export default function Workflows() {
+export default function Workflows({ readOnly = false }: { readOnly?: boolean }) {
   const [tab, setTab] = useState('docs')
   const [docs, setDocs] = useState<WfDoc[]>([])
 
@@ -692,11 +694,16 @@ export default function Workflows() {
       <Paragraph type="secondary" style={{ marginBottom: 12 }}>
         规则写在文档里，代码里没有业务口径；定时方案到点按文档跑一轮。
       </Paragraph>
+      {readOnly ? (
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message="只读展示，不参与流转"
+          description="任务与预警本页只用于查看；调整规则、启停或新建方案请到工作流维护入口。" />
+      ) : null}
       <Tabs activeKey={tab} onChange={setTab} destroyInactiveTabPane items={[
-        { key: 'docs', label: '规则文档', children: <DocsTab /> },
-        { key: 'schedules', label: '定时任务', children: <SchedulesTab docs={docs} /> },
+        { key: 'docs', label: '规则文档', children: <DocsTab readOnly={readOnly} /> },
+        { key: 'schedules', label: '定时任务', children: <SchedulesTab docs={docs} readOnly={readOnly} /> },
         { key: 'runs', label: '运行记录', children: <RunsTab /> },
-        { key: 'items', label: '事项', children: <ItemsTab /> },
+        { key: 'items', label: '事项', children: <ItemsTab readOnly={readOnly} /> },
         { key: 'notify', label: '发送记录', children: <NotifyTab /> },
       ]} />
     </div>

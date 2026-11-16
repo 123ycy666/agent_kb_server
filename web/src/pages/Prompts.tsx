@@ -329,7 +329,7 @@ export default function Prompts() {
       await loadComplete()
       return
     }
-    // 身份 / 模式做法 / 业务词表：走文本编辑器（存 prompt_text，可覆盖）
+    // 身份 / 模式规则 / 业务词表：走文本编辑器（存 prompt_text，可覆盖）
     if (m.textKey) {
       await loadText(m.textKey, m.name)
       return
@@ -874,7 +874,7 @@ export default function Prompts() {
           description={
             txtKey === 'askfill'
               ? '这一步只管"补哪句问法"。要补成什么口径、几个方面，在上一行的「④ 补全表」里配。'
-              : '模式做法和词表是 JSON，改值就行；身份是纯文本。'
+              : '模式规则和词表是 JSON，改值就行；身份是纯文本。'
           }
         />
         {txtKey === 'askfill' && askForm ? (

@@ -82,7 +82,7 @@ async def classify(spec_id: int, request: Request,
     return _jr(res)
 
 
-@router.get('/{spec_id}', summary='详情：正文 + 版本 + 引用 + 冲突')
+@router.get('/{spec_id:int}', summary='详情：正文 + 版本 + 引用 + 冲突')
 def detail(spec_id: int, actor: CurrentActor = Depends(get_current_actor)):
     hit = SP.load(actor.user_id, spec_id=spec_id)
     if not hit:
@@ -114,6 +114,22 @@ def publish(spec_id: int, actor: CurrentActor = Depends(get_current_actor)):
 @router.post('/{spec_id}/retire', summary='退役（不删，可回滚）')
 def retire(spec_id: int, actor: CurrentActor = Depends(get_current_actor)):
     return _jr(SP.retire(spec_id, actor.user_id, admin=actor.is_admin))
+
+
+@router.post('/{spec_id}/enable', summary='把退役/停用的说明书重新启用（H9.1 可回滚）')
+def enable(spec_id: int, actor: CurrentActor = Depends(get_current_actor)):
+    res = SP.enable(spec_id, actor.user_id, admin=actor.is_admin)
+    return _jr(res, 400 if res.get('error') else 200)
+
+
+@router.get('/retired', summary='退役列表（可重新启用）')
+def retired(actor: CurrentActor = Depends(get_current_actor)):
+    SP.ensure()
+    rows = SP._q("""select id, name, role_code, space, status, owner_id, version_no,
+                           length(body) as chars, updated_at
+                      from kb.spec where not enabled or status='retired'
+                     order by updated_at desc limit 100""")
+    return _jr({'items': [dict(r, owner='本人' if r.get('owner_id') else '全局') for r in rows]})
 
 
 @router.post('/try-run', summary='试跑：这篇会不会被选中、目录行、注入多长')

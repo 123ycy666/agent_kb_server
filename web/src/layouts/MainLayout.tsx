@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Avatar,
-  Badge,
   Dropdown,
   Layout,
   Menu,
@@ -12,21 +11,17 @@ import {
   theme,
 } from 'antd'
 import {
-  ApartmentOutlined,
-  AuditOutlined,
+  BarChartOutlined,
   BookOutlined,
   ClusterOutlined,
-  DashboardOutlined,
   DeploymentUnitOutlined,
-  ExclamationCircleOutlined,
-  FileTextOutlined,
+  ExperimentOutlined,
   HistoryOutlined,
+  HomeOutlined,
   LogoutOutlined,
   MessageOutlined,
-  SearchOutlined,
   SettingOutlined,
-  TagsOutlined,
-  TeamOutlined,
+  ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../store/auth'
@@ -45,40 +40,32 @@ export default function MainLayout() {
 
   const selectedKey = useMemo(() => {
     const p = location.pathname
-    if (p.startsWith('/kb')) return '/kb'
-    const seg = p.split('/')[1] || 'overview'
+    const seg = p.split('/')[1] || 'home'
     return `/${seg}`
   }, [location.pathname])
 
   const items = [
-    { key: '/overview', icon: <DashboardOutlined />, label: <Link to="/overview">概览</Link> },
-    { key: '/kb', icon: <BookOutlined />, label: <Link to="/kb">知识库</Link> },
-    { key: '/search', icon: <SearchOutlined />, label: <Link to="/search">检索测试</Link> },
-    { key: '/prompts', icon: <FileTextOutlined />, label: <Link to="/prompts">提示词</Link> },
+    { key: '/home', icon: <HomeOutlined />, label: <Link to="/home">首页</Link> },
+    { key: '/chat', icon: <MessageOutlined />, label: <Link to="/chat">智能问答</Link> },
+    { key: '/specs', icon: <BookOutlined />, label: <Link to="/specs">知识库</Link> },
+    { key: '/ask-data', icon: <BarChartOutlined />, label: <Link to="/ask-data">问数</Link> },
     {
-      key: '/agent',
-      icon: <MessageOutlined />,
-      // 2026-10-15 融合改造：问答页现在是 SPA 内的路由页（内部 iframe 嵌 /agent/），
-      // 因此用 <Link> 在框架内切换 —— 侧边栏、身份区保留，不再整页跳出。
-      label: <Link to="/agent">智能问答</Link>,
+      key: '/inject',
+      icon: <ThunderboltOutlined />,
+      label: <Link to="/inject">提示词与注入</Link>,
     },
-    { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">历史对话</Link> },
     {
-      key: '/conflicts',
-      icon: <ExclamationCircleOutlined />,
-      label: <Link to="/conflicts">冲突管理</Link>,
+      key: '/tasks',
+      icon: <DeploymentUnitOutlined />,
+      label: <Link to="/tasks">任务与预警</Link>,
     },
-    { key: '/tags', icon: <TagsOutlined />, label: <Link to="/tags">标签管理</Link> },
-    { key: '/tasks', icon: <DeploymentUnitOutlined />, label: <Link to="/tasks">任务中心</Link> },
-    { key: '/workflows', icon: <ApartmentOutlined />, label: <Link to="/workflows">工作流</Link> },
-    { type: 'divider' as const },
+    { key: '/records', icon: <HistoryOutlined />, label: <Link to="/records">记录</Link> },
+    { key: '/eval', icon: <ExperimentOutlined />, label: <Link to="/eval">评测</Link> },
     {
-      key: '/permissions',
-      icon: <TeamOutlined />,
-      label: <Link to="/permissions">员工列表</Link>,
+      key: '/system',
+      icon: <SettingOutlined />,
+      label: <Link to="/system">系统</Link>,
     },
-    { key: '/audit', icon: <AuditOutlined />, label: <Link to="/audit">审计日志</Link> },
-    { key: '/models', icon: <SettingOutlined />, label: <Link to="/models">模型配置</Link> },
   ]
 
   return (
@@ -86,14 +73,9 @@ export default function MainLayout() {
       <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={216}>
         <div className="kb-logo">
           <ClusterOutlined style={{ fontSize: 20 }} />
-          {!collapsed && <span style={{ marginLeft: 8 }}>统一智能平台</span>}
+          {!collapsed && <span style={{ marginLeft: 8 }}>秘书智能体</span>}
         </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          items={items}
-        />
+        <Menu theme="dark" mode="inline" selectedKeys={[selectedKey]} items={items} />
       </Sider>
 
       <Layout>
@@ -107,7 +89,7 @@ export default function MainLayout() {
             borderBottom: '1px solid #f0f0f0',
           }}
         >
-          <Text strong>统一知识库与智能问数平台</Text>
+          <Text strong>统一知识库与智能问答平台 · 管理端</Text>
           <Space size="middle">
             {roles.map((r) => (
               <Tag key={r} color={r === 'admin' ? 'gold' : 'blue'}>

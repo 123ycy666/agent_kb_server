@@ -698,3 +698,196 @@ export const presetApi = {
       '/api/presets',
     ),
 }
+
+// ══════════════════════════════════════════════════════════════
+//  说明书 / 注入 / 评测 / 指标口径（阶段 2–6）
+// ══════════════════════════════════════════════════════════════
+
+export type ConfigState = '可改' | '只读·库' | '只读·代码'
+
+export interface SpecRole {
+  code: string
+  label: string
+  description: string
+  product: string
+}
+
+export interface SpecItem {
+  id: number
+  name: string
+  role_code: string
+  space: string
+  when_to_use: string
+  product: string
+  owner: string
+  version_no: number
+  chars: number
+  checks: number
+  conflict_with: string[]
+  updated_at: string
+}
+
+export interface SpecPending {
+  id: number
+  name: string
+  role_code: string
+  space: string
+  status: string
+  version_no: number
+  chars: number
+  when_to_use: string
+  product: string
+  owner: string
+}
+
+export interface SpecListResult {
+  items: SpecItem[]
+  pending: SpecPending[]
+  menu: string
+  count: number
+}
+
+export interface SpecPreview {
+  id: number
+  name: string
+  chars: number
+  slices: { no: number; text: string }[]
+  menu_line: string
+  missing: string[]
+}
+
+export interface SpecDetail {
+  item: any
+  owner: string
+  body: string
+  refs: { name: string; spec_id?: number; resolved: boolean }[]
+  conflicts: { id: number; name: string; owner: string }[]
+  versions: { version_no: number; chars: number; saved_by: string; saved_at: string }[]
+  chars: number
+}
+
+export interface InjectionPart {
+  name: string
+  label: string
+  chars: number
+  injected: boolean
+  share: number
+}
+
+export interface InjectPreviewData {
+  total: number
+  budget: number
+  over_budget: boolean
+  parts: InjectionPart[]
+  compressed: { name: string; why: string; from: number; to: number }[]
+  head?: string
+  spec?: string
+  question?: string
+}
+
+export interface InjectItem {
+  k: string
+  label: string
+  chars: number
+  source: string
+  state: ConfigState
+  updated_by: string
+  version_no: number
+  updated_at: string
+}
+
+export interface RegistryNode {
+  group: string
+  key: string
+  label: string
+  state: ConfigState
+  storage: string
+  page: string
+  api: string
+  affects: string
+  updated_by?: string
+  updated_at?: string
+  version_no?: number
+  chars?: number
+  values?: Record<string, unknown>
+}
+
+export interface EvalSuite {
+  id: number
+  name: string
+  note: string
+  n: number
+  created_at: string
+}
+
+export interface EvalRun {
+  id: number
+  suite_id: number
+  tag: string
+  total: number
+  passed: number
+  score: number
+  by_class: Record<string, number[]>
+  created_at: string
+}
+
+export interface EvalItem {
+  seq: number
+  cls: string
+  question: string
+  answer: string
+  passed: boolean
+  verdict: string
+  secs: number
+}
+
+export const specsApi = {
+  roles: () => http.get<any, { items: SpecRole[] }>('/specs/roles'),
+  list: () => http.get<any, SpecListResult>('/specs'),
+  upload: (form: FormData) =>
+    http.post<any, any>('/specs/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+  classify: (id: number, data: Record<string, unknown>) =>
+    http.post<any, any>(`/specs/${id}/classify`, data),
+  get: (id: number) => http.get<any, SpecDetail>(`/specs/${id}`),
+  preview: (id: number) => http.get<any, SpecPreview>(`/specs/${id}/preview`),
+  publish: (id: number) => http.post<any, any>(`/specs/${id}/publish`),
+  retire: (id: number) => http.post<any, any>(`/specs/${id}/retire`),
+  tryRun: (data: { name?: string; question?: string; spec_id?: number }) =>
+    http.post<any, any>('/specs/try-run', data),
+}
+
+export const injectApi = {
+  items: () =>
+    http.get<any, { items: InjectItem[]; budget: number; affects: string; note: string }>(
+      '/inject/items',
+    ),
+  saveText: (k: string, body: string) => http.post<any, any>('/inject/text', { k, body }),
+  budget: () => http.get<any, { resident_chars: number }>('/inject/budget'),
+  setBudget: (resident_chars: number) =>
+    http.post<any, any>('/inject/budget', { resident_chars }),
+  preview: (params: { question?: string; spec_name?: string; session_id?: string }) =>
+    http.get<any, InjectPreviewData>('/inject/preview', { params }),
+  nodes: () =>
+    http.get<any, { items: RegistryNode[]; summary: Record<string, number> }>('/inject/nodes'),
+  routeRule: () => http.get<any, any>('/inject/route-rule'),
+  saveRouteRule: (values: Record<string, unknown>) =>
+    http.post<any, any>('/inject/route-rule', values),
+  report: (params: { qa_id?: number; limit?: number }) =>
+    http.get<any, any>('/inject/report', { params }),
+}
+
+export const evalApi = {
+  classes: () => http.get<any, { items: string[] }>('/eval/classes'),
+  suites: () => http.get<any, { items: EvalSuite[] }>('/eval/suites'),
+  createSuite: (data: { name: string; note: string; questions: unknown[] }) =>
+    http.post<any, { id: number; n: number }>('/eval/suites', data),
+  run: (data: { suite_id: number; tag: string; limit: number }) =>
+    http.post<any, any>('/eval/run', data),
+  runs: () => http.get<any, { items: EvalRun[] }>('/eval/runs'),
+  runDetail: (id: number) =>
+    http.get<any, { run: EvalRun; items: EvalItem[] }>(`/eval/run/${id}`),
+  compare: (a: number, b: number) =>
+    http.get<any, any>('/eval/compare', { params: { a, b } }),
+}

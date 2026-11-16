@@ -12,14 +12,14 @@ export default function Login() {
   const [error, setError] = useState<string>('')
 
   if (user) {
-    return <Navigate to="/overview" replace />
+    return <Navigate to="/home" replace />
   }
 
   const onFinish = async (values: { username: string; password: string }) => {
     setError('')
     try {
       await login(values.username, values.password)
-      navigate('/overview')
+      navigate('/home')
     } catch (e) {
       setError((e as Error).message)
     }

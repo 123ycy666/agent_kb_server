@@ -25,9 +25,10 @@ URL = os.environ.get('DATABASE_URL_RAW') or 'postgresql://kb:kb_dev_pwd@127.0.0.
 
 # 表 → 目标 schema（需求定稿 §四 数据归属）
 MOVES: dict[str, str] = {}
-for _t in ('knowledge_base', 'document', 'document_chunk', 'conflict_record', 'tag',
-           'howto_task'):
+for _t in ('knowledge_base', 'document', 'document_chunk', 'conflict_record', 'tag'):
     MOVES[_t] = 'kb'
+# `howto_task` 不在归位清单里：阶段 2 已把它迁成 kb.spec，原表改名 kb.spec_legacy 归档，
+# public 也不再留它的视图（V15：同类配置只留一份在用的真身）。
 for _t in ('prompt_text', 'prompt_material', 'caliber_metric', 'caliber_metric_ver',
            'caliber_base', 'complete_rule', 'data_meta_override',
            't_nc_ambiguous', 't_nc_catalog', 't_nc_pinyin', 't_nc_term', 't_nc_typo',
@@ -176,7 +177,80 @@ def check() -> int:
         return 0 if not fails else 1
 
 
+def fix_shadow(dry=False) -> int:
+    """清理「影子表」（2026-11-16 实测踩到的坑）。
+
+    根因：库账号叫 `kb`，默认 search_path 是 `"$user", public`。阶段 1 建出 `kb`
+    schema 之后，未加前缀的表名（ORM 模型全是未加前缀的）优先落进 `kb`，
+    SQLAlchemy 的 `create_all` 顺手在 `kb` 里建了一批空表，把 `public.<同名视图>`
+    遮住 —— 表现为 `prompt_text` 读出 0 行、页面覆盖项全部失效。
+
+    判定：某张表出现在**不属于它**的 schema 里、且没有数据 → 是影子表，删掉。
+    真表一定有数据或本来就是空的（`conflict_record` 合法为空，但它的归属就是 kb）。
+    """
+    from psycopg import sql as S
+    with connect() as conn:
+        cur = conn.cursor()
+        dropped, kept = [], []
+        for t, owner in MOVES.items():
+            for grp in sorted(set(MOVES.values())):
+                if grp == owner or relkind(cur, grp, t) != 'r':
+                    continue
+                n = counts(cur, grp, t)
+                if n:
+                    kept.append('%s.%s(%d 行，非空不删)' % (grp, t, n))
+                    continue
+                print('  DROP 影子表 %s.%s（归属应为 %s，0 行）' % (grp, t, owner))
+                if not dry:
+                    cur.execute(S.SQL('DROP TABLE {}.{} CASCADE').format(
+                        S.Identifier(grp), S.Identifier(t)))
+                dropped.append('%s.%s' % (grp, t))
+        print('\n删除影子表 %d 张%s' % (len(dropped), ('：%s' % dropped) if dropped else ''))
+        if kept:
+            print('保留（非空）：%s' % kept)
+        return 0
+
+
+def emit_sql() -> int:
+    """把迁移动作打印成**与当前状态无关**的 SQL（线上用容器自带 psql 执行）。
+
+    线上 PG 在容器里、没有对外端口，本机脚本连不上；服务器上也不一定有 python 依赖。
+    所以这里不按"当前状态"分支，而是每张表都走同一个受保护的 DO 块：
+    表还在 public 才搬，搬完视图统一重建。任何状态跑都安全、可重复跑。
+    """
+    print((ROOT / 'db' / 'v5_schema.sql').read_text(encoding='utf-8'))
+    for t, grp in MOVES.items():
+        print(f"""-- {t} → {grp}
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'public' AND c.relname = '{t}' AND c.relkind = 'r') THEN
+    ALTER TABLE public."{t}" SET SCHEMA {grp};
+  END IF;
+END $$;
+DROP VIEW IF EXISTS public."{t}";
+CREATE VIEW public."{t}" AS SELECT * FROM {grp}."{t}";""")
+    # 影子表清理：不属于本 schema 的空表删掉（search_path 踩过的坑，见 fix_shadow）
+    for t, owner in MOVES.items():
+        for grp in sorted(set(MOVES.values())):
+            if grp == owner:
+                continue
+            print(f"""DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = '{grp}' AND c.relname = '{t}' AND c.relkind = 'r')
+     AND NOT EXISTS (SELECT 1 FROM {grp}."{t}") THEN
+    DROP TABLE {grp}."{t}" CASCADE;
+  END IF;
+END $$;""")
+    return 0
+
+
 if __name__ == '__main__':
     if '--check' in sys.argv:
         sys.exit(check())
+    if '--fix-shadow' in sys.argv:
+        sys.exit(fix_shadow(dry='--dry' in sys.argv))
+    if '--emit-sql' in sys.argv:
+        sys.exit(emit_sql())
     sys.exit(run(dry='--dry' in sys.argv))

@@ -27,6 +27,15 @@ engine = create_engine(
     pool_size=10,
     max_overflow=20,
     future=True,
+    # ★ 2026-11-16：search_path 固定成 public。
+    #   默认 search_path 是 `"$user", public`，而库账号就叫 `kb` —— 阶段 1 建出
+    #   `kb` schema 之后 `$user` 指到了真实 schema，未加前缀的表名（ORM 模型全是
+    #   未加前缀的）优先落进 `kb`，`create_all` 顺手在 `kb` 建了一批**空表**，
+    #   把 `public.<同名视图>` 遮住 —— 表现为 `prompt_text` 读出 0 行、
+    #   页面上的提示词覆盖项全部失效（实测踩到，见 output/test_results/
+    #   2026-11-16-阶段1-PG重排/00-index.md 的「search_path 影子表」一节）。
+    #   固定成 public 后与迁移前完全一致：未加前缀的名字全部走 public 兼容视图。
+    connect_args={'options': '-csearch_path=public'},
 )
 
 SessionLocal = sessionmaker(

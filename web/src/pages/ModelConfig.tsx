@@ -4,19 +4,26 @@ import {
   Button,
   Card,
   Col,
+  Descriptions,
   Divider,
+  Drawer,
   Form,
   Input,
   Row,
+  Select,
   Space,
+  Statistic,
   Table,
+  Tabs,
   Tag,
   Typography,
   message,
 } from 'antd'
-import { ApiOutlined, CloudOutlined, ExperimentOutlined, ReloadOutlined } from '@ant-design/icons'
-import { kbApi, modelApi } from '../api'
-import type { KnowledgeBase, ProviderConfig, ProviderTestResult } from '../api'
+import { ApiOutlined, CloudOutlined, ExperimentOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
+import { injectApi, kbApi, modelApi } from '../api'
+import type { KnowledgeBase, ProviderConfig, ProviderTestResult, RegistryNode } from '../api'
+import StateBadge from '../components/StateBadge'
+import PermissionManagement from './PermissionManagement'
 
 const { Title, Text, Paragraph, Link: AntLink } = Typography
 
@@ -442,6 +449,337 @@ export default function ModelConfig() {
           }
         />
       )}
+    </Space>
+  )
+}
+
+function RegistryPanel() {
+  const [items, setItems] = useState<RegistryNode[]>([])
+  const [summary, setSummary] = useState<Record<string, number>>({})
+  const [loading, setLoading] = useState(false)
+  const [stateFilter, setStateFilter] = useState<string | undefined>()
+  const [node, setNode] = useState<RegistryNode | null>(null)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await injectApi.nodes()
+      setItems(r.items ?? [])
+      setSummary(r.summary ?? {})
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+  }, [])
+
+  const filtered = stateFilter ? items.filter((x) => x.state === stateFilter) : items
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="三态注册表：每一份配置都要看见、说得清来源"
+        description="可改 = 页面上能改；只读·库 = 存在库里但本期由别的系统维护；只读·代码 = 代码常量。点任意一行看存储与接口。"
+      />
+      <Row gutter={12}>
+        {['可改', '只读·库', '只读·代码'].map((k, i) => (
+          <Col span={6} key={k}>
+            <Card size="small">
+              <Statistic
+                title={k}
+                value={summary[k] ?? 0}
+                valueStyle={{ color: ['#389e0d', '#1677ff', '#8c8c8c'][i] }}
+              />
+            </Card>
+          </Col>
+        ))}
+        <Col span={6}>
+          <Card size="small">
+            <Statistic title="合计" value={summary.total ?? items.length} />
+          </Card>
+        </Col>
+      </Row>
+      <Card
+        size="small"
+        title="注册表"
+        extra={
+          <Space>
+            <Select
+              allowClear
+              size="small"
+              placeholder="全部三态"
+              style={{ width: 130 }}
+              value={stateFilter}
+              onChange={setStateFilter}
+              options={['可改', '只读·库', '只读·代码'].map((x) => ({ value: x, label: x }))}
+            />
+            <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>
+              刷新
+            </Button>
+          </Space>
+        }
+      >
+        <Table
+          rowKey={(r) => `${r.group}-${r.key}`}
+          size="small"
+          loading={loading}
+          dataSource={filtered}
+          pagination={{ pageSize: 12, showSizeChanger: false }}
+          onRow={(r) => ({ onClick: () => setNode(r), style: { cursor: 'pointer' } })}
+          columns={[
+            { title: '分组', dataIndex: 'group', width: 92, render: (v) => <Tag>{v}</Tag> },
+            { title: '配置项', dataIndex: 'label', width: 200 },
+            {
+              title: '三态',
+              dataIndex: 'state',
+              width: 100,
+              render: (v, r) => (
+                <StateBadge
+                  state={v}
+                  source={r.storage}
+                  updatedBy={r.updated_by}
+                  updatedAt={r.updated_at}
+                  extra={<div>生效：下一轮（≤60 秒）</div>}
+                />
+              ),
+            },
+            {
+              title: '字数',
+              width: 68,
+              align: 'right',
+              render: (_, r) => (r.chars != null ? r.chars.toLocaleString() : '—'),
+            },
+            {
+              title: '来源',
+              dataIndex: 'storage',
+              width: 200,
+              render: (v) => (
+                <Text className="kb-mono" style={{ fontSize: 11 }}>
+                  {v}
+                </Text>
+              ),
+            },
+            {
+              title: '最近修改',
+              width: 130,
+              render: (_, r) =>
+                r.updated_by || r.updated_at ? (
+                  <Space direction="vertical" size={0}>
+                    <Text style={{ fontSize: 11 }}>{r.updated_by || '—'}</Text>
+                    <Text type="secondary" style={{ fontSize: 10 }}>
+                      {r.updated_at || ''}
+                    </Text>
+                  </Space>
+                ) : (
+                  <Text type="secondary">—</Text>
+                ),
+            },
+            {
+              title: '生效方式',
+              width: 138,
+              render: () => <Tag color="blue">下一轮 · ≤60 秒</Tag>,
+            },
+            { title: '页面', dataIndex: 'page', width: 112 },
+          ]}
+        />
+      </Card>
+      <Drawer open={!!node} width={640} title={node ? `${node.group} / ${node.label}` : ''} onClose={() => setNode(null)}>
+        {node ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="键">
+                <Text code>{node.key}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="三态">
+                <StateBadge state={node.state} source={node.storage} updatedBy={node.updated_by} />
+              </Descriptions.Item>
+              <Descriptions.Item label="来源">{node.storage}</Descriptions.Item>
+              <Descriptions.Item label="页面">{node.page}</Descriptions.Item>
+              <Descriptions.Item label="接口">{node.api || '—（代码常量）'}</Descriptions.Item>
+              <Descriptions.Item label="影响">{node.affects}</Descriptions.Item>
+              <Descriptions.Item label="生效">下一轮（缓存最多 60 秒）</Descriptions.Item>
+            </Descriptions>
+            {node.values ? (
+              <Card size="small" title="当前值">
+                <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>
+                  {JSON.stringify(node.values, null, 2)}
+                </pre>
+              </Card>
+            ) : null}
+          </Space>
+        ) : null}
+      </Drawer>
+    </Space>
+  )
+}
+
+const RULE_LABEL: Record<string, string> = {
+  product: '产物关键词（一句话想做哪种文件）',
+  make_verb: '动手词（要生成/写/做）',
+  deliver_tail: '交付尾词（发我/给我/导出）',
+  ask_hint: '问数提示词（多少/排名/占比）',
+  file_ref: '文件指代（这个文件/附件/文中）',
+  priority: '选取优先级（谁说了算）',
+}
+
+const RULE_HINT: Record<string, string> = {
+  product: '每个产物一组词；命中任一，就按那种文件出。',
+  make_verb: '出现这些词，说明用户想动手做事，不是只想聊天。',
+  deliver_tail: '出现这些词，说明用户要交付物。',
+  ask_hint: '出现这些词，优先走问数。',
+  file_ref: '这些说法指代会话里已有的文件，要读文件。',
+  priority: '说明书选取发生冲突时，按这个顺序判。',
+}
+
+function RouteRulePanel() {
+  const [meta, setMeta] = useState<any>(null)
+  const [values, setValues] = useState<Record<string, any>>({})
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r: any = await injectApi.routeRule()
+      setMeta(r)
+      setValues(JSON.parse(JSON.stringify(r.values ?? {})))
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const r: any = await injectApi.saveRouteRule(values)
+      if (r?.error) message.error(r.error)
+      else {
+        message.success(`已保存整份入口判据（${r.terms} 个词），下一轮生效`)
+        await load()
+      }
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const setList = (key: string, list: string[]) =>
+    setValues((prev) => ({ ...prev, [key]: list }))
+
+  const setProduct = (kind: string, list: string[]) =>
+    setValues((prev) => ({
+      ...prev,
+      product: { ...(prev.product ?? {}), [kind]: list },
+    }))
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Card size="small" title="入口分流判据">
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space wrap>
+            {meta ? (
+              <StateBadge
+                state={meta.state}
+                source={meta.source}
+                updatedBy={meta.updated_by}
+                updatedAt={meta.updated_at}
+              />
+            ) : null}
+            <Tag>v{meta?.version_no ?? 1}</Tag>
+            <Tag>{meta?.chars ?? 0} 字</Tag>
+            <Text type="secondary">保存整份 values，改完下一轮生效（≤60 秒）</Text>
+          </Space>
+          <Alert
+            type="info"
+            showIcon
+            message="这些词决定一句话走干活线还是问数线"
+            description="改词不改代码：每个 Tag 按回车追加，点 × 删除。保存时整份 values 提交，后端只认这些键。"
+          />
+          <Space>
+            <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
+              保存整份
+            </Button>
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>
+              重新读取
+            </Button>
+          </Space>
+        </Space>
+      </Card>
+
+      {Object.keys(values).map((key) =>
+        key === 'product' ? (
+          <Card key={key} size="small" title={RULE_LABEL[key] || key}>
+            <Paragraph type="secondary" style={{ fontSize: 12 }}>
+              {RULE_HINT[key]}
+            </Paragraph>
+            <Row gutter={12}>
+              {Object.entries(values.product ?? {}).map(([kind, list]) => (
+                <Col span={8} key={kind}>
+                  <Card size="small" type="inner" title={kind}>
+                    <Select
+                      mode="tags"
+                      style={{ width: '100%' }}
+                      value={list as string[]}
+                      tokenSeparators={[',', '，', '、']}
+                      onChange={(v: string[]) => setProduct(kind, v)}
+                    />
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          </Card>
+        ) : (
+          <Card key={key} size="small" title={RULE_LABEL[key] || key}>
+            <Paragraph type="secondary" style={{ fontSize: 12 }}>
+              {RULE_HINT[key]}
+            </Paragraph>
+            <Select
+              mode="tags"
+              style={{ width: '100%' }}
+              value={Array.isArray(values[key]) ? values[key] : []}
+              tokenSeparators={[',', '，', '、']}
+              onChange={(v: string[]) => setList(key, v)}
+            />
+          </Card>
+        )
+      )}
+    </Space>
+  )
+}
+
+export function SystemPage() {
+  return (
+    <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      <div>
+        <Title level={4} style={{ margin: 0 }}>
+          系统
+        </Title>
+        <Text type="secondary">
+          用户与角色、模型、三态注册表、入口分流判据；可改项都落在接口上。
+        </Text>
+      </div>
+      <Tabs
+        defaultActiveKey="registry"
+        items={[
+          { key: 'registry', label: '三态注册表', children: <RegistryPanel /> },
+          { key: 'route', label: '入口分流判据', children: <RouteRulePanel /> },
+          { key: 'users', label: '用户与角色', children: <PermissionManagement /> },
+          { key: 'models', label: '模型', children: <ModelConfig /> },
+        ]}
+      />
     </Space>
   )
 }

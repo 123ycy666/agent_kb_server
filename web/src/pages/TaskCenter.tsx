@@ -9,6 +9,7 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
   message,
@@ -18,6 +19,7 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { taskApi } from '../api'
 import type { TaskItem } from '../api'
+import Workflows from './Workflows'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -34,6 +36,33 @@ const TYPE_LABEL: Record<string, string> = {
   conflict_scan: '冲突扫描',
   reindex: '重建索引',
   kb_delete: '删除知识库',
+}
+
+export function TasksPage() {
+  return (
+    <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      <div>
+        <Title level={4} style={{ margin: 0 }}>
+          任务与预警
+        </Title>
+        <Text type="secondary">
+          任务中心与工作流统一在这里看；本页只读展示，不参与流转。
+        </Text>
+      </div>
+      <Alert
+        type="info"
+        showIcon
+        message="只读展示"
+        description="查看任务进度、工作流运行记录与事项；新的流转由工作流定时方案或问答产物触发，本页不提供办理按钮。"
+      />
+      <Tabs
+        items={[
+          { key: 'tasks', label: '任务中心', children: <TaskCenter /> },
+          { key: 'workflows', label: '工作流', children: <Workflows readOnly /> },
+        ]}
+      />
+    </Space>
+  )
 }
 
 export default function TaskCenter() {

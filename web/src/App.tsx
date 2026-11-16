@@ -4,20 +4,15 @@ import { Result, Button } from 'antd'
 import MainLayout from './layouts/MainLayout'
 import { useAuth } from './store/auth'
 import Login from './pages/Login'
-import Overview from './pages/Overview'
-import KnowledgeBaseList from './pages/KnowledgeBaseList'
-import DocumentList from './pages/DocumentList'
-import SearchTest from './pages/SearchTest'
-import ConflictList from './pages/ConflictList'
-import TagManagement from './pages/TagManagement'
-import PermissionManagement from './pages/PermissionManagement'
-import AuditLogs from './pages/AuditLogs'
-import ModelConfig from './pages/ModelConfig'
-import TaskCenter from './pages/TaskCenter'
-import Workflows from './pages/Workflows'
-import AgentChat from './pages/AgentChat'
-import ChatHistory from './pages/ChatHistory'
-import Prompts from './pages/Prompts'
+import Home from './pages/Overview'
+import Chat from './pages/AgentChat'
+import Specs from './pages/KnowledgeBaseList'
+import AskData from './pages/SearchTest'
+import Inject from './pages/DocumentList'
+import { TasksPage } from './pages/TaskCenter'
+import { RecordsPage } from './pages/ChatHistory'
+import { EvalPage } from './pages/ConflictList'
+import { SystemPage } from './pages/ModelConfig'
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useAuth()
@@ -37,8 +32,8 @@ function RequirePermission({ perm, children }: { perm: string; children: ReactNo
         title="没有访问权限"
         subTitle={`当前账号缺少权限点「${perm}」。系统只有「管理员 / 普通用户」两种角色，请联系管理员调整你的账号角色。`}
         extra={
-          <Button type="primary" href="/kb">
-            返回知识库
+          <Button type="primary" href="/home">
+            返回首页
           </Button>
         }
       />
@@ -60,51 +55,38 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="/overview" replace />} />
-          <Route path="overview" element={<Overview />} />
-          <Route path="kb" element={<KnowledgeBaseList />} />
-          <Route path="kb/:kbId/documents" element={<DocumentList />} />
-          <Route path="search" element={<SearchTest />} />
-          <Route path="prompts" element={<Prompts />} />
-          {/* 智能问答：SPA 内页面，iframe 嵌后端 /agent/（侧边栏与身份区保留） */}
-          <Route path="agent" element={<AgentChat />} />
-          <Route path="history" element={<ChatHistory />} />
-          <Route path="conflicts" element={<ConflictList />} />
+          <Route index element={<Navigate to="/home" replace />} />
+          <Route path="home" element={<Home />} />
+          <Route path="chat" element={<Chat />} />
+          <Route path="specs" element={<Specs />} />
+          <Route path="ask-data" element={<AskData />} />
+          <Route path="inject" element={<Inject />} />
+          <Route path="tasks" element={<TasksPage />} />
+          <Route path="records" element={<RecordsPage />} />
+          <Route path="eval" element={<EvalPage />} />
           <Route
-            path="tags"
-            element={
-              <RequirePermission perm="tag:read">
-                <TagManagement />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="permissions"
-            element={
-              <RequirePermission perm="user:manage">
-                <PermissionManagement />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="audit"
-            element={
-              <RequirePermission perm="audit:read">
-                <AuditLogs />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="models"
+            path="system"
             element={
               <RequirePermission perm="system:config">
-                <ModelConfig />
+                <SystemPage />
               </RequirePermission>
             }
           />
-          <Route path="tasks" element={<TaskCenter />} />
-          <Route path="workflows" element={<Workflows />} />
-          <Route path="*" element={<Navigate to="/overview" replace />} />
+
+          {/* 旧地址保底：书签 / 老链接仍能落到新的一级页 */}
+          <Route path="overview" element={<Navigate to="/home" replace />} />
+          <Route path="agent" element={<Navigate to="/chat" replace />} />
+          <Route path="kb" element={<Navigate to="/specs" replace />} />
+          <Route path="search" element={<Navigate to="/specs" replace />} />
+          <Route path="prompts" element={<Navigate to="/ask-data" replace />} />
+          <Route path="conflicts" element={<Navigate to="/specs" replace />} />
+          <Route path="tags" element={<Navigate to="/specs" replace />} />
+          <Route path="history" element={<Navigate to="/records" replace />} />
+          <Route path="audit" element={<Navigate to="/records" replace />} />
+          <Route path="permissions" element={<Navigate to="/system" replace />} />
+          <Route path="models" element={<Navigate to="/system" replace />} />
+          <Route path="workflows" element={<Navigate to="/tasks" replace />} />
+          <Route path="*" element={<Navigate to="/home" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>

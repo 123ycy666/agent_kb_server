@@ -3,65 +3,38 @@ import {
   Alert,
   Button,
   Card,
-  Col,
-  Divider,
-  Empty,
-  Form,
   Input,
-  Row,
+  InputNumber,
+  Modal,
   Select,
   Space,
-  Spin,
-  Switch,
+  Table,
+  Tabs,
   Tag,
-  Tooltip,
   Typography,
   message,
 } from 'antd'
-import { SearchOutlined, WarningOutlined } from '@ant-design/icons'
-import { kbApi, searchApi, tagApi } from '../api'
-import type { KnowledgeBase, SearchResponse, SearchResult } from '../api'
+import { ReloadOutlined } from '@ant-design/icons'
+import type { ColumnsType } from 'antd/es/table'
+import CaliberMetricDrawer, { mustText } from '../components/CaliberMetricDrawer'
+import type { ParsedMetric } from '../components/CaliberMetricDrawer'
+import { http } from '../api/client'
+import Prompts from './Prompts'
 
 const { Title, Text, Paragraph } = Typography
 
-export default function SearchTest() {
-  const [form] = Form.useForm()
-  const [kbs, setKbs] = useState<KnowledgeBase[]>([])
-  const [tagOptions, setTagOptions] = useState<any[]>([])
+function CaliberPanel() {
+  const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
-  const [resp, setResp] = useState<SearchResponse | null>(null)
+  const [edit, setEdit] = useState<ParsedMetric | null>(null)
+  const [tryData, setTryData] = useState<any>(null)
+  const [tryBusy, setTryBusy] = useState(false)
 
-  useEffect(() => {
-    kbApi
-      .list(1, 100)
-      .then((r) => setKbs(r.items))
-      .catch((e) => message.error((e as Error).message))
-  }, [])
-
-  /** 切换知识库时清空已选标签，并刷新「用过的标签」候选。 */
-  const onKbChange = async () => {
-    form.setFieldValue('tags', undefined)
-    try {
-      const res = await tagApi.options()
-      setTagOptions(res.options ?? [])
-    } catch {
-      setTagOptions([])
-    }
-  }
-
-  const onSearch = async () => {
-    const values = await form.validateFields()
+  const load = async () => {
     setLoading(true)
-    setResp(null)
     try {
-      const res = await searchApi.search({
-        query: values.query,
-        kb_ids: values.kb_ids,
-        tag_filters: values.tags ?? [],
-        top_k: values.top_k ?? 5,
-        rerank: values.rerank ?? true,
-      })
-      setResp(res)
+      const r: any = await http.get('/caliber/metrics')
+      setRows(r.metrics ?? [])
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -69,262 +42,363 @@ export default function SearchTest() {
     }
   }
 
-  return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Title level={4} style={{ margin: 0 }}>
-        检索测试
-      </Title>
+  useEffect(() => {
+    void load()
+  }, [])
 
-      <Card size="small">
-        <Form
-          form={form}
-          layout="vertical"
-          initialValues={{ top_k: 5, rerank: true, kb_ids: [] }}
-        >
-          <Row gutter={12}>
-            <Col span={10}>
-              <Form.Item
-                name="query"
-                label="查询问题"
-                rules={[{ required: true, message: '请输入查询内容' }]}
-              >
-                <Input.Search
-                  placeholder="如：出差住宿标准是多少"
-                  enterButton="检索"
-                  onSearch={onSearch}
-                  loading={loading}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={6}>
-              <Form.Item
-                name="kb_ids"
-                label="知识库"
-                rules={[{ required: true, message: '请选择至少一个知识库' }]}
-              >
-                <Select
-                  mode="multiple"
-                  placeholder="选择一个或多个"
-                  onChange={onKbChange}
-                  options={kbs.map((k) => ({
-                    label: `${k.name}（可见 ${k.visible_document_count} 份文档）`,
-                    value: k.id,
-                  }))}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={5}>
-              <Form.Item name="tags" label="标签过滤（需全部命中）">
-                <Select
-                  mode="tags"
-                  allowClear
-                  placeholder="直接输入标签名，或从下方点选"
-                  tokenSeparators={[',', '，']}
-                  options={tagOptions.map((o) => ({ label: o.name, value: o.name }))}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={3}>
-              <Form.Item name="top_k" label="Top K">
-                <Select
-                  options={[3, 5, 8, 10, 20].map((v) => ({ label: String(v), value: v }))}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
+  const openEdit = (m: any) => {
+    setEdit({
+      code: m.code,
+      label: m.label,
+      kind: m.expr ? 'derived' : 'base',
+      expr: m.expr || '',
+      unit: m.unit || '',
+      digits: m.digits ?? 0,
+      must: (m.bases ?? []).flatMap((b: any) => b.must ?? []),
+      bases: m.bases ?? [],
+    })
+  }
 
-          {tagOptions.length > 0 && (
-            <>
-              <Divider orientation="left" plain style={{ marginTop: 0 }}>
-                可用标签（点击填入过滤条件）
-              </Divider>
-              <Space wrap size={6}>
-                {tagOptions.map((o) => (
-                  <Tag
-                    key={o.name}
-                    style={{ cursor: 'pointer' }}
-                    color="blue"
-                    onClick={() => {
-                      const cur: string[] = form.getFieldValue('tags') ?? []
-                      if (!cur.includes(o.name)) {
-                        form.setFieldValue('tags', [...cur, o.name])
-                      }
-                    }}
-                  >
-                    {o.name}
-                    <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
-                      {o.usage_count}
-                    </Text>
-                  </Tag>
-                ))}
-              </Space>
-            </>
-          )}
+  const tryRun = async (code: string) => {
+    setTryBusy(true)
+    setTryData(null)
+    try {
+      const r: any = await http.get('/caliber/try', {
+        params: { code, year: String(new Date().getFullYear()) },
+      })
+      setTryData(r)
+    } catch (e) {
+      setTryData({ error: (e as Error).message })
+    } finally {
+      setTryBusy(false)
+    }
+  }
 
-          <Space style={{ marginTop: 8 }}>
-            <Form.Item name="rerank" label="启用精排" valuePropName="checked" noStyle>
-              <Switch size="small" />
-            </Form.Item>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              关闭精排可对比召回差异；开启后会调用 rerank 模型重排候选
-            </Text>
+  const columns: ColumnsType<any> = [
+    {
+      title: '指标',
+      width: 210,
+      render: (_, r) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{r.label}</Text>
+          <Text type="secondary" className="kb-mono" style={{ fontSize: 11 }}>
+            {r.code}
+          </Text>
+        </Space>
+      ),
+    },
+    { title: '单位', dataIndex: 'unit', width: 70, render: (v) => v || '—' },
+    {
+      title: '算式',
+      dataIndex: 'expr',
+      render: (v: string) =>
+        v ? (
+          <Text code style={{ fontSize: 12 }}>
+            {v}
+          </Text>
+        ) : (
+          <Tag>取数</Tag>
+        ),
+    },
+    {
+      title: '必需过滤',
+      width: 300,
+      render: (_, r) => {
+        const chips = Array.from(
+          new Set(((r.bases ?? []) as any[]).flatMap((b) => (b.must ?? []).map(mustText)))
+        )
+        return chips.length ? (
+          <Space size={4} wrap>
+            {chips.map((c) => (
+              <Tag key={c}>{c}</Tag>
+            ))}
           </Space>
-        </Form>
+        ) : (
+          <Text type="secondary">—</Text>
+        )
+      },
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      width: 80,
+      render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? '启用' : '停用'}</Tag>,
+    },
+    {
+      title: '版本',
+      dataIndex: 'version_no',
+      width: 70,
+      render: (v: number) => `v${v ?? 1}`,
+    },
+    {
+      title: '操作',
+      width: 150,
+      render: (_, r) => (
+        <Space size={4}>
+          <Button size="small" onClick={() => openEdit(r)}>
+            改口径
+          </Button>
+          <Button size="small" type="link" loading={tryBusy} onClick={() => void tryRun(r.code)}>
+            试跑
+          </Button>
+        </Space>
+      ),
+    },
+  ]
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="口径是一行数据，不是代码"
+        description="这里的指标口径、必需过滤、派生算式只影响问数线。改完下一轮取数生效，不用重启。"
+      />
+      <Card size="small" title={`指标口径（${rows.length}）`} extra={<Button size="small" icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>刷新</Button>}>
+        <Table
+          rowKey="code"
+          size="small"
+          loading={loading}
+          dataSource={rows}
+          columns={columns}
+          pagination={{ pageSize: 10, showSizeChanger: false }}
+          scroll={{ x: 1100 }}
+        />
       </Card>
+      {edit ? (
+        <CaliberMetricDrawer
+          seed={edit}
+          onClose={() => setEdit(null)}
+          onSaved={() => void load()}
+        />
+      ) : null}
+      <Modal
+        open={!!tryData}
+        title="按契约试跑一次"
+        onCancel={() => setTryData(null)}
+        footer={<Button onClick={() => setTryData(null)}>关闭</Button>}
+      >
+        {tryData?.error ? (
+          <Alert type="error" showIcon message={tryData.error} />
+        ) : tryData ? (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Text strong>
+              {tryData.label}：{tryData.value}
+              {tryData.unit}
+            </Text>
+            {(tryData.detail ?? []).map((d: any) => (
+              <Card key={d.code} size="small" title={d.code}>
+                <Text>{String(d.value)}</Text>
+                <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11, marginBottom: 0 }}>{d.sql}</pre>
+              </Card>
+            ))}
+          </Space>
+        ) : null}
+      </Modal>
+    </Space>
+  )
+}
 
-      {loading && (
-        <div style={{ textAlign: 'center', padding: 40 }}>
-          <Spin tip="检索中…" />
-        </div>
-      )}
+function CompleteRules() {
+  const [rows, setRows] = useState<any[]>([])
+  const [deleted, setDeleted] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
 
-      {resp && (
-        <>
-          {resp.degraded && (
-            <Alert type="warning" showIcon message="精排降级" description={resp.degraded_reason} />
-          )}
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r: any = await http.get('/prompts/complete')
+      setRows(
+        (r.rows ?? []).map((x: any) => ({
+          id: x.id,
+          kind: x.kind || 'norm',
+          match_text: x.match_text || '',
+          fill_text: x.fill_text || '',
+          priority: x.priority ?? 0,
+        }))
+      )
+      setDeleted(r.deleted ?? [])
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
 
-          {resp.filter_notice && (
-            <Alert
-              type="info"
-              showIcon
-              message={resp.filter_notice.message}
-              description={
-                <Space direction="vertical" size={2}>
-                  <Text>{resp.filter_notice.suggestion}</Text>
-                  {resp.filter_notice.relaxable_filters?.length > 0 && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      可放宽的条件：{resp.filter_notice.relaxable_filters.join('、')}
-                    </Text>
-                  )}
-                </Space>
+  useEffect(() => {
+    void load()
+  }, [])
+
+  const setCell = (i: number, k: string, v: any) =>
+    setRows((prev) => prev.map((r, j) => (j === i ? { ...r, [k]: v } : r)))
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const r: any = await http.put('/prompts/complete', { rows })
+      if (r?.ok) {
+        message.success(`已保存 ${r.rows} 条，下一轮问数生效`)
+        await load()
+      } else message.error(r?.error || '保存失败')
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="补全表只影响问数线"
+        description="匹配到一条，就把 fill_text 作为参考资料交给问数模型，不替用户改问题。整表保存，改完下一轮生效。"
+      />
+      <Card
+        size="small"
+        title={`补全条目（${rows.length}）`}
+        extra={
+          <Space>
+            <Button size="small" onClick={() => void load()} loading={loading}>
+              刷新
+            </Button>
+            <Button
+              size="small"
+              onClick={() =>
+                setRows((v) => [
+                  ...v,
+                  { kind: 'norm', match_text: '', fill_text: '', priority: (v.length + 1) * 10 },
+                ])
               }
-            />
-          )}
-
-          <Card
-            size="small"
-            title={
-              <Space>
-                <span>检索结果</span>
-                <Tag>命中 {resp.total}</Tag>
-                <Tag>召回 {resp.recall_count}</Tag>
-                <Tag>耗时 {resp.took_ms} ms</Tag>
+            >
+              加一行
+            </Button>
+            <Button size="small" type="primary" loading={saving} onClick={() => void save()}>
+              保存
+            </Button>
+          </Space>
+        }
+      >
+        <Table
+          rowKey={(r: any, i?: number) => String(r.id || `new-${i}`)}
+          size="small"
+          loading={loading}
+          dataSource={rows}
+          pagination={false}
+          scroll={{ x: 900 }}
+          columns={[
+            {
+              title: '类型',
+              dataIndex: 'kind',
+              width: 100,
+              render: (v: string, _r, i) => (
+                <Select
+                  size="small"
+                  value={v}
+                  style={{ width: 90 }}
+                  options={[
+                    { value: 'norm', label: '归一' },
+                    { value: 'fill', label: '补缺' },
+                  ]}
+                  onChange={(x) => setCell(i, 'kind', x)}
+                />
+              ),
+            },
+            {
+              title: '匹配',
+              dataIndex: 'match_text',
+              render: (v: string, _r, i) => (
+                <Input size="small" value={v} onChange={(e) => setCell(i, 'match_text', e.target.value)} />
+              ),
+            },
+            {
+              title: '补成什么',
+              dataIndex: 'fill_text',
+              render: (v: string, _r, i) => (
+                <Input size="small" value={v} onChange={(e) => setCell(i, 'fill_text', e.target.value)} />
+              ),
+            },
+            {
+              title: '优先级',
+              dataIndex: 'priority',
+              width: 100,
+              render: (v: number, _r, i) => (
+                <InputNumber
+                  size="small"
+                  value={v}
+                  style={{ width: 80 }}
+                  onChange={(x) => setCell(i, 'priority', x ?? 0)}
+                />
+              ),
+            },
+            {
+              title: '操作',
+              width: 80,
+              render: (_v, _r, i) => (
+                <Button
+                  size="small"
+                  danger
+                  type="link"
+                  onClick={() => setRows((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  删
+                </Button>
+              ),
+            },
+          ]}
+        />
+        {deleted.length > 0 ? (
+          <Card size="small" title={`已删除（${deleted.length}，可恢复）`} style={{ marginTop: 12 }}>
+            {deleted.map((r) => (
+              <Space key={r.id} style={{ display: 'flex', marginBottom: 4 }}>
+                <Text delete type="secondary">
+                  {r.match_text} → {r.fill_text}
+                </Text>
+                <Button
+                  size="small"
+                  onClick={async () => {
+                    await http.post(`/prompts/complete/${r.id}/restore`)
+                    await load()
+                  }}
+                >
+                  恢复
+                </Button>
               </Space>
-            }
-          >
-            {resp.results.length === 0 ? (
-              <Empty description="没有找到相关内容" />
-            ) : (
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                {resp.results.map((r: SearchResult, i) => (
-                  <Card
-                    key={r.chunk_id}
-                    size="small"
-                    type="inner"
-                    title={
-                      <Space wrap size={6}>
-                        <Tag color="blue">#{i + 1}</Tag>
-                        <Text strong>{r.doc_name}</Text>
-                        {r.version_no > 1 && <Tag color="purple">v{r.version_no}</Tag>}
-                        {r.kb_name && <Tag>{r.kb_name}</Tag>}
-                        {r.has_conflict && (
-                          <Tooltip title="该来源存在未处理的冲突，需谨慎采信">
-                            <Tag icon={<WarningOutlined />} color="error">
-                              存在冲突
-                            </Tag>
-                          </Tooltip>
-                        )}
-                      </Space>
-                    }
-                    extra={
-                      <Space size={4}>
-                        <Tooltip
-                          title={
-                            r.source === 'hybrid'
-                              ? '向量路与关键词路都召回了这条'
-                              : r.source === 'keyword'
-                                ? '仅关键词路召回（向量路未命中）'
-                                : '仅向量路召回'
-                          }
-                        >
-                          <Tag
-                            color={
-                              r.source === 'hybrid'
-                                ? 'purple'
-                                : r.source === 'keyword'
-                                  ? 'orange'
-                                  : 'blue'
-                            }
-                          >
-                            {r.source === 'hybrid'
-                              ? '双路'
-                              : r.source === 'keyword'
-                                ? '关键词'
-                                : '向量'}
-                          </Tag>
-                        </Tooltip>
-                        {r.rerank_score != null && (
-                          <Tag color="green">精排 {Number(r.rerank_score).toFixed(3)}</Tag>
-                        )}
-                        {r.vector_score != null && (
-                          <Tag>向量 {Number(r.vector_score).toFixed(3)}</Tag>
-                        )}
-                        {r.keyword_score != null && (
-                          <Tag>关键词 {Number(r.keyword_score).toFixed(2)}</Tag>
-                        )}
-                      </Space>
-                    }
-                  >
-                    {r.heading_path && (
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        章节：{r.heading_path}
-                      </Text>
-                    )}
-                    <div className="kb-chunk" style={{ marginTop: 6 }}>
-                      {r.content}
-                    </div>
-                    {r.parent_content && r.parent_content !== r.content && (
-                      <div
-                        style={{
-                          marginTop: 6,
-                          padding: 8,
-                          background: '#f6f8fa',
-                          borderRadius: 4,
-                        }}
-                      >
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          父块上下文（同章节，更完整）：
-                        </Text>
-                        <Paragraph
-                          style={{ marginBottom: 0, fontSize: 13 }}
-                          ellipsis={{ rows: 4, expandable: true, symbol: '展开' }}
-                        >
-                          {r.parent_content}
-                        </Paragraph>
-                      </div>
-                    )}
-                    <Space wrap size={4}>
-                      {(r.tags ?? []).map((name) => (
-                        <Tag key={name} color="blue" style={{ fontSize: 11 }}>
-                          {name}
-                        </Tag>
-                      ))}
-                    </Space>
-                  </Card>
-                ))}
-              </Space>
-            )}
+            ))}
           </Card>
+        ) : null}
+      </Card>
+    </Space>
+  )
+}
 
-          <Alert
-            type="success"
-            showIcon
-            message="本次检索已记入审计日志"
-            description="审计记录包含命中的文档 ID，用于事后追溯数据流向。可在「审计日志」中查看。"
-          />
-        </>
-      )}
+export default function SearchTest() {
+  return (
+    <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      <div>
+        <Title level={4} style={{ margin: 0 }}>
+          问数
+        </Title>
+        <Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+          预处理规则、指标口径、补全表都在这页维护。
+        </Paragraph>
+      </div>
+      <Alert
+        type="warning"
+        showIcon
+        message="本页只影响问数线"
+        description="回答口径、指标取数、补全表只作用于问数；办公线的身份、红线、注入预算请到「提示词与注入」，说明书请到「知识库」。"
+      />
+      <Tabs
+        defaultActiveKey="caliber"
+        items={[
+          { key: 'caliber', label: '指标口径', children: <CaliberPanel /> },
+          { key: 'rules', label: '问数规则', children: <Prompts /> },
+          { key: 'complete', label: '补全表', children: <CompleteRules /> },
+        ]}
+      />
     </Space>
   )
 }

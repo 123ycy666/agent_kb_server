@@ -232,7 +232,21 @@ def table_list():
 
 
 def allowed_tables():
+    """SQL 安全闸认哪些表。
+
+    ★ 2026-11-16（阶段 5）修：字典恢复读取之后这里出过一次**功能回退** ——
+      `allowed_tables()` 只返回字典登记的那 10 张表，`run_sql` 的闸就把
+      其它业务表全拒了（实测「今年各供电所工单数量」答不出数，报「字段对不上」）。
+      字典是**说明层**，不是白名单：白名单要比「字典 ∪ 库内实况」，与字典停用前
+      （字典为空 = 全放行）的行为一致。
+    """
     names = set(_ensure()['index'].keys())
+    try:
+        from app.secretary import tools_db
+        names |= {str(t) for t in (tools_db._tables_live(limit=500) or [])}
+    except Exception as exc:                       # noqa: BLE001 - 取不到实况就按字典
+        print('[semantic] 取库内表实况失败（按字典）：%s: %s'
+              % (type(exc).__name__, str(exc)[:100]), flush=True)
     sc = _scope()
     return (names & sc) if sc else names
 

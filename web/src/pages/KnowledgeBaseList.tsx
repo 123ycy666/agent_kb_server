@@ -1,51 +1,78 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Alert,
   Button,
   Card,
+  Col,
+  Descriptions,
+  Drawer,
+  Empty,
   Form,
   Input,
-  InputNumber,
   Modal,
   Popconfirm,
+  Row,
+  Select,
   Space,
+  Spin,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
+  Upload,
   message,
 } from 'antd'
+import type { UploadFile } from 'antd'
 import {
-  DeleteOutlined,
-  EditOutlined,
+  BookOutlined,
+  CloudUploadOutlined,
+  EyeOutlined,
   FileTextOutlined,
-  PlusOutlined,
   ReloadOutlined,
-  SyncOutlined,
+  RocketOutlined,
+  SearchOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { kbApi } from '../api'
-import type { KnowledgeBase } from '../api'
-import { useAuth } from '../store/auth'
+import dayjs from 'dayjs'
+import { specsApi } from '../api'
+import type { SpecDetail, SpecItem, SpecPending, SpecPreview, SpecRole } from '../api'
+import ConflictList from './ConflictList'
+import TagManagement from './TagManagement'
 
 const { Title, Text, Paragraph } = Typography
 
-export default function KnowledgeBaseList() {
-  const { has } = useAuth()
-  const [data, setData] = useState<KnowledgeBase[]>([])
+function menuLine(row: SpecItem) {
+  const conf = row.conflict_with?.length ? ` · ⚠ 与《${row.conflict_with.join('》《')}》同时适用` : ''
+  return `- ${row.name} · ${row.when_to_use || '（未填什么时候用）'} · ${row.product || '无产物'}${conf}`
+}
+
+function SpecLibrary({ space }: { space: 'spec' | 'material' }) {
+  const [roles, setRoles] = useState<SpecRole[]>([])
+  const [list, setList] = useState<{
+    items: SpecItem[]
+    pending: SpecPending[]
+    menu: string
+    count: number
+  } | null>(null)
   const [loading, setLoading] = useState(false)
-  const [createOpen, setCreateOpen] = useState(false)
-  const [editing, setEditing] = useState<KnowledgeBase | null>(null)
-  const [reindexing, setReindexing] = useState<number | null>(null)
-  const [form] = Form.useForm()
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [preview, setPreview] = useState<{ id: number; data: SpecPreview } | null>(null)
+  const [editPending, setEditPending] = useState<SpecPending | null>(null)
+  const [tryOpen, setTryOpen] = useState(false)
+  const [trySpec, setTrySpec] = useState<SpecItem | null>(null)
+  const [detailId, setDetailId] = useState<number | null>(null)
+  const [detail, setDetail] = useState<SpecDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
     try {
-      const res = await kbApi.list(1, 100)
-      setData(res.items)
+      const [r, role] = await Promise.all([specsApi.list(), specsApi.roles()])
+      setList(r)
+      setRoles(role.items ?? [])
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -54,217 +81,253 @@ export default function KnowledgeBaseList() {
   }
 
   useEffect(() => {
-    load()
+    void load()
   }, [])
 
-  const openCreate = () => {
-    setEditing(null)
-    form.resetFields()
-    form.setFieldsValue({ chunk_size: 512, chunk_overlap: 64 })
-    setCreateOpen(true)
-  }
+  const roleName = (code?: string) => roles.find((x) => x.code === code)?.label || code || '—'
 
-  const openEdit = (kb: KnowledgeBase) => {
-    setEditing(kb)
-    form.setFieldsValue({
-      name: kb.name,
-      description: kb.description,
-      chunk_size: kb.chunk_size,
-      chunk_overlap: kb.chunk_overlap,
-    })
-    setCreateOpen(true)
-  }
-
-  const submit = async () => {
-    const values = await form.validateFields()
+  const openPreview = async (id: number) => {
     try {
-      if (editing) {
-        await kbApi.update(editing.id, values)
-        message.success('知识库已更新')
-      } else {
-        await kbApi.create(values)
-        message.success('知识库已创建')
-      }
-      setCreateOpen(false)
-      load()
+      setPreview({ id, data: await specsApi.preview(id) })
     } catch (e) {
       message.error((e as Error).message)
     }
   }
 
-  /** 切换「参与智能问答」标记（2026-10-15 新增）。
-   *
-   * 该标记决定「智能问答」页默认勾选哪些库。
-   * 之所以用「库上打标记」而不是「配置里写 id 列表」：自增 id 会因删库/建库
-   * 漂移（删除不复用、新建拿更大值），写死的配置会悬空或失效；标记随库走。
-   */
-  const toggleQa = async (kb: KnowledgeBase, checked: boolean) => {
-    const prev = kb.qa_enabled
-    // 乐观更新：开关要即时响应，失败再回滚
-    setData((rows) => rows.map((r) => (r.id === kb.id ? { ...r, qa_enabled: checked } : r)))
+  const openDetail = async (id: number) => {
+    setDetailId(id)
+    setDetail(null)
+    setDetailLoading(true)
     try {
-      await kbApi.update(kb.id, { qa_enabled: checked })
-      message.success(
-        checked ? `「${kb.name}」已加入智能问答检索范围` : `「${kb.name}」已移出智能问答检索范围`,
-      )
-    } catch (e) {
-      setData((rows) => rows.map((r) => (r.id === kb.id ? { ...r, qa_enabled: prev } : r)))
-      message.error((e as Error).message)
-    }
-  }
-
-  const doReindex = async (kb: KnowledgeBase) => {
-    setReindexing(kb.id)
-    try {
-      const res = await kbApi.reindex(kb.id, false)
-      message.success(res.message ?? '重建完成')
-      load()
+      setDetail(await specsApi.get(id))
     } catch (e) {
       message.error((e as Error).message)
     } finally {
-      setReindexing(null)
+      setDetailLoading(false)
     }
   }
 
-  const remove = async (kb: KnowledgeBase) => {
+  const publish = async (id: number) => {
     try {
-      await kbApi.remove(kb.id)
-      message.success(`知识库《${kb.name}》已删除`)
-      load()
+      const r: any = await specsApi.publish(id)
+      if (r?.error) message.error(r.error)
+      else {
+        message.success(`《${r.name}》已发布，${r.effective_within_sec || 60} 秒内进目录`)
+        setPreview(null)
+        await load()
+      }
     } catch (e) {
       message.error((e as Error).message)
     }
   }
 
-  const columns: ColumnsType<KnowledgeBase> = [
+  const retire = async (row: SpecItem) => {
+    try {
+      const r: any = await specsApi.retire(row.id)
+      if (r?.error) message.error(r.error)
+      else {
+        message.success(`《${row.name}》已退役，不再进目录`)
+        await load()
+      }
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const confirmRetire = (row: SpecItem) => {
+    Modal.confirm({
+      title: `停用《${row.name}》？`,
+      content: '停用 = 退役：不删正文、可回滚，但不再进说明书目录。当前接口不提供退役页，如需重新启用请重新上传或联系管理员处理。',
+      okText: '停用（退役）',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => retire(row),
+    })
+  }
+
+  const pending = (list?.pending ?? []).filter((x) =>
+    space === 'spec' ? x.space === 'spec' : x.space === 'material'
+  )
+  const published = list?.items ?? []
+
+  const columns: ColumnsType<SpecItem> = [
     {
-      title: '名称',
-      dataIndex: 'name',
-      render: (name: string, row) => (
-        <Space direction="vertical" size={0}>
-          <Link to={`/kb/${row.id}/documents`}>
-            <Text strong>{name}</Text>
-          </Link>
-          {row.description && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {row.description}
-            </Text>
-          )}
-        </Space>
-      ),
-    },
-    {
-      title: '文档',
-      dataIndex: 'document_count',
-      width: 100,
-      render: (total: number, row) => {
-        const visible = row.visible_document_count
-        // ⚠️ 本期不做知识库级入口权限，用户可能进库后看不到任何文档。
-        //    这里必须区分「空库」与「无权限」，否则会被误判为系统故障。
-        if (total > 0 && visible === 0) {
-          return (
-            <Tooltip title="该库中有文档，但你没有访问权限">
-              <Tag color="warning">0 / {total}</Tag>
-            </Tooltip>
-          )
-        }
-        return <span>{visible === total ? total : `${visible} / ${total}`}</span>
-      },
-    },
-    { title: '切片', dataIndex: 'chunk_count', width: 90 },
-    {
-      title: '向量模型',
-      dataIndex: 'embedding_model',
-      render: (m: string, row) => (
-        <Space direction="vertical" size={0}>
-          <Text className="kb-mono" style={{ fontSize: 11 }}>
-            {m}
-          </Text>
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            {row.embedding_dim} 维
-          </Text>
-        </Space>
-      ),
-    },
-    {
-      title: '切片参数',
-      width: 130,
+      title: '目录行',
+      width: 430,
       render: (_, row) => (
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {row.chunk_size} / 重叠 {row.chunk_overlap}
-        </Text>
+        <div>
+          <Space size={6} wrap>
+            <Text strong>{row.name}</Text>
+            <Tag color="blue">v{row.version_no}</Tag>
+            {row.conflict_with?.length ? (
+              <Tooltip title={`与《${row.conflict_with.join('》《')}》同时适用`}>
+                <Tag color="error">{row.conflict_with.length} 处冲突</Tag>
+              </Tooltip>
+            ) : null}
+          </Space>
+          <div className="kb-mono" style={{ fontSize: 11, color: '#8c8c8c', marginTop: 3 }}>
+            {menuLine(row)}
+          </div>
+        </div>
       ),
     },
     {
-      title: '状态',
-      dataIndex: 'status',
-      width: 90,
-      render: (s: string) => (
-        <Tag color={s === 'active' ? 'success' : 'default'}>
-          {s === 'active' ? '启用' : '归档'}
-        </Tag>
-      ),
+      title: '角色',
+      dataIndex: 'role_code',
+      width: 86,
+      render: (v: string) => <Tag>{roleName(v)}</Tag>,
     },
     {
-      title: '参与问答',
-      dataIndex: 'qa_enabled',
-      width: 100,
-      render: (v: boolean, row) => (
-        <Tooltip
-          title={
-            v
-              ? '已在「智能问答」默认检索范围内，点击移出'
-              : '点击加入「智能问答」默认检索范围（问答页会默认勾选）'
-          }
-        >
+      title: '归属',
+      dataIndex: 'owner',
+      width: 78,
+      render: (v: string) => <Tag color={v === '全局' ? 'purple' : 'cyan'}>{v}</Tag>,
+    },
+    {
+      title: '字数',
+      dataIndex: 'chars',
+      width: 66,
+      align: 'right',
+      render: (v: number) => v.toLocaleString(),
+    },
+    {
+      title: '最近修改',
+      dataIndex: 'updated_at',
+      width: 122,
+      render: (v: string) => (v ? dayjs(v).format('MM-DD HH:mm') : '—'),
+    },
+    {
+      title: '启停',
+      width: 78,
+      render: (_, row) => (
+        <Tooltip title="停用即退役，不再进目录">
           <Switch
             size="small"
-            checked={v}
-            disabled={!has('kb:update')}
-            onChange={(c) => toggleQa(row, c)}
+            checked
+            checkedChildren="启用"
+            unCheckedChildren="停用"
+            onChange={(v) => {
+              if (!v) confirmRetire(row)
+            }}
           />
         </Tooltip>
       ),
     },
     {
       title: '操作',
-      width: 220,
+      width: 214,
       render: (_, row) => (
-        <Space>
-          <Link to={`/kb/${row.id}/documents`}>
-            <Button size="small" icon={<FileTextOutlined />}>
-              文档
+        <Space size={4} wrap>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(row.id)}>
+            全文
+          </Button>
+          <Button
+            size="small"
+            icon={<RocketOutlined />}
+            onClick={() => {
+              setTrySpec(row)
+              setTryOpen(true)
+            }}
+          >
+            试跑
+          </Button>
+          <Popconfirm
+            title="确认退役？"
+            description="退役后不再进目录，不删除正文。"
+            onConfirm={() => void retire(row)}
+          >
+            <Button size="small" danger type="text">
+              退役
             </Button>
-          </Link>
-          {has('kb:update') && (
-            <Tooltip title="用当前档位的向量模型重建全部切片（切换模型后必做）">
-              <Button
-                size="small"
-                icon={<SyncOutlined />}
-                loading={reindexing === row.id}
-                onClick={() => doReindex(row)}
-              />
-            </Tooltip>
-          )}
-          {has('kb:update') && (
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
-          )}
-          {has('kb:delete') && (
-            <Popconfirm
-              title="删除知识库"
-              description={
-                <span>
-                  将同时删除该库下 <b>{row.document_count}</b> 份文档及其切片与冲突记录，
-                  此操作不可恢复。确认删除？
-                </span>
-              }
-              okText="确认删除"
-              okButtonProps={{ danger: true }}
-              cancelText="取消"
-              onConfirm={() => remove(row)}
-            >
-              <Button size="small" danger icon={<DeleteOutlined />} />
-            </Popconfirm>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
+  const pendingColumns: ColumnsType<SpecPending> = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      render: (v: string, r) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{v}</Text>
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {r.space === 'material' ? '资料库 · 不进目录' : '说明书库 · 待发布'}
+          </Text>
+        </Space>
+      ),
+    },
+    {
+      title: '角色',
+      dataIndex: 'role_code',
+      width: 100,
+      render: (v: string) => (v ? <Tag>{roleName(v)}</Tag> : <Tag>未选</Tag>),
+    },
+    {
+      title: '四项',
+      width: 260,
+      render: (_, r) => {
+        const four = [
+          ['角色', r.role_code],
+          ['什么时候用', r.when_to_use],
+          ['产物', r.product],
+          ['归属', r.owner],
+        ]
+        return (
+          <Space size={4} wrap>
+            {four.map(([label, v]) => (
+              <Tag key={label} color={v ? 'green' : 'red'}>
+                {label} {v ? '有' : '缺'}
+              </Tag>
+            ))}
+          </Space>
+        )
+      },
+    },
+    {
+      title: '字数',
+      dataIndex: 'chars',
+      width: 80,
+      align: 'right',
+      render: (v: number) => v.toLocaleString(),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (v: string) =>
+        v === 'material' ? <Tag>资料</Tag> : <Tag color="orange">待发布</Tag>,
+    },
+    {
+      title: '操作',
+      width: 280,
+      render: (_, r) => (
+        <Space size={4} wrap>
+          <Button size="small" onClick={() => void openPreview(r.id)}>
+            预览切片
+          </Button>
+          {space === 'spec' ? (
+            <>
+              <Button size="small" onClick={() => setEditPending(r)}>
+                补四项
+              </Button>
+              <Popconfirm
+                title="发布这篇说明书？"
+                description="发布后进入目录，60 秒内生效；四项必须填全。"
+                onConfirm={() => void publish(r.id)}
+              >
+                <Button size="small" type="primary">
+                  发布
+                </Button>
+              </Popconfirm>
+            </>
+          ) : (
+            <Link to="/chat">
+              <Button size="small" icon={<SearchOutlined />}>
+                去问答检索
+              </Button>
+            </Link>
           )}
         </Space>
       ),
@@ -272,83 +335,695 @@ export default function KnowledgeBaseList() {
   ]
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-        <Title level={4} style={{ margin: 0 }}>
-          知识库管理
-        </Title>
+    <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
+        <div>
+          <Space align="baseline">
+            <Title level={5} style={{ margin: 0 }}>
+              {space === 'spec' ? '说明书库' : '资料库'}
+            </Title>
+            <Tag>{space === 'spec' ? `${published.length} 篇已发布` : `${pending.length} 份资料`}</Tag>
+          </Space>
+          <Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+            {space === 'spec'
+              ? '一篇说明书 = 一类活怎么做。目录一行显示名称 · 什么时候用 · 产物；冲突会单独标红。'
+              : '资料只进检索、不进说明书目录。制度、办法、附件放这里。'}
+          </Paragraph>
+        </div>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>
             刷新
           </Button>
-          {has('kb:create') && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              创建知识库
-            </Button>
-          )}
+          <Button type="primary" icon={<CloudUploadOutlined />} onClick={() => setUploadOpen(true)}>
+            {space === 'spec' ? '上传说明书' : '上传资料'}
+          </Button>
         </Space>
       </Space>
 
-      <Card size="small">
-        <Paragraph className="kb-hint" style={{ marginBottom: 0 }}>
-          ⚠️ 知识库绑定<b>向量模型</b>：模型切换后，已有切片的向量与新模型不在同一向量空间，
-          检索将无法命中，必须先重建索引。
-        </Paragraph>
+      {space === 'spec' ? (
+        <Card size="small" title="已发布（进目录）">
+          <Table
+            rowKey="id"
+            size="small"
+            loading={loading}
+            dataSource={published}
+            columns={columns}
+            pagination={{ pageSize: 8, showSizeChanger: false }}
+            locale={{ emptyText: <Empty description="还没有已发布的说明书，先上传一篇" /> }}
+          />
+        </Card>
+      ) : null}
+
+      <Card
+        size="small"
+        title={space === 'spec' ? `待发布（${pending.length}）` : `资料清单（${pending.length}）`}
+      >
+        <Table
+          rowKey="id"
+          size="small"
+          loading={loading}
+          dataSource={pending}
+          columns={pendingColumns}
+          pagination={{ pageSize: 8, showSizeChanger: false }}
+          scroll={{ x: 1100 }}
+          locale={{
+            emptyText: (
+              <Empty description={space === 'spec' ? '没有待发布说明书' : '还没有资料，上传后只进检索'} />
+            ),
+          }}
+        />
       </Card>
 
-      <Table
-        rowKey="id"
-        columns={columns}
-        dataSource={data}
-        loading={loading}
-        pagination={{ pageSize: 10, showSizeChanger: false }}
+      <UploadModal
+        open={uploadOpen}
+        space={space}
+        roles={roles}
+        onClose={() => setUploadOpen(false)}
+        onDone={async (id) => {
+          setUploadOpen(false)
+          await load()
+          if (id) await openPreview(id)
+        }}
+      />
+
+      <ClassifyModal
+        pending={editPending}
+        roles={roles}
+        onClose={() => setEditPending(null)}
+        onDone={async () => {
+          setEditPending(null)
+          await load()
+        }}
       />
 
       <Modal
-        title={editing ? '编辑知识库' : '创建知识库'}
-        open={createOpen}
-        onCancel={() => setCreateOpen(false)}
-        onOk={submit}
-        okText="保存"
-        cancelText="取消"
-        destroyOnClose
+        open={!!preview}
+        width={820}
+        title={preview ? `待发布预览：${preview.data.name}` : '待发布预览'}
+        onCancel={() => setPreview(null)}
+        footer={
+          preview ? (
+            <Space>
+              <Button onClick={() => setPreview(null)}>关闭</Button>
+              {space === 'spec' ? (
+                <Button type="primary" onClick={() => void publish(preview.id)}>
+                  确认发布
+                </Button>
+              ) : null}
+            </Space>
+          ) : null
+        }
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
-          <Form.Item
-            name="name"
-            label="名称"
-            rules={[{ required: true, message: '请输入知识库名称' }]}
-          >
-            <Input placeholder="如：公司制度库" maxLength={128} />
-          </Form.Item>
-          <Form.Item name="description" label="描述">
-            <Input.TextArea rows={2} placeholder="可选" maxLength={500} />
-          </Form.Item>
-          <Space size="large">
-            <Form.Item
-              name="chunk_size"
-              label="切片长度"
-              tooltip="中文约等于字符数，建议 300~800"
-            >
-              <InputNumber min={64} max={4096} step={64} />
-            </Form.Item>
-            <Form.Item
-              name="chunk_overlap"
-              label="重叠长度"
-              tooltip="防止关键信息正好落在切片边界"
-            >
-              <InputNumber min={0} max={1024} step={16} />
-            </Form.Item>
-          </Space>
-          {editing && (
+        {preview ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Alert
-              type="warning"
+              type={preview.data.missing.length ? 'warning' : 'success'}
               showIcon
-              message="修改切片参数后，已入库文档不会自动重新切片，如需生效请对文档执行重建索引。"
+              message={
+                preview.data.missing.length
+                  ? `还缺：${preview.data.missing.join('、')}`
+                  : '四项已填全，可发布'
+              }
             />
-          )}
-        </Form>
+            <Card size="small" title="目录行长什么样">
+              <div className="kb-mono" style={{ whiteSpace: 'pre-wrap' }}>
+                {preview.data.menu_line || '（还没有目录行）'}
+              </div>
+            </Card>
+            <Card size="small" title={`切片预览（${preview.data.slices.length} 段，共 ${preview.data.chars} 字）`}>
+              {preview.data.slices.length === 0 ? (
+                <Empty description="没有切出正文" />
+              ) : (
+                preview.data.slices.map((s) => (
+                  <div key={s.no} className="kb-chunk" style={{ fontSize: 12 }}>
+                    <Text type="secondary">第 {s.no} 段 · </Text>
+                    {s.text}
+                  </div>
+                ))
+              )}
+            </Card>
+          </Space>
+        ) : null}
       </Modal>
+
+      <TryRunModal open={tryOpen} spec={trySpec} onClose={() => setTryOpen(false)} />
+
+      <Drawer
+        open={detailId != null}
+        width={860}
+        title={detail?.item?.name || '说明书全文'}
+        onClose={() => setDetailId(null)}
+      >
+        {detailLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}>
+            <Spin />
+          </div>
+        ) : detail ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Descriptions size="small" column={2} bordered>
+              <Descriptions.Item label="角色">{roleName(detail.item?.role_code)}</Descriptions.Item>
+              <Descriptions.Item label="归属">{detail.owner}</Descriptions.Item>
+              <Descriptions.Item label="版本">v{detail.item?.version_no}</Descriptions.Item>
+              <Descriptions.Item label="字数">{detail.chars}</Descriptions.Item>
+              <Descriptions.Item label="什么时候用" span={2}>
+                {detail.item?.when_to_use || '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="产物" span={2}>
+                {detail.item?.product || '无产物'}
+              </Descriptions.Item>
+            </Descriptions>
+            <Card size="small" title="正文">
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>{detail.body}</pre>
+            </Card>
+            <Row gutter={12}>
+              <Col span={12}>
+                <Card size="small" title={`引用（${detail.refs.length}）`}>
+                  {detail.refs.length === 0 ? (
+                    <Text type="secondary">没有《书名号》引用</Text>
+                  ) : (
+                    detail.refs.map((r) => (
+                      <div key={r.name} style={{ marginBottom: 4 }}>
+                        <Tag color={r.resolved ? 'green' : 'red'}>{r.resolved ? '可读' : '缺失'}</Tag>
+                        《{r.name}》
+                      </div>
+                    ))
+                  )}
+                </Card>
+              </Col>
+              <Col span={12}>
+                <Card size="small" title={`冲突（${detail.conflicts.length}）`}>
+                  {detail.conflicts.length === 0 ? (
+                    <Text type="secondary">没有同角色同产物的并存冲突</Text>
+                  ) : (
+                    detail.conflicts.map((c) => (
+                      <div key={c.id} style={{ marginBottom: 4 }}>
+                        <Tag color="red">并存</Tag>《{c.name}》（{c.owner}）
+                      </div>
+                    ))
+                  )}
+                </Card>
+              </Col>
+            </Row>
+            <Card size="small" title={`版本（${detail.versions.length}）`}>
+              <Table
+                rowKey="version_no"
+                size="small"
+                pagination={false}
+                dataSource={detail.versions}
+                columns={[
+                  { title: '版本', dataIndex: 'version_no', render: (v) => `v${v}` },
+                  { title: '字数', dataIndex: 'chars' },
+                  { title: '保存人', dataIndex: 'saved_by' },
+                  {
+                    title: '时间',
+                    dataIndex: 'saved_at',
+                    render: (v) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '—'),
+                  },
+                ]}
+              />
+            </Card>
+          </Space>
+        ) : null}
+      </Drawer>
+    </Space>
+  )
+}
+
+function UploadModal({
+  open,
+  space,
+  roles,
+  onClose,
+  onDone,
+}: {
+  open: boolean
+  space: 'spec' | 'material'
+  roles: SpecRole[]
+  onClose: () => void
+  onDone: (id?: number) => Promise<void>
+}) {
+  const [form] = Form.useForm()
+  const [file, setFile] = useState<File | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [files, setFiles] = useState<UploadFile[]>([])
+
+  const submit = async () => {
+    if (!file) {
+      message.warning('请选择文件')
+      return
+    }
+    const v = await form.validateFields()
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('role_code', space === 'spec' ? v.role_code || '' : '')
+    fd.append('space', space)
+    fd.append('when_to_use', v.when_to_use || '')
+    fd.append('applies', v.applies || '')
+    fd.append('product', v.product || '')
+    fd.append('name', v.name || '')
+    fd.append('global_scope', v.global_scope ? '1' : '0')
+    setBusy(true)
+    try {
+      const r: any = await specsApi.upload(fd)
+      message.success(
+        space === 'spec'
+          ? `已上传《${r.name}》，进待发布；填完四项后预览发布`
+          : `已上传《${r.name}》到资料库，可检索、不进目录`
+      )
+      form.resetFields()
+      setFile(null)
+      setFiles([])
+      await onDone(r.spec_id)
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      title={space === 'spec' ? '上传说明书' : '上传资料'}
+      width={720}
+      onCancel={onClose}
+      onOk={() => void submit()}
+      okText="上传"
+      confirmLoading={busy}
+      destroyOnClose
+    >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message={
+          space === 'spec'
+            ? '选了角色才算说明书：进说明书库、待发布；上传时填好四项，发布前还能补。'
+            : '不选角色 = 资料：只进检索，不进说明书目录。'
+        }
+      />
+      <Form form={form} layout="vertical" initialValues={{ global_scope: false }}>
+        <Form.Item label="文件" required>
+          <Upload
+            beforeUpload={(f) => {
+              setFile(f as File)
+              setFiles([
+                {
+                  uid: f.uid,
+                  name: f.name,
+                  status: 'done',
+                },
+              ])
+              return false
+            }}
+            fileList={files}
+            maxCount={1}
+            onRemove={() => {
+              setFile(null)
+              setFiles([])
+            }}
+          >
+            <Button icon={<CloudUploadOutlined />}>选择文件（md / docx / txt）</Button>
+          </Upload>
+        </Form.Item>
+        {space === 'spec' ? (
+          <Form.Item
+            name="role_code"
+            label="角色（决定这类活由哪条线接）"
+            rules={[{ required: true, message: '请选择角色' }]}
+          >
+            <Select
+              placeholder="选一个角色"
+              options={roles.map((r) => ({
+                value: r.code,
+                label: `${r.label}（产物 ${r.product || '无'}）`,
+              }))}
+            />
+          </Form.Item>
+        ) : null}
+        <Row gutter={12}>
+          <Col span={12}>
+            <Form.Item
+              name="when_to_use"
+              label="什么时候用"
+              rules={space === 'spec' ? [{ required: true, message: '请填什么时候用' }] : []}
+            >
+              <Input placeholder="如：写部门年度工作总结时" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="name" label="名称（默认用文件名）">
+              <Input placeholder="如：部门年度总结" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={12}>
+          <Col span={12}>
+            <Form.Item
+              name="applies"
+              label="适用（逗号分隔）"
+              rules={space === 'spec' ? [{ required: true, message: '请填适用词' }] : []}
+            >
+              <Input placeholder="如：年度总结,部门总结" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="product"
+              label="产物"
+              rules={space === 'spec' ? [{ required: true, message: '请填产物' }] : []}
+            >
+              <Input placeholder="如：docx / xlsx / pptx" />
+            </Form.Item>
+          </Col>
+        </Row>
+        {space === 'spec' ? (
+          <Form.Item name="global_scope" label="归属：全局（管理员才可设）" valuePropName="checked">
+            <Switch checkedChildren="全局" unCheckedChildren="本人" />
+          </Form.Item>
+        ) : null}
+      </Form>
+    </Modal>
+  )
+}
+
+function ClassifyModal({
+  pending,
+  roles,
+  onClose,
+  onDone,
+}: {
+  pending: SpecPending | null
+  roles: SpecRole[]
+  onClose: () => void
+  onDone: () => Promise<void>
+}) {
+  const [form] = Form.useForm()
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (pending) {
+      form.setFieldsValue({
+        role_code: pending.role_code,
+        when_to_use: pending.when_to_use,
+        product: pending.product,
+        applies: '',
+        owner_scope: pending.owner === '全局' ? 'global' : 'own',
+        check_items: '',
+        outline: '',
+      })
+    }
+  }, [pending, form])
+
+  const submit = async () => {
+    if (!pending) return
+    const v = await form.validateFields()
+    setBusy(true)
+    try {
+      const payload: Record<string, unknown> = {
+        role_code: v.role_code,
+        when_to_use: v.when_to_use,
+        applies: String(v.applies || '')
+          .split(/[,，、]/)
+          .map((x) => x.trim())
+          .filter(Boolean),
+        product: v.product,
+        owner_scope: v.owner_scope,
+      }
+      if (String(v.check_items || '').trim()) {
+        payload.check_items = String(v.check_items)
+          .split('\n')
+          .map((x) => x.trim())
+          .filter(Boolean)
+      }
+      if (String(v.outline || '').trim()) {
+        payload.outline = String(v.outline)
+          .split('\n')
+          .map((x) => x.trim())
+          .filter(Boolean)
+      }
+      const r: any = await specsApi.classify(pending.id, payload)
+      if (r?.error) message.error(r.error)
+      else {
+        message.success(r.ready ? '四项已填全，可以预览并发布' : `还缺：${(r.missing || []).join('、')}`)
+        await onDone()
+      }
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={!!pending}
+      title={pending ? `补四项：${pending.name}` : '补四项'}
+      width={680}
+      onCancel={onClose}
+      onOk={() => void submit()}
+      okText="保存四项"
+      confirmLoading={busy}
+      destroyOnClose
+    >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="四项 = 角色 / 什么时候用 / 适用 / 产物 / 归属。四项不全不能发布。"
+      />
+      <Form form={form} layout="vertical">
+        <Form.Item name="role_code" label="角色" rules={[{ required: true, message: '请选择角色' }]}>
+          <Select options={roles.map((r) => ({ value: r.code, label: r.label }))} />
+        </Form.Item>
+        <Row gutter={12}>
+          <Col span={12}>
+            <Form.Item
+              name="when_to_use"
+              label="什么时候用"
+              rules={[{ required: true, message: '请填什么时候用' }]}
+            >
+              <Input />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="product"
+              label="产物"
+              rules={[{ required: true, message: '请填产物' }]}
+            >
+              <Input placeholder="docx / xlsx / pptx" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Form.Item
+          name="applies"
+          label="适用（逗号分隔；留空保留原值）"
+        >
+          <Input placeholder="如：年度总结,部门总结" />
+        </Form.Item>
+        <Form.Item name="owner_scope" label="归属">
+          <Select
+            options={[
+              { value: 'own', label: '本人' },
+              { value: 'global', label: '全局（管理员）' },
+            ]}
+          />
+        </Form.Item>
+        <Form.Item name="check_items" label="自检检查项（一行一项，可不填）">
+          <Input.TextArea rows={3} placeholder="如：结构齐全（结论 + 依据）" />
+        </Form.Item>
+        <Form.Item name="outline" label="结构（一行一节，可不填）">
+          <Input.TextArea rows={3} placeholder="如：总体情况 / 主要工作 / 下步打算" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  )
+}
+
+function TryRunModal({
+  open,
+  spec,
+  onClose,
+}: {
+  open: boolean
+  spec: SpecItem | null
+  onClose: () => void
+}) {
+  const [name, setName] = useState('')
+  const [question, setQuestion] = useState('')
+  const [data, setData] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (open && spec) {
+      setName(spec.name)
+      setQuestion('')
+      setData(null)
+    }
+  }, [open, spec])
+
+  const run = async () => {
+    setBusy(true)
+    try {
+      setData(
+        await specsApi.tryRun({
+          name: name.trim() || undefined,
+          question: question.trim() || undefined,
+          spec_id: spec?.id,
+        })
+      )
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      title={`试跑：${spec?.name || ''}`}
+      width={760}
+      onCancel={onClose}
+      footer={
+        <Space>
+          <Button onClick={onClose}>关闭</Button>
+          <Button type="primary" loading={busy} onClick={() => void run()}>
+            跑一次
+          </Button>
+        </Space>
+      }
+      destroyOnClose
+    >
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert
+          type="info"
+          showIcon
+          message="试跑不入会话、不写记录：只看这篇说明书会不会被选中、目录行、注入多长。"
+        />
+        <Space wrap>
+          <Input value={name} onChange={(e) => setName(e.target.value)} style={{ width: 240 }} placeholder="说明书名" />
+          <Input
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            style={{ width: 340 }}
+            placeholder="可选：模拟一句用户问题"
+          />
+        </Space>
+        {data ? (
+          data.hit ? (
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Alert type="success" showIcon message={`命中《${data.name}》，正文 ${data.body_chars} 字`} />
+              <Card size="small" title="目录行">
+                <div className="kb-mono">{data.menu_line}</div>
+              </Card>
+              <Descriptions size="small" column={3} bordered>
+                <Descriptions.Item label="正文">{data.body_chars} 字</Descriptions.Item>
+                <Descriptions.Item label="注入块">{data.block_chars} 字</Descriptions.Item>
+                <Descriptions.Item label="检查项">{data.check_items?.length ?? 0} 项</Descriptions.Item>
+              </Descriptions>
+              <Card size="small" title="注入构成">
+                <Table
+                  rowKey="name"
+                  size="small"
+                  pagination={false}
+                  dataSource={data.injection ?? []}
+                  columns={[
+                    { title: '组成', dataIndex: 'label' },
+                    { title: '字数', dataIndex: 'chars', width: 90 },
+                    { title: '注入', dataIndex: 'injected', width: 80, render: (v) => (v ? '是' : '否') },
+                  ]}
+                />
+              </Card>
+              <Row gutter={12}>
+                <Col span={12}>
+                  <Card size="small" title="引用">
+                    {(data.refs ?? []).length === 0 ? (
+                      <Text type="secondary">无引用</Text>
+                    ) : (
+                      data.refs.map((r: any) => (
+                        <div key={r.name}>
+                          <Tag color={r.resolved ? 'green' : 'red'}>{r.resolved ? '可读' : '缺失'}</Tag>
+                          《{r.name}》
+                        </div>
+                      ))
+                    )}
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card size="small" title="冲突">
+                    {(data.conflicts ?? []).length === 0 ? (
+                      <Text type="secondary">无并存冲突</Text>
+                    ) : (
+                      data.conflicts.map((c: any) => (
+                        <div key={c.id}>
+                          <Tag color="red">并存</Tag>《{c.name}》
+                        </div>
+                      ))
+                    )}
+                  </Card>
+                </Col>
+              </Row>
+            </Space>
+          ) : (
+            <Alert type="warning" showIcon message="没有命中这篇说明书（可能未发布或不在你的归属里）" />
+          )
+        ) : null}
+      </Space>
+    </Modal>
+  )
+}
+
+export default function KnowledgeBaseList() {
+  const [tab, setTab] = useState('spec')
+  const roleLegend = useMemo(
+    () => [
+      { code: 'gongwen', label: '公文' },
+      { code: 'baogao', label: '汇报材料' },
+      { code: 'taizhang', label: '台账表格' },
+      { code: 'kejian', label: '汇报课件' },
+    ],
+    []
+  )
+  return (
+    <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
+        <div>
+          <Space align="baseline">
+            <Title level={4} style={{ margin: 0 }}>
+              知识库
+            </Title>
+            <Tag icon={<BookOutlined />}>两个空间</Tag>
+          </Space>
+          <Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+            说明书库进目录、按角色选；资料库只检索、不进目录。冲突与标签也在本页。
+          </Paragraph>
+        </div>
+        <Space wrap size={4}>
+          {roleLegend.map((r) => (
+            <Tag key={r.code}>{r.label}</Tag>
+          ))}
+        </Space>
+      </Space>
+
+      <Alert
+        type="info"
+        showIcon
+        message="说明书 ≠ 资料"
+        description="说明书是「怎么做」的正文与检查项，发布后进目录；资料是制度、办法、附件，只参与检索。说明书正文不参与向量检索。"
+      />
+
+      <Tabs
+        activeKey={tab}
+        onChange={setTab}
+        items={[
+          { key: 'spec', label: '说明书库', children: <SpecLibrary space="spec" /> },
+          { key: 'material', label: '资料库', children: <SpecLibrary space="material" /> },
+          { key: 'conflicts', label: '冲突', children: <ConflictList /> },
+          { key: 'tags', label: '标签', children: <TagManagement /> },
+        ]}
+      />
     </Space>
   )
 }

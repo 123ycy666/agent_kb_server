@@ -359,6 +359,29 @@ def classify(user_id, spec_id, *, role_code='', when_to_use='', applies=None,
                                        ('产物', prod)) if not v]}
 
 
+def enforce_not_retrievable() -> dict:
+    """V17：说明书正文一律不进检索（H2.4）。
+
+    只把 `spec.doc_id` 那一行的切片标掉不够 —— 同一个文件在库里可能有多份文档行：
+      · 同一文件名的历史版本；
+      · 旧做法库时代的副本（命名习惯是「<说明书名>做法」）。
+    所以按三条口径一起收：`doc_type='howto'`、`spec.doc_id`、以及文件名里含说明书名的。
+    规则全是数据驱动（文件名/文档类型/说明书名），代码里不写业务词。
+    """
+    ensure()
+    ids = set()
+    for r in _q("select id from kb.document where doc_type='howto'"):
+        ids.add(r['id'])
+    for s in _q("select name, doc_id from kb.spec where doc_id is not null"):
+        ids.add(s['doc_id'])
+        for d in _q("select id from kb.document where filename like %s",
+                    ('%' + str(s['name']) + '%',)):
+            ids.add(d['id'])
+    for i in ids:
+        _q("update kb.document_chunk set is_retrievable=false where doc_id=%s", (i,))
+    return {'docs': len(ids)}
+
+
 def publish(spec_id, user_id, admin=False) -> dict:
     """发布：待发布 → 发布（进目录，60 秒内生效）。归属之外的人不许发布。"""
     ensure()
@@ -378,9 +401,8 @@ def publish(spec_id, user_id, admin=False) -> dict:
     invalidate()
     if r.get('doc_id'):
         _q("update kb.document set is_active=true where id=%s", (r['doc_id'],))
-    # V17：说明书不进检索 —— 切片标 is_retrievable=false（检索层只取 True 的）
-    if r.get('doc_id'):
-        _q("update kb.document_chunk set is_retrievable=false where doc_id=%s", (r['doc_id'],))
+    # V17：说明书不进检索 —— 按文件名把全部同版本文档的切片标不可检索
+    enforce_not_retrievable()
     return {'id': int(spec_id), 'name': r['name'], 'status': 'published',
             'in_menu': True, 'effective_within_sec': _TTL}
 
@@ -397,6 +419,29 @@ def retire(spec_id, user_id, admin=False) -> dict:
        (spec_id,))
     invalidate()
     return {'id': int(spec_id), 'status': 'retired', 'deleted': False}
+
+
+def enable(spec_id, user_id, admin=False) -> dict:
+    """把退役/停用的说明书重新启用（H9.1：旧版退役可回滚）。
+
+    根因：`retire()` 只把 enabled 置 false，没有反向出口，页面上退役后回不来。
+    启用后仍保持 `status='published'`，只是 enabled 复位；下一轮目录就有它。
+    """
+    ensure()
+    row = _q("select * from kb.spec where id=%s", (spec_id,))
+    if not row:
+        return {'error': '没有这篇说明书'}
+    r = row[0]
+    if r.get('owner_id') is not None and str(r['owner_id']) != str(user_id) and not admin:
+        return {'error': '别人私有的说明书不能启用'}
+    _q("""update kb.spec set enabled=true,
+                  status=case when status='retired' then 'published' else status end,
+                  updated_at=now(), updated_by=%s where id=%s""",
+       (str(user_id), spec_id))
+    _mark_conflicts()
+    invalidate()
+    enforce_not_retrievable()
+    return {'id': int(spec_id), 'name': r['name'], 'enabled': True, 'in_menu': True}
 
 
 def _mark_conflicts() -> None:
