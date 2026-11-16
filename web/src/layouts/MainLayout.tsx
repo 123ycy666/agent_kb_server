@@ -14,6 +14,7 @@ import {
   BarChartOutlined,
   BookOutlined,
   ClusterOutlined,
+  DatabaseOutlined,
   DeploymentUnitOutlined,
   ExperimentOutlined,
   HistoryOutlined,
@@ -60,6 +61,7 @@ export default function MainLayout() {
       label: <Link to="/tasks">任务与预警</Link>,
     },
     { key: '/records', icon: <HistoryOutlined />, label: <Link to="/records">记录</Link> },
+    { key: '/schema', icon: <DatabaseOutlined />, label: <Link to="/schema">库结构</Link> },
     { key: '/eval', icon: <ExperimentOutlined />, label: <Link to="/eval">评测</Link> },
     {
       key: '/system',

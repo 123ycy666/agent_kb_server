@@ -8,6 +8,7 @@ import Home from './pages/Overview'
 import Chat from './pages/AgentChat'
 import Specs from './pages/KnowledgeBaseList'
 import AskData from './pages/SearchTest'
+import SchemaMap from './pages/SchemaMap'
 import Inject from './pages/DocumentList'
 import { TasksPage } from './pages/TaskCenter'
 import { RecordsPage } from './pages/ChatHistory'
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="chat" element={<Chat />} />
           <Route path="specs" element={<Specs />} />
           <Route path="ask-data" element={<AskData />} />
+          <Route path="schema" element={<SchemaMap />} />
           <Route path="inject" element={<Inject />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="records" element={<RecordsPage />} />
