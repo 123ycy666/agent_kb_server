@@ -211,16 +211,21 @@ def fix_shadow(dry=False) -> int:
         return 0
 
 
-def emit_sql() -> int:
+def emit_sql(out: str = '') -> int:
     """把迁移动作打印成**与当前状态无关**的 SQL（线上用容器自带 psql 执行）。
 
     线上 PG 在容器里、没有对外端口，本机脚本连不上；服务器上也不一定有 python 依赖。
     所以这里不按"当前状态"分支，而是每张表都走同一个受保护的 DO 块：
     表还在 public 才搬，搬完视图统一重建。任何状态跑都安全、可重复跑。
+
+    out：写成文件时用 Python 自己写 UTF-8（**不要用 PowerShell 重定向**，
+    它默认 UTF-16，psql 会报 invalid byte sequence 0xff）。
     """
-    print((ROOT / 'db' / 'v5_schema.sql').read_text(encoding='utf-8'))
+    import io
+    buf = io.StringIO()
+    buf.write((ROOT / 'db' / 'v5_schema.sql').read_text(encoding='utf-8'))
     for t, grp in MOVES.items():
-        print(f"""-- {t} → {grp}
+        buf.write(f"""-- {t} → {grp}
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -229,20 +234,30 @@ BEGIN
   END IF;
 END $$;
 DROP VIEW IF EXISTS public."{t}";
-CREATE VIEW public."{t}" AS SELECT * FROM {grp}."{t}";""")
+CREATE VIEW public."{t}" AS SELECT * FROM {grp}."{t}";
+
+""")
     # 影子表清理：不属于本 schema 的空表删掉（search_path 踩过的坑，见 fix_shadow）
     for t, owner in MOVES.items():
         for grp in sorted(set(MOVES.values())):
             if grp == owner:
                 continue
-            print(f"""DO $$
+            buf.write(f"""DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
               WHERE n.nspname = '{grp}' AND c.relname = '{t}' AND c.relkind = 'r')
      AND NOT EXISTS (SELECT 1 FROM {grp}."{t}") THEN
     DROP TABLE {grp}."{t}" CASCADE;
   END IF;
-END $$;""")
+END $$;
+
+""")
+    text = buf.getvalue()
+    if out:
+        Path(out).write_text(text, encoding='utf-8')
+        print('已写 %s（%d 字节，UTF-8 无 BOM）' % (out, len(text.encode('utf-8'))))
+    else:
+        sys.stdout.write(text)
     return 0
 
 
@@ -252,5 +267,7 @@ if __name__ == '__main__':
     if '--fix-shadow' in sys.argv:
         sys.exit(fix_shadow(dry='--dry' in sys.argv))
     if '--emit-sql' in sys.argv:
-        sys.exit(emit_sql())
+        _i = sys.argv.index('--emit-sql')
+        _out = sys.argv[_i + 1] if len(sys.argv) > _i + 1 else ''
+        sys.exit(emit_sql(_out))
     sys.exit(run(dry='--dry' in sys.argv))
