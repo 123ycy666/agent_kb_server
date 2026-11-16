@@ -52,14 +52,18 @@ def load_env(path=ENV_PATH):
 ENV = load_env()
 
 # MySQL 连接：新键 MYSQL_* 优先，兼容旧键 DB_*
+# 业务库名（问数读哪一套表）：SECRETARY_DB > DB_NAME（.env 旧键）> dlj_data。
+# 与 core 的 MYSQL_DB_BUSINESS 故意分开：那个还担着登录（dlj_data.t_employee），
+# 切问数不该把登录一起搬走。
 DB = {
     'host': ENV.get('MYSQL_HOST') or ENV.get('DB_HOST') or '',
     'port': int(ENV.get('MYSQL_PORT') or ENV.get('DB_PORT') or 3306),
     'user': ENV.get('MYSQL_USER') or ENV.get('DB_USER') or '',
     'password': ENV.get('MYSQL_PASSWORD') or ENV.get('DB_PASSWORD') or '',
-    'db': 'dlj_data',
+    'db': (os.environ.get('SECRETARY_DB') or ENV.get('SECRETARY_DB')
+           or ENV.get('DB_NAME') or 'dlj_data'),
 }
-SCHEMA = 'dlj_data'
+SCHEMA = DB['db']
 
 _missing_db = [k for k in ('host', 'user', 'password') if not DB[k]]
 if _missing_db:

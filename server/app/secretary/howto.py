@@ -1,175 +1,144 @@
 # -*- coding: utf-8 -*-
-"""做法库读取（2026-11-11 办公线）。
+"""做法读取的兼容层（2026-11-16 阶段 2）：数据源已换成 `kb.spec`。
 
-和另外两路知识的分工：
-    document(doc_type='doc')   事实原文 —— 走语义检索 kb_search
-    document(doc_type='rule')  判据     —— 走 rule_doc.get(topic) 精确取
-    document(doc_type='howto') 做法     —— 走本模块 get(task) 精确取
+上一代实现读 `howto_task INNER JOIN document`，两个病根：
+  · 目录要参数行 + 文档行同时在才进得去；
+  · 参数只能由脚本从 YAML 头灌。
+现在说明书就是 `kb.spec`（一行一篇，正文直接存在 `body`），这个文件只保留
+**老调用方的签名**（`menu / menu_text / get / body / match / for_prompt / tasks`），
+内部全部转调 `app.secretary.spec`。调用方（`agent.execute('read_howto')`、
+`tools_file._doc_fmt`）一行没改。
 
-为什么做法不做向量检索：实测三次 kb_search 都只命中同一篇、相似度 0.016~0.033，
-和不相关的问题一个分；做法是结构化的（fmt/outline/check），按任务名取才有确定答案。
+为什么留着它而不是直接删：`tools_file` 的版式来源是按任务名取 fmt，
+这个接口是稳定的；换源不该顺手改接口（V15 只要求"只有一份真身"，这一层不含数据）。
 """
 from __future__ import annotations
 
 import json
-import time
-
-_CACHE: dict = {'menu': None, 'at': 0.0, 'rows': {}}
-_TTL = 60
 
 
-def _engine():
-    from app.core.database import engine
-    return engine
-
-
-def _q(sql, **kw):
-    from sqlalchemy import text
-    with _engine().connect() as conn:
-        return [dict(r._mapping) for r in conn.execute(text(sql), kw)]
-
-
-def _one_line(item: dict) -> str:
-    bits = [item['task'], str(item.get('product') or '')]
-    tone = str(item.get('tone') or '').split('；')[0].strip()
-    if tone:
-        bits.append(tone)
-    ln = item.get('length') or {}
-    if ln.get('min_chars') or ln.get('max_chars'):
-        bits.append('%s-%s字' % (ln.get('min_chars') or 0, ln.get('max_chars') or '?'))
-    return ' · '.join(x for x in bits if x)
-
-
-def _row_to_item(r: dict) -> dict:
-    item = {
-        'task': r['task'],
-        'product': r['product'],
-        'applies': r.get('applies') or [],
-        'fmt': r.get('fmt') or {},
-        'outline': r.get('outline') or [],
-        'length': r.get('length') or {},
-        'tone': r.get('tone') or '',
-        'check': r.get('check_items') or [],
-        'doc_id': r.get('doc_id'),
-        'version_no': r.get('version_no') or 1,
-    }
-    item['one_line'] = _one_line(item)
-    return item
-
-
-def _load() -> list[dict]:
-    now = time.time()
-    if _CACHE['menu'] is not None and now - _CACHE['at'] < _TTL:
-        return _CACHE['menu']
+def _uid():
     try:
-        rows = _q("""select t.task, t.product, t.applies, t.fmt, t.outline, t.length,
-                            t.tone, t.check_items, t.doc_id, t.version_no
-                       from howto_task t join document d on d.id = t.doc_id
-                      where t.enabled and d.is_active
-                      order by t.id""")
-    except Exception as exc:                        # noqa: BLE001 - 做法读不到不阻断问答
-        print('[howto] 读取做法库失败（按无做法继续）：%s: %s'
-              % (type(exc).__name__, str(exc)[:120]), flush=True)
-        rows = []
-    _CACHE['menu'] = [_row_to_item(r) for r in rows]
-    _CACHE['at'] = now
-    _CACHE['rows'] = {i['task']: i for i in _CACHE['menu']}
-    return _CACHE['menu']
+        from app.secretary import tools_file
+        return (tools_file.get_ctx() or {}).get('user_id')
+    except Exception:                              # noqa: BLE001
+        return None
+
+
+def _items():
+    from app.secretary import spec as SP
+    uid = _uid()
+    out = []
+    for r in SP.visible(uid, 'spec'):
+        out.append({
+            'task': r['name'], 'product': r.get('product') or '',
+            'applies': r.get('applies') or [], 'fmt': r.get('fmt') or {},
+            'outline': r.get('outline') or [], 'length': {},
+            'tone': '', 'check': r.get('check_items') or [],
+            'doc_id': r.get('doc_id'), 'version_no': r.get('version_no') or 1,
+            'spec_id': r['id'],
+            'one_line': ' · '.join(x for x in (r['name'], r.get('product') or '',
+                                               (r.get('when_to_use') or '')[:40]) if x),
+        })
+    return out
 
 
 def invalidate() -> None:
-    _CACHE['menu'] = None
-    _CACHE['at'] = 0.0
+    from app.secretary import spec as SP
+    SP.invalidate()
 
 
 def menu() -> list[dict]:
-    """做法目录：一行一个（任务名 · 产物 · 口吻/篇幅），进 system。"""
-    return _load()
+    from app.secretary import spec as SP
+    return [dict(i, line=SP._line({'name': i['task'], 'when_to_use':
+                                   (i['one_line'].split(' · ')[-1] if len(i['one_line'].split(' · ')) > 2 else ''),
+                                   'product': i['product'], 'conflict_with': []}))
+            for i in _items()]
 
 
 def menu_text() -> str:
-    items = _load()
-    if not items:
-        return ''
-    return '\n'.join('- ' + i['one_line'] for i in items)
+    from app.secretary import spec as SP
+    return SP.menu_text(_uid())
 
 
 def tasks() -> list[str]:
-    return [i['task'] for i in _load()]
+    return [i['task'] for i in _items()]
+
+
+def _hit(name=''):
+    from app.secretary import spec as SP
+    h = SP.load(_uid(), name=name) if name else {}
+    return h or {}
 
 
 def get(task: str = '', product: str = '') -> dict:
-    """按任务名精确取做法；不给任务名就按产物挑第一个。取不到返回 {}。"""
-    items = _load()
+    """按任务名精确取；不给任务名就按产物挑一篇。取不到返回 {}。"""
+    items = _items()
     task = (task or '').strip()
+    pick = {}
     if task:
         for i in items:
             if i['task'] == task:
-                return dict(i, body=body(i['doc_id']))
+                pick = i
+                break
+        if not pick:
+            for i in items:
+                if task in i['task'] or i['task'] in task:
+                    pick = i
+                    break
+    if not pick and product:
         for i in items:
-            if task in i['task'] or i['task'] in task:
-                return dict(i, body=body(i['doc_id']))
-    product = (product or '').strip().lower()
-    if product:
-        for i in items:
-            if str(i['product']).lower() == product:
-                return dict(i, body=body(i['doc_id']))
-    return {}
+            if str(i['product']).lower() == str(product).lower():
+                pick = i
+                break
+    if not pick:
+        return {}
+    hit = _hit(pick['task'])
+    return dict(pick, body=(hit.get('body') or ''))
 
 
 def match(text: str) -> dict:
-    """按做法自带 applies 词表挑一个（词表是数据，不是代码规则）。"""
-    q = str(text or '')
-    best, hit = None, 0
-    for i in _load():
-        n = sum(1 for w in (i.get('applies') or []) if w and w in q)
-        if n > hit:
-            best, hit = i, n
-    return dict(best, body=body(best['doc_id'])) if best else {}
+    """按说明书自带 applies 词表挑一篇（词表是数据，不是代码规则）。"""
+    from app.secretary import spec as SP
+    hit = SP.load(_uid(), question=str(text or ''))
+    if not hit:
+        return {}
+    item = hit['item']
+    return {'task': item['name'], 'product': item.get('product') or '',
+            'applies': item.get('applies') or [], 'fmt': item.get('fmt') or {},
+            'outline': item.get('outline') or [], 'length': {},
+            'tone': '', 'check': item.get('check_items') or [],
+            'doc_id': item.get('doc_id'), 'version_no': item.get('version_no') or 1,
+            'spec_id': item['id'], 'body': hit['body'], 'one_line': SP._line(item)}
 
 
 def body(doc_id) -> str:
-    """做法正文：按 chunk_index 拼回。"""
+    """旧接口：按 doc_id 取正文（说明书正文已存在 body，这里按 doc_id 反查）。"""
     if not doc_id:
         return ''
-    key = 'body:%s' % doc_id
-    if key in _CACHE['rows']:
-        return _CACHE['rows'][key]
-    try:
-        rows = _q("""select content from document_chunk where doc_id = :d
-                      order by chunk_index""", d=doc_id)
-        text = '\n'.join(r['content'] for r in rows)
-    except Exception:                               # noqa: BLE001
-        text = ''
-    _CACHE['rows'][key] = text
-    return text
+    from app.secretary import spec as SP
+    rows = SP._q("select body from kb.spec where doc_id=%s and enabled "
+                 "order by version_no desc limit 1", (doc_id,))
+    return (rows[0]['body'] if rows else '') or ''
 
 
 def for_prompt(task: str = '', product: str = '', question: str = '') -> dict:
-    """办公线用：拿到做法 + 一段可直接进 system 的说明。
-
-    顺序：指定任务 → 按问题匹配（applies 是数据词表） → 按产物兜底。
-    2026-11-11 修：原来直接按产物挑，read 线（产物 checklist）永远挑到第一篇
-    「文章纠错」，用户说「速读」也拿到纠错的做法。
-    """
+    """办公线用：拿到说明书 + 一段可直接进 system 的说明。"""
     item = {}
     if task:
         item = get(task)
     if not item and question:
         item = match(question)
-    if not item:
+    if not item and product:
         item = get('', product)
     if not item:
         return {'item': {}, 'block': ''}
-    lines = ['【本轮做法】《%s》 v%s（产物 %s）'
-             % (item['task'], item.get('version_no') or 1, item['product'])]
-    if item.get('tone'):
-        lines.append('口吻：' + item['tone'])
+    lines = ['【本轮说明书】《%s》 v%s（产物 %s）'
+             % (item['task'], item.get('version_no') or 1, item['product'] or '无产物')]
     if item.get('outline'):
         lines.append('结构：' + ' / '.join(str(x) for x in item['outline']))
-    ln = item.get('length') or {}
-    if ln:
-        lines.append('篇幅：' + json.dumps(ln, ensure_ascii=False))
+    if item.get('fmt'):
+        lines.append('版式：' + json.dumps(item['fmt'], ensure_ascii=False))
     if item.get('check'):
         lines.append('交卷前逐项对：' + '；'.join(str(x) for x in item['check']))
     if item.get('body'):

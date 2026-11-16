@@ -66,7 +66,7 @@ def sections(slot: str, include_disabled: bool = False) -> list[dict]:
 
     def load():
         sql = ('SELECT id, section, body, sort_no, version_no, pinned, enabled '
-               'FROM prompt_material WHERE slot = %s'
+               'FROM cfg.prompt_material WHERE slot = %s'
                + ('' if include_disabled else ' AND enabled')
                + ' ORDER BY sort_no, id')
         try:
@@ -243,7 +243,7 @@ def get_section(sec_id: int) -> dict:
             cur = conn.cursor()
             try:
                 cur.execute('SELECT id, slot, section, body, sort_no, version_no '
-                            'FROM prompt_material WHERE id = %s', (int(sec_id),))
+                            'FROM cfg.prompt_material WHERE id = %s', (int(sec_id),))
                 row = cur.fetchone()
                 return dict(row) if row else {}
             finally:
@@ -267,13 +267,13 @@ def save_section(sec_id: int, body: str, user: str = '') -> dict:
         try:
             cur = conn.cursor()
             try:
-                cur.execute('SELECT id, version_no FROM prompt_material WHERE id = %s',
+                cur.execute('SELECT id, version_no FROM cfg.prompt_material WHERE id = %s',
                             (int(sec_id),))
                 row = cur.fetchone()
                 if not row:
                     return {'error': '小节不存在：%s' % sec_id}
                 ver = int(row['version_no'] or 1) + 1
-                cur.execute('UPDATE prompt_material SET body = %s, version_no = %s, '
+                cur.execute('UPDATE cfg.prompt_material SET body = %s, version_no = %s, '
                             'updated_by = %s, updated_at = now() WHERE id = %s',
                             (body, ver, str(user or '')[:64], int(sec_id)))
                 clear_cache()
@@ -308,12 +308,12 @@ def add_section(slot: str, section: str, body: str = '', pinned: bool = True,
         try:
             cur = conn.cursor()
             try:
-                cur.execute('SELECT COALESCE(MAX(sort_no), -1) + 1 AS n FROM prompt_material '
+                cur.execute('SELECT COALESCE(MAX(sort_no), -1) + 1 AS n FROM cfg.prompt_material '
                             'WHERE slot = %s', (slot,))
                 row = cur.fetchone()
                 sort_no = int((row or {}).get('n') or 0)
                 cur.execute(
-                    'INSERT INTO prompt_material (slot, section, body, sort_no, enabled, '
+                    'INSERT INTO cfg.prompt_material (slot, section, body, sort_no, enabled, '
                     'pinned, version_no, updated_by) VALUES (%s,%s,%s,%s,true,%s,1,%s) '
                     'RETURNING id',
                     (slot, section, str(body or ''), sort_no, bool(pinned), str(user or '')[:64]))
@@ -346,10 +346,10 @@ def delete_section(sec_id: int, soft: bool = True) -> dict:
             cur = conn.cursor()
             try:
                 if soft:
-                    cur.execute('UPDATE prompt_material SET enabled = false, '
+                    cur.execute('UPDATE cfg.prompt_material SET enabled = false, '
                                 'version_no = version_no + 1 WHERE id = %s', (int(sec_id),))
                 else:
-                    cur.execute('DELETE FROM prompt_material WHERE id = %s', (int(sec_id),))
+                    cur.execute('DELETE FROM cfg.prompt_material WHERE id = %s', (int(sec_id),))
                 # 2026-11-02 真库实测：删不存在的 id 影响 0 行，原来也当成功返回，
                 # 页面上就显示"已删除"而实际什么也没发生。看 rowcount。
                 if not cur.rowcount:
@@ -374,7 +374,7 @@ def restore_section(sec_id: int) -> dict:
         try:
             cur = conn.cursor()
             try:
-                cur.execute('UPDATE prompt_material SET enabled = true, '
+                cur.execute('UPDATE cfg.prompt_material SET enabled = true, '
                             'version_no = version_no + 1 WHERE id = %s AND NOT enabled',
                             (int(sec_id),))
                 if not cur.rowcount:
@@ -429,7 +429,7 @@ def replace_slot(slot: str, rows: list[dict], user: str = 'import') -> dict:
                 if rid:
                     # 带 id 的原地更新（2026-11-05）：整份保存不再「软删一堆 + 重新插一行」
                     cur.execute(
-                        'UPDATE prompt_material SET section=%s, body=%s, sort_no=%s, '
+                        'UPDATE cfg.prompt_material SET section=%s, body=%s, sort_no=%s, '
                         'pinned=%s, version_no=%s, updated_by=%s, updated_at=now(), enabled=true '
                         'WHERE id=%s AND slot=%s',
                         (sec, body, sort_no, pinned, ver, who, rid, slot))
@@ -437,14 +437,14 @@ def replace_slot(slot: str, rows: list[dict], user: str = 'import') -> dict:
                         keep.append(rid)
                         continue
                 cur.execute(
-                    'INSERT INTO prompt_material (slot, section, body, sort_no, '
+                    'INSERT INTO cfg.prompt_material (slot, section, body, sort_no, '
                     'enabled, pinned, version_no, updated_by) '
                     'VALUES (%s,%s,%s,%s,true,%s,%s,%s) RETURNING id',
                     (slot, sec, body, sort_no, pinned, ver, who))
                 # ⚠️ pgdb 的 execute 会把 RETURNING 的那行吃掉存进 lastrowid，fetchone() 拿到 None。
                 keep.append(int(cur.lastrowid or 0))
             # 页面没提交的行 = 删了 → 软删（可恢复），不物理删
-            cur.execute('UPDATE prompt_material SET enabled = false '
+            cur.execute('UPDATE cfg.prompt_material SET enabled = false '
                         'WHERE slot = %s AND NOT (id = ANY(%s))',
                         (slot, keep or [0]))
         finally:

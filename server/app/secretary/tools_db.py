@@ -138,6 +138,28 @@ def empty_verdict(sql):
     return {'code': 'EMPTY_OK', 'note': ''}
 
 
+def _cols_live(table: str) -> list:
+    """真库里的列名（业务字典为空时兜底）。"""
+    try:
+        r = _exec('SELECT column_name AS c FROM information_schema.columns '
+                  'WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position',
+                  [config.SCHEMA, table], limit_rows=200)
+        return [str(x.get('c')) for x in (r.get('rows') or [])]
+    except Exception:                              # noqa: BLE001 - 只是提示，取不到就算了
+        return []
+
+
+def _tables_live(limit: int = 60) -> list:
+    """当前连的这个库有哪些表。"""
+    try:
+        r = _exec('SELECT table_name AS t FROM information_schema.tables '
+                  'WHERE table_schema=%s ORDER BY table_name', [config.SCHEMA],
+                  limit_rows=limit)
+        return [str(x.get('t')) for x in (r.get('rows') or [])]
+    except Exception:                              # noqa: BLE001
+        return []
+
+
 def run_sql(sql):
     """只读 SELECT；表名必须在业务字典里，否则拒绝并回可用表名。"""
     s = safe_select(sql)
@@ -151,13 +173,22 @@ def run_sql(sql):
     try:
         r = _exec(s)
     except Exception as e:
-        # 把该表的可用字段一起回给模型，省掉一轮“猜字段名”的试错
+        # 把可用字段/可用表一起回给模型，省掉一轮“猜字段名”的试错。
+        # ★ 2026-11-13：原来只查业务字典，字典空就什么都不给 → 模型连着 5 轮猜
+        #   summary_type / stat_year 这种不存在的列。字典空时改问 information_schema。
         hint = ''
-        for t in sorted(semantic.tables_in_sql(s))[:1]:
-            cols = list(semantic.table_cols(t).keys())
-            if cols:
-                hint = '表 %s 在业务字典里登记的字段：%s' % (t, '、'.join(cols[:40]))
-        return {'error': str(e)[:300], 'hint': hint, 'sql': s,
+        err = str(e)
+        if '1146' in err or "doesn't exist" in err:
+            tabs = _tables_live()
+            if tabs:
+                hint = '当前库（%s）里没有这张表。可用的表：%s' % (
+                    config.SCHEMA, '、'.join(tabs))
+        else:
+            for t in sorted(semantic.tables_in_sql(s))[:1]:
+                cols = list(semantic.table_cols(t).keys()) or _cols_live(t)
+                if cols:
+                    hint = '表 %s 的真实字段：%s' % (t, '、'.join(cols[:60]))
+        return {'error': err[:300], 'hint': hint, 'sql': s,
                 'columns': [], 'rows': [], 'row_count': 0}
     r['sql'] = s
     r['summary'] = _summarize(r.get('columns') or [], r.get('rows') or [])

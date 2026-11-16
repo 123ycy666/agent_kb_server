@@ -27,6 +27,10 @@ KIND_HINT = {
     'docx': 'docx 的 spec 形状：{"title": "标题", "sections": [["一、小节", "正文段落，用\\n分段"]], '
             '"sign_off": ["单位全称", "2026 年 11 月 11 日"], '
             '"tables": [{"header": ["列1"], "rows": [["值"]]}]}',
+    'pptx': 'pptx 的 spec 形状：{"title": "标题", "slides": [{"layout": "cover", "title": "", '
+            '"subtitle": ""}, {"layout": "section", "no": "1", "title": ""}, '
+            '{"layout": "bullets", "title": "", "bullets": ["一句一条"]}, '
+            '{"layout": "end", "title": "谢谢", "subtitle": ""}]}',
     'xlsx': 'xlsx 的 spec 形状：{"sheets": [{"name": "sheet名", "title": "表标题", '
             '"header": ["列1", "列2"], "rows": [[值, 值]], "formats": ["#,##0.00", "0.00%"], '
             '"widths": [14, 10], "total_row": true, "freeze": "A3"}]}',
@@ -122,7 +126,7 @@ def ask_office(question, routed, *, lane='office', model, session_id=None, user_
     product = (routed or {}).get('product') or ''
     if lane == 'chat':
         product = ''
-    elif product and product not in ('docx', 'xlsx'):
+    elif product not in ('docx', 'xlsx', 'pptx'):
         product = 'docx'
     max_steps = int(max_steps or 14)
 

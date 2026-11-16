@@ -54,6 +54,10 @@ _CACHE: dict = {}
 # 页面 `tools` 框空着时用的默认工具说明（机制说明，不含业务词）。
 DEFAULT_TOOLS_GUIDE = (
     '【工具说明】\n'
+    '- 问指标先 list_metrics：里面有代号的指标一律用 metric_query(代号, year, scope_id) 取数，'
+    '**不要自己写 SQL 去拼这些表** —— 表名、列名、口径过滤都在契约里，手写会撞不存在的列。\n'
+    '- 没有代号的指标才用 run_sql；写之前先 describe_table / find_column 看真实表名列名，'
+    '不要凭印象写列（例如 deleted_flag、xxx_name 这类并不存在）。\n'
     '- 做任何一类活之前，先 kb_search 查做法（例如「速读做法」「公文格式做法」），'
     '命中就用 kb_read 取全文照着做；没命中就按通用能力做，并在回答里说一句没有这条做法。\n'
     '- 读文件用 read_file 分页读，next_offset 为 null 才算读完；读完再下结论。\n'

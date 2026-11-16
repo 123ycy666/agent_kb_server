@@ -1258,10 +1258,10 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         if _hist_files:
             _cur_ids = {str(f.get('file_id')) for f in _all_files}
             _all_files += [f for f in _hist_files if str(f.get('file_id')) not in _cur_ids]
-    # 查数线是既有链路，**默认就走它**（2026-11-12 恢复）：
-    # 只有判明「这句不需要业务数据」或「会话里有文件」，才交给统一循环
-    # （它有一整套工具和做法目录）。问数逻辑本身一行没改。
+    # 查数线默认走（2026-11-13 定稿）：入口只判两件事 —— 这一轮是不是要一份文件、
+    # 是不是在说会话里的文件。其余全进查数线，那儿有自己的第 1 步判要不要查库。
     _need_db = True
+    _r = {}
     if force_data:
         # 只问数的接口：不判走哪条线，直接进查数线。
         trace.append({'seq': len(trace) + 1, 'kind': 'route', 'tool': 'router',
@@ -1270,8 +1270,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     else:
         try:
             from app.secretary import router as _router
-            _r = _router.route(question, has_files=bool(_all_files),
-                              ask=lambda _s, _u: _ask_short(_s, _u, model))
+            _r = _router.route(question, has_files=bool(doc_files))
             _need_db = (_r.get('lane') == 'ask_db')
             trace.append({'seq': len(trace) + 1, 'kind': 'route', 'tool': 'router',
                           'result': _r})
@@ -1280,17 +1279,19 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
                   % (type(_exc).__name__, str(_exc)[:120]), flush=True)
             _need_db = True
     if not _need_db:
-        from app.secretary import agent_office
+        # 2026-11-16（阶段 3）：干活线换成 loop.py 的单循环 —— 7 只工具 + 自检门 + 四件套。
+        #   入口分流保留（判据改成页面可配，见 route_rule.py）；问数线一行未动。
+        from app.secretary import loop as _loop
         trace.append({'seq': len(trace) + 1, 'kind': 'files', 'tool': 'files',
                       'result': {'本轮': len(doc_files or []),
                                  '会话此前': max(0, len(_all_files) - len(doc_files or [])),
                                  '清单': [{'name': f.get('name'), 'file_id': f.get('file_id'),
                                           'prev': bool(f.get('prev'))} for f in _all_files]}})
-        return agent_office.ask_office(
-            question, {'lane': 'office'}, lane='office', model=model, session_id=session_id,
+        return _loop.run(
+            question, lane='office', model=model, session_id=session_id,
             user_id=user_id, user_code=user_code, client_ip=client_ip, channel=channel,
             doc_files=_all_files or None, doc_context=doc_context, trace=trace,
-            should_stop=should_stop, max_steps=max_steps, today=today)
+            should_stop=should_stop, max_steps=max_steps, today=today, routed=_r)
     # 上游（业务系统）指定的数据范围：提问人是谁、在哪个页面只有上游知道，所以它**强制**。
     # 上游强制的数据范围（业务系统传的，只记录、不再注入提示词）
     # （曾经的 bug：传了范围却全按「全市」作答，证据 output/test_results/…/EV-0003）。

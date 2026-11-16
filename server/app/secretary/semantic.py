@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""语义层：AI 能读哪些表、字段叫什么，全部来自他们在线上维护的 ai_data.* 表（只读）。
+"""语义层：AI 能读哪些表、字段叫什么，全部来自他们在线上维护的 dlj_data.* 表（只读）。
 
-- 表级：ai_data.ai_table_metadata
-- 字段级：ai_data.ai_column_metadata（只登记 AI 需要的字段）
-- 口径/指标：ai_data.ai_metric_metadata（公式与单位）
-- 同义词：ai_data.ai_column_synonym；表关联：ai_data.ai_table_relation
+- 表级：dlj_data.ai_table_metadata
+- 字段级：dlj_data.ai_column_metadata（只登记 AI 需要的字段）
+- 口径/指标：dlj_data.ai_metric_metadata（公式与单位）
+- 同义词：dlj_data.ai_column_synonym；表关联：dlj_data.ai_table_relation
 
 **不维护自己的口径表**：字典内容有缺，就报给维护方补行，代码不做补充。
 本模块只读，不写数据库。
@@ -29,8 +29,20 @@ _CTE = re.compile(r'\bwith\s+([A-Za-z0-9_]+)\s+as\s*\(|,\s*([A-Za-z0-9_]+)\s+as\
 
 
 def _rows(sql, limit=1000):
-    """2026-11-10：字典查询全部停用 —— 口径来源只有「查数口径」那页，代码不读库里的字典表。"""
-    return []
+    """读业务库里的字典表。
+
+    2026-11-16（阶段 5）修：这里 2026-11-10 被整段停成 `return []`，加上 SQL 里
+    写错 schema（写成 ai_data，真实表在 dlj_data）—— 于是表清单长期为空，
+    `list_tables` 只能退回「表名取自库内实况」。现在按真实 schema 读回来，
+    走 `tools_db._exec`（不经用户 SQL 的安全闸，字典本身不是用户查询）。
+    """
+    from app.secretary import tools_db
+    try:
+        return tools_db._exec(sql, limit_rows=limit)['rows'] or []
+    except Exception as exc:                       # noqa: BLE001 - 字典读不到不阻断问答
+        print('[semantic] 字典查询失败：%s: %s' % (type(exc).__name__, str(exc)[:160]),
+              flush=True)
+        return []
 
 
 def table_name(x):
@@ -50,7 +62,7 @@ def _build():
     tables = []
     index = {}
     for r in _rows('SELECT table_name AS t, table_cn_name AS cn, business_desc AS d, '
-                   'importance_level AS lv FROM ai_data.ai_table_metadata ORDER BY id'):
+                   'importance_level AS lv FROM dlj_data.ai_table_metadata ORDER BY id'):
         row = {'table_name': r['t'], 'table_cn_name': r['cn'] or '',
                'business_desc': (r['d'] or '').strip(), 'note': '', 'level': r['lv']}
         tables.append(row)
@@ -60,7 +72,7 @@ def _build():
     for r in _rows('SELECT table_name AS t, column_name AS c, column_cn_name AS cn, data_type AS dt, '
                    'business_desc AS d, is_dimension AS dim, is_metric AS met, '
                    'aggregation_type AS agg, example_value AS ev '
-                   'FROM ai_data.ai_column_metadata ORDER BY id'):
+                   'FROM dlj_data.ai_column_metadata ORDER BY id'):
         cols.setdefault(r['t'], {})[r['c']] = {
             'column_name': r['c'], 'column_cn_name': r['cn'] or '', 'data_type': r['dt'] or '',
             'business_desc': (r['d'] or '').strip(), 'example_value': (r['ev'] or '').strip(),
@@ -69,19 +81,19 @@ def _build():
 
     metrics = []
     for r in _rows('SELECT metric_code AS code, metric_name AS name, business_desc AS d, '
-                   'metric_formula AS f, unit AS u FROM ai_data.ai_metric_metadata ORDER BY id'):
+                   'metric_formula AS f, unit AS u FROM dlj_data.ai_metric_metadata ORDER BY id'):
         metrics.append({'code': r['code'], 'name': r['name'], 'desc': (r['d'] or '').strip(),
                         'formula': (r['f'] or '').strip(), 'unit': r['u'] or ''})
 
     syn = {}
-    for r in _rows('SELECT table_name AS t, column_name AS c, synonym_word AS w FROM ai_data.ai_column_synonym'):
+    for r in _rows('SELECT table_name AS t, column_name AS c, synonym_word AS w FROM dlj_data.ai_column_synonym'):
         syn.setdefault(r['w'], []).append('%s.%s' % (r['t'], r['c']))
 
     # 每张表的真实行数：让模型一眼看出哪张表有数、哪张是空的，不用去试
     counts = {}
     try:
-        for r in _rows('SELECT table_name AS t, table_rows AS n FROM information_schema.tables '
-                       'WHERE table_schema=%s', limit=500):
+        for r in _rows("SELECT table_name AS t, table_rows AS n FROM information_schema.tables "
+                       "WHERE table_schema='dlj_data'", limit=500):
             counts[r['t']] = r['n'] or 0
     except Exception:
         pass
@@ -196,7 +208,7 @@ def prompts(force=False):
         return _PROMPTS['data']
     out = {}
     try:
-        for r in _rows('SELECT prompt_key AS k, prompt_content AS c FROM ai_data.ai_prompt '
+        for r in _rows('SELECT prompt_key AS k, prompt_content AS c FROM dlj_data.ai_prompt '
                        'WHERE IS_new=1 AND deleted_flag=0 ORDER BY id'):
             if r['k'] and (r['c'] or '').strip():
                 out[r['k']] = (r['c'] or '').strip()

@@ -12,11 +12,14 @@ from app.api.v1 import (
     caliber,
     conflicts,
     documents,
+    eval as eval_api,
+    inject,
     kb,
     models,
     prompts,
     roles,
     search,
+    specs,
     system,
     tags,
     tasks,
@@ -37,5 +40,8 @@ api_router.include_router(models.router)
 api_router.include_router(system.router)
 api_router.include_router(prompts.router)
 api_router.include_router(caliber.router)
+api_router.include_router(specs.router)
+api_router.include_router(inject.router)
+api_router.include_router(eval_api.router)
 
 __all__ = ["api_router"]

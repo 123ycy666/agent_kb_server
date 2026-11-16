@@ -119,11 +119,43 @@ def _one_result(res):
     return '\n'.join(out)
 
 
+def _one_metric(res):
+    """一条契约取数结果 → 一段证据。
+
+    2026-11-13：`metric_query` 的数是契约按口径算好的（含派生指标），
+    原先只有 run_sql 进证据包，导致"契约取到了数、正文却说没取到"。
+    """
+    if not isinstance(res, dict):
+        return ''
+    code = str(res.get('code') or '?')
+    if res.get('error'):
+        return '【契约 %s】取数报错：%s' % (code, str(res['error'])[:200])
+    scope = res.get('scope_id')
+    out = ['【契约 %s %s】期间 %s%s = %s %s（口径 %s）' % (
+        code, res.get('label') or '', res.get('year') or '未带',
+        ('，所 %s' % scope) if scope not in (None, '') else '',
+        _cell(res.get('value')), res.get('unit') or '',
+        str(res.get('expr') or '契约定义')[:80])]
+    for one in (res.get('detail') or []):
+        if isinstance(one, dict) and one.get('code') and one.get('code') != code:
+            out.append('  分项 %s（%s）= %s' % (
+                one['code'], one.get('unit') or '', _cell(one.get('value'))))
+    return '\n'.join(out)
+
+
 def text(trace):
     """证据包正文；本轮没有查询时返回空串。"""
     parts = []
     for t in (trace or []):
-        if not isinstance(t, dict) or t.get('kind') != 'tool' or t.get('tool') != 'run_sql':
+        if not isinstance(t, dict) or t.get('kind') != 'tool':
+            continue
+        tool = t.get('tool')
+        if tool == 'metric_query':
+            one = _one_metric(t.get('result') or {})
+            if one:
+                parts.append(one)
+            continue
+        if tool != 'run_sql':
             continue
         res = t.get('result') or {}
         if not isinstance(res, dict):
