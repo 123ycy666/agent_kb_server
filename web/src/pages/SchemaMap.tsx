@@ -35,9 +35,9 @@ export default function SchemaMap() {
   const [open, setOpen] = useState<string[]>([])
 
   const load = () =>
-    http.get('/schema/overview').then(r => {
-      setRows(r.data.items || [])
-      setSummary(r.data.summary || null)
+    http.get('/schema/overview').then((r: any) => {
+      setRows(r.items || [])
+      setSummary(r.summary || null)
     })
 
   useEffect(() => {
@@ -47,13 +47,13 @@ export default function SchemaMap() {
   const openTable = (full: string) => {
     setOpen(v => (v.includes(full) ? v : [...v, full]))
     if (detail[full]) return
-    http.get(`/schema/table/${full}`).then(r => setDetail(d => ({ ...d, [full]: r.data })))
+    http.get(`/schema/table/${full}`).then((r: any) => setDetail(d => ({ ...d, [full]: r })))
   }
 
   const saveComment = (full: string, column: string, text: string) =>
     http.post('/schema/comment', { table: full, column, text }).then(() => {
       message.success('含义已写回数据库注释')
-      http.get(`/schema/table/${full}`).then(r => setDetail(d => ({ ...d, [full]: r.data })))
+      http.get(`/schema/table/${full}`).then((r: any) => setDetail(d => ({ ...d, [full]: r })))
     })
 
   const groups = useMemo(() => ['kb', 'cfg', 'qa', 'base'], [])

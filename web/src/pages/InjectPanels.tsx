@@ -242,8 +242,8 @@ function AskLane() {
     http
       .get('/prompts/impact')
       .then((r: any) => {
-        setSegs(r.data.segments ?? [])
-        setCounts(r.data.counts ?? {})
+        setSegs(r.segments ?? [])
+        setCounts(r.counts ?? {})
       })
       .catch((e) => message.error((e as Error).message))
       .finally(() => setLoading(false))
