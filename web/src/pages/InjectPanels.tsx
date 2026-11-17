@@ -3,7 +3,6 @@ import {
   Alert,
   Button,
   Card,
-  Collapse,
   Drawer,
   Empty,
   Input,
@@ -17,7 +16,6 @@ import {
 } from 'antd'
 import { EditOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons'
 import { injectApi, promptsApi } from '../api'
-import { http } from '../api/client'
 
 const { Text, Paragraph } = Typography
 
@@ -30,7 +28,6 @@ type Part = {
   source: string
 }
 
-/** 哪几段的内容来自库（可改）；其余只读，来源写清。 */
 const EDITABLE: Record<string, string[]> = {
   identity: ['identity'],
   discipline: ['redlines', 'priority', 'number_discipline'],
@@ -46,7 +43,9 @@ const CODE_LOCATION: Record<string, string> = {
 }
 
 function SourceTag({ source }: { source: string }) {
-  const color = source === '库' ? 'blue' : source === '代码兜底' ? 'orange' : 'default'
+  const color =
+    source === '个人' ? 'purple' : source === '全局' ? 'geekblue'
+      : source === '库' ? 'blue' : source === '代码兜底' ? 'orange' : 'default'
   return <Tag color={color}>{source}</Tag>
 }
 
@@ -57,6 +56,7 @@ function WorkLane() {
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [bodies, setBodies] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
+  const [scope, setScope] = useState<'global' | 'user'>('global')
 
   const load = (q = question) => {
     setLoading(true)
@@ -77,7 +77,7 @@ function WorkLane() {
     const next: Record<string, string> = {}
     for (const k of keys) {
       try {
-        const r: any = await injectApi.text(k)
+        const r: any = await injectApi.text(k, scope)
         next[k] = r.body || ''
       } catch {
         next[k] = ''
@@ -89,8 +89,8 @@ function WorkLane() {
   const save = async () => {
     setSaving(true)
     try {
-      for (const [k, v] of Object.entries(bodies)) await injectApi.saveText(k, v)
-      message.success('已保存，下面是保存后重新装配的字数')
+      for (const [k, v] of Object.entries(bodies)) await injectApi.saveText(k, v, scope)
+      message.success(scope === 'user' ? '已存成你自己的那份' : '已存成全局')
       await load()
       setOpenKey(null)
     } catch (e) {
@@ -108,7 +108,7 @@ function WorkLane() {
     <Space direction="vertical" size={10} style={{ width: '100%' }}>
       <Space wrap>
         <Input
-          style={{ width: 420 }}
+          style={{ width: 380 }}
           placeholder="试跑：输入一句真实问题（留空只看常驻部分）"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
@@ -117,6 +117,12 @@ function WorkLane() {
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => load()}>
           重新装配
         </Button>
+        <Tag.CheckableTag checked={scope === 'global'} onChange={() => setScope('global')}>
+          改全局
+        </Tag.CheckableTag>
+        <Tag.CheckableTag checked={scope === 'user'} onChange={() => setScope('user')}>
+          改我自己的
+        </Tag.CheckableTag>
         <Text type="secondary">
           合计 {total} 字 / 上限 {budget} 字
         </Text>
@@ -129,7 +135,10 @@ function WorkLane() {
         <Alert
           type="warning"
           showIcon
-          message={'超限压缩：' + (data.compressed as any[]).map((c) => `${c.name} ${c.from}→${c.to} 字`).join('；')}
+          message={
+            '超限压缩：' +
+            (data.compressed as any[]).map((c) => `${c.name} ${c.from}→${c.to} 字`).join('；')
+          }
         />
       ) : null}
 
@@ -141,7 +150,7 @@ function WorkLane() {
         columns={[
           {
             title: '段',
-            width: 220,
+            width: 240,
             render: (_, p: Part, i) => (
               <Space size={4}>
                 <Text type="secondary">{`①②③④⑤⑥⑦⑧`[i] ?? i + 1}</Text>
@@ -155,7 +164,11 @@ function WorkLane() {
             title: '占比',
             width: 120,
             render: (_, p: Part) =>
-              p.injected ? <Progress percent={Math.round(p.share * 100)} size="small" showInfo={false} /> : '—',
+              p.injected ? (
+                <Progress percent={Math.round(p.share * 100)} size="small" showInfo={false} />
+              ) : (
+                '—'
+              ),
           },
           {
             title: '操作',
@@ -175,9 +188,9 @@ function WorkLane() {
         ]}
       />
 
-      <Card size="small" type="inner" title="这一页说明什么">
+      <Card size="small" type="inner" title="这页怎么读">
         <Paragraph type="secondary" style={{ margin: 0, fontSize: 13 }}>
-          顺序就是代码里的装配顺序，页面不另排。可改的只有「库」那几段；「代码兜底」是库里空着才用的默认值，
+          顺序就是代码里的装配顺序。可改的是「库 / 全局 / 个人」那几段；「代码兜底」是库里空着才用的默认值，
           「自动生成」是每轮现算的。改完保存，字数与占比马上重算。
         </Paragraph>
       </Card>
@@ -190,7 +203,7 @@ function WorkLane() {
         extra={
           EDITABLE[openKey ?? ''] ? (
             <Button type="primary" loading={saving} onClick={() => void save()}>
-              保存
+              保存到{scope === 'user' ? '我的' : '全局'}
             </Button>
           ) : null
         }
@@ -220,77 +233,95 @@ function WorkLane() {
 }
 
 function AskLane() {
-  const [data, setData] = useState<any>(null)
+  const [nodes, setNodes] = useState<any[]>([])
+  const [injectChars, setInjectChars] = useState<any>({})
+  const [open, setOpen] = useState<any>(null)
+
   useEffect(() => {
     promptsApi
       .overview()
-      .then((r) => setData(r))
+      .then((r) => {
+        setNodes(r.nodes ?? [])
+        setInjectChars(r.inject ?? {})
+      })
       .catch((e) => message.error((e as Error).message))
   }, [])
 
-  if (!data) return <Empty description="读取中…" />
-
-  const materials: any[] = data.materials ?? []
-  const texts: Record<string, string> = data.texts ?? {}
-  const complete: any[] = data.complete ?? []
+  if (!nodes.length) return <Empty description="读取中…" />
 
   return (
     <Space direction="vertical" size={10} style={{ width: '100%' }}>
-      <Card size="small" type="inner" title={`口径材料（${materials.length} 份）`}>
-        <Table
-          size="small"
-          rowKey={(r: any) => r.slot + (r.section || '')}
-          pagination={false}
-          dataSource={materials}
-          columns={[
-            { title: '槽位', dataIndex: 'slot', width: 120 },
-            { title: '说明', dataIndex: 'label' },
-            { title: '字数', dataIndex: 'chars', width: 100 },
-            { title: '启用节', dataIndex: 'sections', width: 100 },
-          ]}
-        />
-      </Card>
-
-      <Card size="small" type="inner" title="代码里的提示词（只读，改要改代码）">
-        <Collapse
-          size="small"
-          items={Object.entries(texts).map(([k, v]) => ({
-            key: k,
-            label: (
-              <Space>
-                <Text strong>{k}</Text>
-                <Text type="secondary">{String(v || '').length} 字</Text>
-              </Space>
-            ),
-            children: (
-              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>
-                {String(v || '').slice(0, 4000)}
-              </pre>
-            ),
-          }))}
-        />
-      </Card>
-
-      <Card size="small" type="inner" title={`补全表（${complete.length} 条）`}>
-        <Table
-          size="small"
-          rowKey="id"
-          pagination={{ pageSize: 8 }}
-          dataSource={complete}
-          columns={[
-            { title: '类别', dataIndex: 'kind', width: 90 },
-            { title: '匹配', dataIndex: 'match_text' },
-            { title: '补成', dataIndex: 'fill_text' },
-            { title: '优先级', dataIndex: 'priority', width: 90 },
-          ]}
-        />
-      </Card>
-
       <Alert
         type="info"
         showIcon
-        message={`本轮会注入：查数循环 ${data.inject?.loop_block ?? 0} 字，作答 ${data.inject?.final_block ?? 0} 字`}
+        message={`查数循环注入 ${injectChars.loop_block ?? 0} 字 · 作答注入 ${injectChars.final_block ?? 0} 字 · 下面是这条链路的每一步，以及这一步会读哪段材料`}
       />
+
+      {nodes.map((n: any) => (
+        <Card key={n.key} size="small" type="inner" title={n.name}>
+          {n.desc ? (
+            <Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
+              {n.desc}
+            </Paragraph>
+          ) : null}
+          <Table
+            size="small"
+            rowKey={(m: any) => m.key}
+            pagination={false}
+            dataSource={n.materials ?? []}
+            columns={[
+              {
+                title: '这一步读什么',
+                render: (_: any, m: any) => (
+                  <Space wrap size={4}>
+                    <Text strong>{m.name}</Text>
+                    {m.always ? <Tag color="blue">必带</Tag> : <Tag>按需</Tag>}
+                    {m.editable ? <Tag color="green">可改</Tag> : <Tag>只读·代码</Tag>}
+                  </Space>
+                ),
+              },
+              {
+                title: '什么时候读',
+                dataIndex: 'when',
+                width: 200,
+                render: (v: string) => <Text type="secondary">{v || '—'}</Text>,
+              },
+              { title: '字数', dataIndex: 'chars', width: 90 },
+              {
+                title: '节',
+                width: 120,
+                render: (_: any, m: any) =>
+                  m.slot
+                    ? `${m.sections ?? 0} 节${m.deleted ? `（已删 ${m.deleted}）` : ''}`
+                    : '—',
+              },
+              {
+                title: '原文',
+                width: 90,
+                render: (_: any, m: any) =>
+                  m.chars ? (
+                    <Button size="small" icon={<EyeOutlined />} onClick={() => setOpen(m)}>
+                      看
+                    </Button>
+                  ) : (
+                    <Text type="secondary">空</Text>
+                  ),
+              },
+            ]}
+          />
+        </Card>
+      ))}
+
+      <Drawer
+        open={open != null}
+        onClose={() => setOpen(null)}
+        width={760}
+        title={open ? `${open.name}（${open.chars} 字）` : ''}
+      >
+        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>
+          {open?.body || '（这段现在没有内容）'}
+        </pre>
+      </Drawer>
     </Space>
   )
 }
@@ -300,8 +331,8 @@ export default function InjectPanels() {
     <Card title="提示词（这一轮实际发出去的是什么）" size="small">
       <Tabs
         items={[
-          { key: 'work', label: '干活线', children: <WorkLane /> },
           { key: 'ask', label: '问数线', children: <AskLane /> },
+          { key: 'work', label: '干活线', children: <WorkLane /> },
         ]}
       />
     </Card>

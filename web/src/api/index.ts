@@ -863,11 +863,13 @@ export const injectApi = {  items: () =>
     http.get<any, { items: InjectItem[]; budget: number; affects: string; note: string }>(
       '/inject/items',
     ),
-  saveText: (k: string, body: string) => http.post<any, any>('/inject/text', { k, body }),
-  text: (k: string) =>
-    http.get<any, { k: string; body: string; label: string; chars: number }>('/inject/text', {
-      params: { k },
-    }),
+  saveText: (k: string, body: string, scope = 'global') =>
+    http.post<any, any>('/inject/text', { k, body, scope }),
+  text: (k: string, scope = 'global') =>
+    http.get<any, { k: string; body: string; label: string; chars: number; source: string }>(
+      '/inject/text',
+      { params: { k, scope } },
+    ),
   budget: () => http.get<any, { resident_chars: number }>('/inject/budget'),
   setBudget: (resident_chars: number) =>
     http.post<any, any>('/inject/budget', { resident_chars }),
