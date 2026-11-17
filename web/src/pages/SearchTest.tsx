@@ -19,7 +19,6 @@ import type { ColumnsType } from 'antd/es/table'
 import CaliberMetricDrawer, { mustText } from '../components/CaliberMetricDrawer'
 import type { ParsedMetric } from '../components/CaliberMetricDrawer'
 import { http } from '../api/client'
-import Prompts from './Prompts'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -395,7 +394,6 @@ export default function SearchTest() {
         defaultActiveKey="caliber"
         items={[
           { key: 'caliber', label: '指标口径', children: <CaliberPanel /> },
-          { key: 'rules', label: '问数规则', children: <Prompts /> },
           { key: 'complete', label: '补全表', children: <CompleteRules /> },
         ]}
       />
