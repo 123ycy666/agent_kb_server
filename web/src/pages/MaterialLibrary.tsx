@@ -169,9 +169,28 @@ export default function MaterialLibrary() {
             title: '操作',
             width: 100,
             render: (_, r: any) => (
-              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>
-                归类
-              </Button>
+              <Space size={4}>
+                <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>
+                  归类
+                </Button>
+                {r.status === 'draft' ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={() =>
+                      catalogApi
+                        .saveDoc(r.id, { status: 'active' })
+                        .then(() => {
+                          message.success('已发布，60 秒内可被检索')
+                          load()
+                        })
+                        .catch((e: any) => message.error(e.message))
+                    }
+                  >
+                    发布
+                  </Button>
+                ) : null}
+              </Space>
             ),
           },
         ]}
