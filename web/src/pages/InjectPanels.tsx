@@ -16,6 +16,7 @@ import {
 } from 'antd'
 import { EditOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons'
 import { injectApi, promptsApi } from '../api'
+import { http } from '../api/client'
 
 const { Text, Paragraph } = Typography
 
@@ -233,95 +234,61 @@ function WorkLane() {
 }
 
 function AskLane() {
-  const [nodes, setNodes] = useState<any[]>([])
-  const [injectChars, setInjectChars] = useState<any>({})
-  const [open, setOpen] = useState<any>(null)
+  const [segs, setSegs] = useState<any[]>([])
+  const [counts, setCounts] = useState<any>({})
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    promptsApi
-      .overview()
-      .then((r) => {
-        setNodes(r.nodes ?? [])
-        setInjectChars(r.inject ?? {})
+    http
+      .get('/prompts/impact')
+      .then((r: any) => {
+        setSegs(r.data.segments ?? [])
+        setCounts(r.data.counts ?? {})
       })
       .catch((e) => message.error((e as Error).message))
+      .finally(() => setLoading(false))
   }, [])
 
-  if (!nodes.length) return <Empty description="读取中…" />
+  if (loading) return <Empty description="读取中…" />
 
   return (
     <Space direction="vertical" size={10} style={{ width: '100%' }}>
       <Alert
         type="info"
         showIcon
-        message={`查数循环注入 ${injectChars.loop_block ?? 0} 字 · 作答注入 ${injectChars.final_block ?? 0} 字 · 下面是这条链路的每一步，以及这一步会读哪段材料`}
+        message={`一次问数回答被 ${counts.segments ?? 0} 段、${counts.items ?? 0} 类输入影响。答错时按下面顺序往上找。`}
       />
 
-      {nodes.map((n: any) => (
-        <Card key={n.key} size="small" type="inner" title={n.name}>
-          {n.desc ? (
-            <Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
-              {n.desc}
-            </Paragraph>
-          ) : null}
+      {segs.map((s: any) => (
+        <Card key={s.key} size="small" type="inner" title={s.name}>
           <Table
             size="small"
-            rowKey={(m: any) => m.key}
+            rowKey={(it: any) => it.name}
             pagination={false}
-            dataSource={n.materials ?? []}
+            dataSource={s.items}
             columns={[
+              { title: '输入', render: (_: any, it: any) => <Text strong>{it.name}</Text> },
               {
-                title: '这一步读什么',
-                render: (_: any, m: any) => (
-                  <Space wrap size={4}>
-                    <Text strong>{m.name}</Text>
-                    {m.always ? <Tag color="blue">必带</Tag> : <Tag>按需</Tag>}
-                    {m.editable ? <Tag color="green">可改</Tag> : <Tag>只读·代码</Tag>}
-                  </Space>
-                ),
+                title: '存在哪',
+                width: 220,
+                render: (_: any, it: any) => <Text code>{it.where}</Text>,
               },
+              { title: '大小', dataIndex: 'size', width: 130 },
               {
-                title: '什么时候读',
-                dataIndex: 'when',
-                width: 200,
-                render: (v: string) => <Text type="secondary">{v || '—'}</Text>,
+                title: '能改吗',
+                width: 110,
+                render: (_: any, it: any) =>
+                  it.editable ? <Tag color="green">页面上可改</Tag> : <Tag>只读</Tag>,
               },
-              { title: '字数', dataIndex: 'chars', width: 90 },
+              { title: '改完多久生效', dataIndex: 'takes_effect', width: 120 },
               {
-                title: '节',
-                width: 120,
-                render: (_: any, m: any) =>
-                  m.slot
-                    ? `${m.sections ?? 0} 节${m.deleted ? `（已删 ${m.deleted}）` : ''}`
-                    : '—',
-              },
-              {
-                title: '原文',
-                width: 90,
-                render: (_: any, m: any) =>
-                  m.chars ? (
-                    <Button size="small" icon={<EyeOutlined />} onClick={() => setOpen(m)}>
-                      看
-                    </Button>
-                  ) : (
-                    <Text type="secondary">空</Text>
-                  ),
+                title: '它在决定什么',
+                render: (_: any, it: any) => <Text type="secondary">{it.note}</Text>,
               },
             ]}
           />
         </Card>
       ))}
-
-      <Drawer
-        open={open != null}
-        onClose={() => setOpen(null)}
-        width={760}
-        title={open ? `${open.name}（${open.chars} 字）` : ''}
-      >
-        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>
-          {open?.body || '（这段现在没有内容）'}
-        </pre>
-      </Drawer>
     </Space>
   )
 }

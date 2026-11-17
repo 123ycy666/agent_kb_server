@@ -95,6 +95,16 @@ def overview(actor: CurrentActor = Depends(get_current_actor)):
     })
 
 
+@router.get('/impact', summary='问数线影响面：九段、13 类输入')
+def impact(actor: CurrentActor = Depends(get_current_actor)):
+    """答错时要能指到「哪一段的哪个输入」。只读，不改配置。"""
+    from app.secretary import impact as I
+    segs = I.segments()
+    return _jr({'segments': segs,
+                'counts': {'segments': len(segs),
+                           'items': sum(len(s['items']) for s in segs)}})
+
+
 @router.get('/tree', summary='主流程节点与材料')
 def tree(actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import prompt_tree
