@@ -105,7 +105,7 @@ export default function AgentChat() {
   const [taskId, setTaskId] = useState('')
   const [presets, setPresets] = useState<PresetQuestion[]>([])
   const [downloading, setDownloading] = useState('')
-  const [openIdx, setOpenIdx] = useState<number | null>(null)
+  const [selIdx, setSelIdx] = useState<number | null>(null)
   const [drawerTab, setDrawerTab] = useState('steps')
   const stoppedRef = useRef(false)
 
@@ -308,19 +308,22 @@ export default function AgentChat() {
   const revise = (a: Artifact) => {
     if (a.file_id) setFileIds([a.file_id])
     setInput((prev) => prev || `再改一版：基于《${a.name || '这份产物'}》，保持原有结构与版式，调整内容后重新出文件。`)
-    setOpenIdx(null)
+    setSelIdx(null)
   }
 
-  const openDrawer = (i: number) => {
-    setOpenIdx(i)
-    setDrawerTab('steps')
+  const fetchFour = (i: number) => {
     const m = messages[i]
-    if (m && !m.four && m.qaId) {
-      injectApi
-        .report({ qa_id: m.qaId })
-        .then((x: any) => setMessages((prev) => prev.map((mm, j) => (j === i ? { ...mm, four: x } : mm))))
-        .catch(() => undefined)
-    }
+    if (!m || m.four || !m.qaId) return
+    injectApi
+      .report({ qa_id: m.qaId })
+      .then((x: any) => setMessages((prev) => prev.map((mm, j) => (j === i ? { ...mm, four: x } : mm))))
+      .catch(() => undefined)
+  }
+
+  const selectTurn = (i: number) => {
+    setSelIdx(i)
+    setDrawerTab('steps')
+    fetchFour(i)
   }
 
   const newSession = () => {
@@ -335,8 +338,19 @@ export default function AgentChat() {
   }
 
   const lastIsUser = messages.length > 0 && messages[messages.length - 1].role === 'user'
-  const opened = openIdx != null ? messages[openIdx] : null
+  const lastAssistantIdx = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'assistant') return i
+    }
+    return null
+  })()
+  const activeIdx = selIdx != null && messages[selIdx]?.role === 'assistant' ? selIdx : lastAssistantIdx
+  const opened = activeIdx != null ? messages[activeIdx] : null
   const openedArtifacts: Artifact[] = opened?.result?.artifacts ?? []
+  useEffect(() => {
+    if (activeIdx != null) fetchFour(activeIdx)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIdx, messages.length])
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -346,7 +360,7 @@ export default function AgentChat() {
             <Title level={4} style={{ margin: 0 }}>
               智能问答
             </Title>
-            <Text type="secondary">左边是历史会话 · 每轮依据在答案下方，点开看运行步骤</Text>
+            <Text type="secondary">左边历史会话 · 中间对话 · 右边直接显示这一轮的每一步</Text>
           </Space>
         </Col>
         <Col>
@@ -368,7 +382,7 @@ export default function AgentChat() {
       </Row>
 
       <Row gutter={12} align="stretch">
-        <Col span={6}>
+        <Col span={5}>
           <Card
             size="small"
             title={`历史会话（${sessions.length}）`}
@@ -427,7 +441,7 @@ export default function AgentChat() {
           </Card>
         </Col>
 
-        <Col span={18}>
+        <Col span={12}>
           <Card
             size="small"
             title="对话"
@@ -452,8 +466,7 @@ export default function AgentChat() {
                       </Text>
                     </Space>
                     <Paragraph type="secondary" style={{ margin: 0, fontSize: 13 }}>
-                      写通知 / 做台账 / 读文件 / 查数 / 改一版都可以。每轮答案下方有一行
-                      「依据 · 自检 · 数字来源」，点它能看到这一轮每一步到底做了什么。
+                      写通知 / 做台账 / 读文件 / 查数 / 改一版都可以。右边常驻「运行步骤」，不用点就能看到这一轮每一步到底做了什么。
                     </Paragraph>
                     <Space wrap size={[6, 6]}>
                       {presets.map((p) => (
@@ -499,10 +512,10 @@ export default function AgentChat() {
                         </div>
                         {m.role === 'assistant' ? (
                           <div
-                            style={{ marginTop: 4, fontSize: 12, color: '#1677ff', cursor: 'pointer' }}
-                            onClick={() => openDrawer(i)}
+                            style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c', cursor: 'pointer' }}
+                            onClick={() => selectTurn(i)}
                           >
-                            {summarize(m)} ▸
+                            {summarize(m)}（右侧看这一步做了什么）
                           </div>
                         ) : null}
                       </div>
@@ -559,110 +572,115 @@ export default function AgentChat() {
             </div>
           </Card>
         </Col>
+        <Col span={7}>
+          <Card
+            size="small"
+            title={opened ? `运行步骤${opened.steps?.length ? `（${opened.steps.length}）` : ''}` : '运行步骤'}
+            styles={{ body: { padding: 8, height: 620, overflowY: 'auto' } }}
+          >
+            {!opened ? (
+              <Empty style={{ marginTop: 80 }} description="问答一轮之后，这里直接显示每一步" />
+            ) : (
+              <Tabs
+                size="small"
+                activeKey={drawerTab}
+                onChange={setDrawerTab}
+                items={[
+                  {
+                    key: 'steps',
+                    label: '步骤',
+                    children:
+                      !opened.steps || opened.steps.length === 0 ? (
+                        <Empty description="这一轮没有拿到步骤明细（可能还没落库，稍后重开一次）" />
+                      ) : (
+                        <Collapse
+                          size="small"
+                          items={opened.steps.map((s, i) => ({
+                            key: String(s.seq ?? i),
+                            label: (
+                              <Space wrap size={4}>
+                                <Text style={{ fontSize: 12 }}>{stepLabel(s)}</Text>
+                                {s.kind === 'tool' ? <Tag>工具</Tag> : <Tag color="blue">{s.kind || '步骤'}</Tag>}
+                              </Space>
+                            ),
+                            children: (
+                              <pre
+                                style={{
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-all',
+                                  fontSize: 11,
+                                  margin: 0,
+                                  maxHeight: 320,
+                                  overflow: 'auto',
+                                }}
+                              >
+                                {JSON.stringify(s.result ?? s.args ?? s, null, 2).slice(0, 6000)}
+                              </pre>
+                            ),
+                          }))}
+                        />
+                      ),
+                  },
+                  {
+                    key: 'four',
+                    label: '四件套',
+                    children:
+                      opened.four || opened.result ? (
+                        <FourPack
+                          data={{
+                            ...(opened.result ?? {}),
+                            ...(opened.four ?? {}),
+                          }}
+                          compact
+                        />
+                      ) : (
+                        <Empty description="四件套还没落库（qa_id 为空或写入失败）" />
+                      ),
+                  },
+                  {
+                    key: 'artifacts',
+                    label: `产物${openedArtifacts.length ? `（${openedArtifacts.length}）` : ''}`,
+                    children:
+                      openedArtifacts.length === 0 ? (
+                        <Empty description="本轮没有产物" />
+                      ) : (
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          {openedArtifacts.map((a, i) => (
+                            <Card key={`${a.url}-${i}`} size="small">
+                              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                <Space wrap size={6}>
+                                  <FileTextOutlined />
+                                  <Text strong>{a.name}</Text>
+                                  <Tag>{a.kind || '文件'}</Tag>
+                                  {a.self_check ? <Tag color="green">{a.self_check}</Tag> : null}
+                                </Space>
+                                <Space>
+                                  <Button
+                                    size="small"
+                                    type="primary"
+                                    icon={<DownloadOutlined />}
+                                    loading={downloading === a.url}
+                                    onClick={() => void download(a)}
+                                  >
+                                    直接下载
+                                  </Button>
+                                  <Button size="small" onClick={() => revise(a)}>
+                                    再改一版
+                                  </Button>
+                                </Space>
+                              </Space>
+                            </Card>
+                          ))}
+                        </Space>
+                      ),
+                  },
+                ]}
+              />
+            )}
+          </Card>
+        </Col>
       </Row>
 
-      <Drawer
-        open={openIdx != null}
-        onClose={() => setOpenIdx(null)}
-        width={640}
-        title={opened ? (opened.result?.answer ? '本轮：答案与依据' : '本轮运行步骤') : ''}
-      >
-        {opened ? (
-          <Tabs
-            activeKey={drawerTab}
-            onChange={setDrawerTab}
-            items={[
-              {
-                key: 'steps',
-                label: `运行步骤${opened.steps?.length ? `（${opened.steps.length}）` : ''}`,
-                children:
-                  !opened.steps || opened.steps.length === 0 ? (
-                    <Empty description="这一轮没有拿到步骤明细（可能还没落库，稍后重开一次）" />
-                  ) : (
-                    <Collapse
-                      size="small"
-                      items={opened.steps.map((s, i) => ({
-                        key: String(s.seq ?? i),
-                        label: (
-                          <Space wrap size={4}>
-                            <Text style={{ fontSize: 12 }}>{stepLabel(s)}</Text>
-                            {s.kind === 'tool' ? <Tag>工具</Tag> : <Tag color="blue">{s.kind || '步骤'}</Tag>}
-                          </Space>
-                        ),
-                        children: (
-                          <pre
-                            style={{
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-all',
-                              fontSize: 11,
-                              margin: 0,
-                              maxHeight: 320,
-                              overflow: 'auto',
-                            }}
-                          >
-                            {JSON.stringify(s.result ?? s.args ?? s, null, 2).slice(0, 6000)}
-                          </pre>
-                        ),
-                      }))}
-                    />
-                  ),
-              },
-              {
-                key: 'four',
-                label: '四件套',
-                children: opened.four || opened.result ? (
-                  <FourPack
-                    data={{
-                      ...(opened.result ?? {}),
-                      ...(opened.four ?? {}),
-                    }}
-                    compact
-                  />
-                ) : (
-                  <Empty description="四件套还没落库（qa_id 为空或写入失败）" />
-                ),
-              },
-              {
-                key: 'artifacts',
-                label: `产物${openedArtifacts.length ? `（${openedArtifacts.length}）` : ''}`,
-                children:
-                  openedArtifacts.length === 0 ? (
-                    <Empty description="本轮没有产物；要文件就说「出一份 docx / xlsx / pptx」" />
-                  ) : (
-                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                      {openedArtifacts.map((a, i) => (
-                        <Card key={`${a.url}-${i}`} size="small">
-                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                            <Space wrap size={6}>
-                              <FileTextOutlined />
-                              <Text strong>{a.name}</Text>
-                              <Tag>{a.kind || '文件'}</Tag>
-                              {a.self_check ? <Tag color="green">{a.self_check}</Tag> : null}
-                            </Space>
-                            <Space>
-                              <Button
-                                size="small"
-                                type="primary"
-                                icon={<DownloadOutlined />}
-                                loading={downloading === a.url}
-                                onClick={() => void download(a)}
-                              >
-                                直接下载
-                              </Button>
-                              <Button size="small" onClick={() => revise(a)}>
-                                再改一版
-                              </Button>
-                            </Space>
-                          </Space>
-                        </Card>
-                      ))}
-                    </Space>
-                  ),
-              },
-            ]}
-          />
-        ) : null}
-      </Drawer>
 
       {lastIsUser && !sending ? (
         <Alert type="warning" showIcon message="上一条提问没有拿到回答，可以重发一次或到「记录」里看运行步骤。" />
