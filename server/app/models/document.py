@@ -18,6 +18,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     ForeignKey,
     Index,
     Integer,
@@ -98,6 +99,20 @@ class Document(Base, TimestampMixin):
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(String(64)), nullable=False, default=list, server_default=text("'{}'")
     )
+
+    # ── 归属与时效（知识库目录层，2026-11-16 新增）─────────────
+    # 目录即权限边界；status 管现行/废止；secrecy 管可见级别。
+    # 检索先在这三列上裁范围，再走向量/关键词召回。
+    catalog_id: Mapped[int | None] = mapped_column(BigInteger)
+    doc_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
+    issuer: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    doc_no: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    signed_on: Mapped[Any | None] = mapped_column(Date)
+    effective_from: Mapped[Any | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active",
+                                        server_default="active")
+    secrecy: Mapped[str] = mapped_column(String(16), nullable=False, default="internal",
+                                         server_default="internal")
 
     # ── 归属 ──────────────────────────────────────────────────
     owner_id: Mapped[int | None] = mapped_column(BigInteger)

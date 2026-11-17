@@ -170,6 +170,19 @@ def _build_tag_condition(tag_filters: list[str] | None):
     return DocumentChunk.tags.contains(tags)
 
 
+def _scope_conditions(actor):
+    """目录层的范围裁剪：只看现行；敏感文档除本人与管理员外不参与召回。"""
+    conds = [Document.status == "active"]
+    if not getattr(actor, "is_admin", False):
+        conds.append(
+            or_(
+                Document.secrecy.in_(("public", "internal")),
+                Document.owner_id == actor.user_id,
+            )
+        )
+    return conds
+
+
 def recall_vector(
     db: Session,
     *,
@@ -201,6 +214,8 @@ def recall_vector(
             DocumentChunk.embedding.isnot(None),
             # CASCADE 删除的已删除文档
             Document.owner_id.isnot(None) | Document.owner_id.is_(None),
+            # 目录层裁剪：只看现行；敏感文档按身份
+            *_scope_conditions(actor),
         )
         .order_by(distance)
         .limit(recall_k)
@@ -296,6 +311,8 @@ def recall_keyword(
             Document.is_active.is_(True),
             DocumentChunk.search_text.isnot(None),
             DocumentChunk.search_text.op("@@")(tsquery),
+            # 目录层裁剪，与向量路口径一致
+            *_scope_conditions(actor),
         )
         .order_by(kw_score.desc())
         .limit(recall_k)

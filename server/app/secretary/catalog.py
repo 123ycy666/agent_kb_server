@@ -64,6 +64,28 @@ def ensure() -> None:
         ('secrecy', "varchar(16) not null default 'internal'"),
     ):
         _q('alter table kb.document add column if not exists %s %s' % (col, ddl))
+    _repair_compat_view()
+
+
+def _repair_compat_view() -> None:
+    """public.document 是兼容视图；视图列固定，新加的列不会自动出现。
+
+    不修的话 SQLAlchemy 从 public 读会报 `column document.catalog_id does not exist`。
+    """
+    try:
+        rows = _q("""select 1 from information_schema.columns
+                      where table_schema='public' and table_name='document'
+                        and column_name='catalog_id'""")
+        if rows:
+            return
+        has_view = _q("""select 1 from information_schema.views
+                          where table_schema='public' and table_name='document'""")
+        if not has_view:
+            return
+        _q('drop view if exists public.document')
+        _q('create view public.document as select * from kb.document')
+    except Exception as exc:                       # noqa: BLE001 - 视图修不了不影响主流程
+        print('[catalog] 兼容视图修复失败：%s: %s' % (type(exc).__name__, exc), flush=True)
 
 
 def seed() -> dict:
