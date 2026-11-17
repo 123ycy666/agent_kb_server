@@ -125,6 +125,7 @@ function Terms() {
   const [rows, setRows] = useState<any[]>([])
   const [term, setTerm] = useState('')
   const [syn, setSyn] = useState('')
+  const [def, setDef] = useState('')
 
   const load = () =>
     catalogApi
@@ -139,9 +140,10 @@ function Terms() {
   const add = async () => {
     if (!term.trim()) return message.warning('先写词条')
     try {
-      await catalogApi.addTerm(dim, term.trim(), syn.trim())
+      await catalogApi.addTerm(dim, term.trim(), syn.trim(), def.trim())
       setTerm('')
       setSyn('')
+      setDef('')
       await load()
     } catch (e) {
       message.error((e as Error).message)
@@ -167,10 +169,16 @@ function Terms() {
           onChange={(e) => setTerm(e.target.value)}
         />
         <Input
-          style={{ width: 220 }}
+          style={{ width: 200 }}
           placeholder="同义词（逗号分隔，可空）"
           value={syn}
           onChange={(e) => setSyn(e.target.value)}
+        />
+        <Input
+          style={{ width: 240 }}
+          placeholder="定义 / 什么时候用它（可空）"
+          value={def}
+          onChange={(e) => setDef(e.target.value)}
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={() => void add()}>
           加入词表
@@ -186,6 +194,11 @@ function Terms() {
           {
             title: '同义词',
             dataIndex: 'synonyms',
+            render: (v: string) => (v ? v : <Text type="secondary">—</Text>),
+          },
+          {
+            title: '定义',
+            dataIndex: 'definition',
             render: (v: string) => (v ? v : <Text type="secondary">—</Text>),
           },
           { title: '被用次数', dataIndex: 'usage_count', width: 100 },

@@ -165,16 +165,19 @@ def terms(dimension: str = '') -> list[dict]:
     return sorted(rows, key=lambda r: (-r['usage_count'], r['term']))
 
 
-def add_term(dimension: str, term: str, synonyms: str = '') -> dict:
+def add_term(dimension: str, term: str, synonyms: str = '', definition: str = '',
+             owner: str = '') -> dict:
     ensure()
     term = (term or '').strip()
     if not term:
         return {'error': '词条不能为空'}
     if dimension not in ('文种', '主题'):
         return {'error': '维度只有 文种 / 主题'}
-    _q("insert into kb.tag_term (dimension, term, synonyms) values (%s,%s,%s) "
-       "on conflict (dimension, term) do update set synonyms=excluded.synonyms",
-       (dimension, term, synonyms or ''))
+    _q("""insert into kb.tag_term (dimension, term, synonyms, definition, owner)
+          values (%s,%s,%s,%s,%s)
+          on conflict (dimension, term) do update set synonyms=excluded.synonyms,
+                definition=excluded.definition, owner=excluded.owner""",
+       (dimension, term, synonyms or '', definition or '', owner or ''))
     return {'ok': True}
 
 

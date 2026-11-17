@@ -43,7 +43,8 @@ def terms(dimension: str = '', actor: CurrentActor = Depends(get_current_actor))
 async def add_term(request: Request, actor: CurrentActor = Depends(get_current_actor)):
     body = await request.json()
     return C.add_term(body.get('dimension') or '', body.get('term') or '',
-                      body.get('synonyms') or '')
+                      body.get('synonyms') or '', body.get('definition') or '',
+                      body.get('owner') or '')
 
 
 @router.post('/term/{tid}/enabled', summary='停用/启用词条')

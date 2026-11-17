@@ -892,8 +892,8 @@ export const catalogApi = {
   setNode: (id: number, enabled: boolean) =>
     http.post<any, any>(`/catalog/node/${id}/enabled`, { enabled }),
   terms: (dimension = '') => http.get<any, { items: any[] }>('/catalog/terms', { params: { dimension } }),
-  addTerm: (dimension: string, term: string, synonyms = '') =>
-    http.post<any, any>('/catalog/term', { dimension, term, synonyms }),
+  addTerm: (dimension: string, term: string, synonyms = '', definition = '') =>
+    http.post<any, any>('/catalog/term', { dimension, term, synonyms, definition }),
   setTerm: (id: number, enabled: boolean) =>
     http.post<any, any>(`/catalog/term/${id}/enabled`, { enabled }),
   doc: (id: number) => http.get<any, any>(`/catalog/doc/${id}`),

@@ -6,6 +6,7 @@ import {
   Descriptions,
   Drawer,
   Input,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -13,9 +14,9 @@ import {
   Typography,
   message,
 } from 'antd'
-import { EditOutlined, ReloadOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { catalogApi, kbApi } from '../api'
+import { catalogApi, docApi, kbApi } from '../api'
 import type { KnowledgeBase } from '../api'
 
 const { Text, Paragraph } = Typography
@@ -144,6 +145,18 @@ export default function MaterialLibrary() {
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => load()}>
           刷新
         </Button>
+        {kbId ? (
+          <Button
+            onClick={() =>
+              kbApi
+                .reindex(kbId, true)
+                .then((r: any) => message.success(r.message || '已提交重建'))
+                .catch((e: any) => message.error(e.message))
+            }
+          >
+            重建索引
+          </Button>
+        ) : null}
         <Text type="secondary">共 {filtered.length} / {rows.length} 篇</Text>
       </Space>
 
@@ -257,6 +270,20 @@ export default function MaterialLibrary() {
                     发布
                   </Button>
                 ) : null}
+                <Popconfirm
+                  title="删除这篇？删除后切片一起下架，可在库里恢复版本"
+                  onConfirm={() =>
+                    docApi
+                      .remove(r.id)
+                      .then(() => {
+                        message.success('已删除')
+                        load()
+                      })
+                      .catch((e: any) => message.error(e.message))
+                  }
+                >
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
               </Space>
             ),
           },
