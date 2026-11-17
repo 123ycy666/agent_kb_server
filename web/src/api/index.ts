@@ -913,6 +913,10 @@ export const catalogApi = {
 export const promptsApi = {
   overview: () => http.get<any, any>('/prompts/overview'),
   impact: () => http.get<any, any>('/prompts/impact'),
+  impactBody: (key: string) => http.get<any, any>('/prompts/impact/body', { params: { key } }),
+  impactOffice: () => http.get<any, any>('/prompts/impact/office'),
+  impactOfficeBody: (key: string) =>
+    http.get<any, any>('/prompts/impact/office/body', { params: { key } }),
   material: (slot: string) => http.get<any, any>(`/prompts/material/${slot}`),
   saveSection: (id: number, body: string) =>
     http.post<any, any>(`/prompts/material/section/${id}`, { body }),

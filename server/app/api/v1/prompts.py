@@ -114,6 +114,35 @@ def impact(actor: CurrentActor = Depends(get_current_actor)):
                            'items': sum(len(s['items']) for s in segs)}})
 
 
+@router.get('/impact/body', summary='问数线某一项输入的原文（全链路可读）')
+def impact_body(key: str, actor: CurrentActor = Depends(get_current_actor)):
+    """点开某一项看原文：返回这一项的存在位置、大小、可改与否、以及正文/表格。"""
+    from app.secretary import impact as I
+    res = I.body(key)
+    if res.get('error'):
+        return _jr(res, 404)
+    return _jr(res)
+
+
+@router.get('/impact/office', summary='干活线影响面：全链路（按 loop.run 的执行顺序）')
+def impact_office(actor: CurrentActor = Depends(get_current_actor)):
+    """干活线从进来到交出文件，被哪些输入影响。只读，不改配置。"""
+    from app.secretary import impact_office as O
+    segs = O.segments()
+    return _jr({'segments': segs,
+                'counts': {'segments': len(segs),
+                           'items': sum(len(s['items']) for s in segs)}})
+
+
+@router.get('/impact/office/body', summary='干活线某一项输入的原文')
+def impact_office_body(key: str, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import impact_office as O
+    res = O.body(key)
+    if res.get('error'):
+        return _jr(res, 404)
+    return _jr(res)
+
+
 @router.get('/tree', summary='主流程节点与材料')
 def tree(actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import prompt_tree
