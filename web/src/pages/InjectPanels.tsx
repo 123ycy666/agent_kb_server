@@ -3,7 +3,7 @@ import {
   Alert,
   Button,
   Card,
-  Collapse,
+  Descriptions,
   Drawer,
   Empty,
   Input,
@@ -19,7 +19,7 @@ import { EditOutlined, EyeOutlined, ReloadOutlined, SaveOutlined } from '@ant-de
 import { injectApi, promptsApi } from '../api'
 import { http } from '../api/client'
 
-const { Text, Paragraph } = Typography
+const { Title, Text, Paragraph } = Typography
 
 /* ───────────────────────── 干活线 ───────────────────────── */
 
@@ -107,9 +107,10 @@ function WorkLane() {
   const parts: Part[] = data?.parts ?? []
   const total = data?.total ?? 0
   const budget = data?.budget ?? 6000
+  const opened = parts.find((p) => p.name === openKey)
 
   return (
-    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Space wrap>
         <Input
           style={{ width: 380 }}
@@ -150,11 +151,11 @@ function WorkLane() {
         size="small"
         rowKey="name"
         pagination={false}
+        loading={loading}
         dataSource={parts}
         columns={[
           {
             title: '段',
-            width: 240,
             render: (_, p: Part, i) => (
               <Space size={4}>
                 <Text type="secondary">{`①②③④⑤⑥⑦⑧`[i] ?? i + 1}</Text>
@@ -162,7 +163,7 @@ function WorkLane() {
               </Space>
             ),
           },
-          { title: '来源', width: 110, render: (_, p: Part) => <SourceTag source={p.source} /> },
+          { title: '来源', width: 120, render: (_, p: Part) => <SourceTag source={p.source} /> },
           { title: '字数', width: 90, render: (_, p: Part) => (p.injected ? p.chars : '—') },
           {
             title: '占比',
@@ -176,17 +177,15 @@ function WorkLane() {
           },
           {
             title: '操作',
+            width: 150,
             render: (_, p: Part) => (
-              <Space>
-                <Button size="small" icon={<EyeOutlined />} onClick={() => openEdit(p)}>
-                  原文
-                </Button>
-                {EDITABLE[p.name] ? (
-                  <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(p)}>
-                    改
-                  </Button>
-                ) : null}
-              </Space>
+              <Button
+                size="small"
+                icon={EDITABLE[p.name] ? <EditOutlined /> : <EyeOutlined />}
+                onClick={() => void openEdit(p)}
+              >
+                {EDITABLE[p.name] ? '看/改' : '看原文'}
+              </Button>
             ),
           },
         ]}
@@ -195,43 +194,72 @@ function WorkLane() {
       <Drawer
         open={openKey != null}
         onClose={() => setOpenKey(null)}
-        width={720}
-        title={parts.find((p) => p.name === openKey)?.label || ''}
+        width={760}
+        title={opened ? `${opened.label}　${opened.chars.toLocaleString()} 字` : ''}
         extra={
           EDITABLE[openKey ?? ''] ? (
-            <Button type="primary" loading={saving} onClick={() => void save()}>
+            <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
               保存到{scope === 'user' ? '我的' : '全局'}
             </Button>
           ) : null
         }
       >
-        {EDITABLE[openKey ?? ''] ? (
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            {EDITABLE[openKey ?? ''].map((k) => (
-              <div key={k}>
-                <Text strong>{k}</Text>
-                <Input.TextArea
-                  autoSize={{ minRows: 6, maxRows: 20 }}
-                  value={bodies[k] ?? ''}
-                  onChange={(e) => setBodies((b) => ({ ...b, [k]: e.target.value }))}
-                />
-              </div>
-            ))}
+        {opened ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Descriptions size="small" column={2} bordered>
+              <Descriptions.Item label="段">{opened.label}</Descriptions.Item>
+              <Descriptions.Item label="来源">
+                <SourceTag source={opened.source} />
+              </Descriptions.Item>
+              <Descriptions.Item label="字数">{opened.chars.toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="是否注入">
+                {opened.injected ? '本轮已注入' : '空，本轮没注入'}
+              </Descriptions.Item>
+              <Descriptions.Item label="生效方式" span={2}>
+                保存后下一轮生效（缓存最多 60 秒）
+              </Descriptions.Item>
+            </Descriptions>
+            {EDITABLE[openKey ?? ''] ? (
+              EDITABLE[openKey ?? ''].map((k) => (
+                <div key={k}>
+                  <Text strong>{k}</Text>
+                  <Input.TextArea
+                    autoSize={{ minRows: 10, maxRows: 26 }}
+                    value={bodies[k] ?? ''}
+                    onChange={(e) => setBodies((b) => ({ ...b, [k]: e.target.value }))}
+                  />
+                </div>
+              ))
+            ) : (
+              <Alert
+                type="info"
+                showIcon
+                message={CODE_LOCATION[openKey ?? ''] || '这一段由代码或上一轮会话生成，不在库里'}
+                description="要改它只能改代码；改代码不在这页做。"
+              />
+            )}
           </Space>
-        ) : (
-          <Space direction="vertical" size={8}>
-            <Text>{CODE_LOCATION[openKey ?? ''] || '这一段由代码或上一轮会话生成，不在库里。'}</Text>
-            <Text type="secondary">要改它只能改代码；改代码不在这页做。</Text>
-          </Space>
-        )}
+        ) : null}
       </Drawer>
     </Space>
   )
 }
 
-/* ───────────────────────── 问数线（工作台） ───────────────────────── */
+/* ───────────────────────── 问数线 ───────────────────────── */
 
-function MaterialEditor({ slot }: { slot: string }) {
+type Item = {
+  seg: string
+  name: string
+  where: string
+  size: string
+  editable: boolean
+  takes_effect: string
+  note: string
+  endpoint: string
+  editor: string
+}
+
+function SectionList({ slot }: { slot: string }) {
   const [secs, setSecs] = useState<any[]>([])
   const [bodies, setBodies] = useState<Record<number, string>>({})
   const [saving, setSaving] = useState<number | null>(null)
@@ -240,7 +268,7 @@ function MaterialEditor({ slot }: { slot: string }) {
     promptsApi
       .material(slot)
       .then((r: any) => {
-        const list = r.sections ?? r.items ?? []
+        const list = r.sections ?? []
         setSecs(list)
         const next: Record<number, string> = {}
         list.forEach((s: any) => (next[s.id] = s.body ?? ''))
@@ -252,7 +280,7 @@ function MaterialEditor({ slot }: { slot: string }) {
     load()
   }, [slot])
 
-  if (!secs.length) return <Empty description="这一槽没有小节（内容为空）" />
+  if (!secs.length) return <Empty description="这一槽没有内容" />
 
   const save = async (id: number) => {
     setSaving(id)
@@ -268,40 +296,34 @@ function MaterialEditor({ slot }: { slot: string }) {
   }
 
   return (
-    <Collapse
-      size="small"
-      items={secs.map((s: any) => ({
-        key: String(s.id),
-        label: (
-          <Space>
+    <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      {secs.map((s: any) => (
+        <div key={s.id}>
+          <Space style={{ marginBottom: 4 }}>
             <Text strong>{s.section}</Text>
             <Text type="secondary">{String(s.body ?? '').length} 字</Text>
             {s.pinned ? <Tag color="blue">必带</Tag> : <Tag>按需</Tag>}
           </Space>
-        ),
-        children: (
-          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-            <Input.TextArea
-              autoSize={{ minRows: 8, maxRows: 30 }}
-              value={bodies[s.id] ?? ''}
-              onChange={(e) => setBodies((b) => ({ ...b, [s.id]: e.target.value }))}
-            />
-            <Space>
-              <Button
-                type="primary"
-                size="small"
-                icon={<SaveOutlined />}
-                loading={saving === s.id}
-                onClick={() => void save(s.id)}
-              >
-                保存这一节
-              </Button>
-              <Text type="secondary">存完下一轮问答就用新内容</Text>
-            </Space>
+          <Input.TextArea
+            autoSize={{ minRows: 12, maxRows: 30 }}
+            value={bodies[s.id] ?? ''}
+            onChange={(e) => setBodies((b) => ({ ...b, [s.id]: e.target.value }))}
+          />
+          <Space style={{ marginTop: 6 }}>
+            <Button
+              type="primary"
+              size="small"
+              icon={<SaveOutlined />}
+              loading={saving === s.id}
+              onClick={() => void save(s.id)}
+            >
+              保存这一节
+            </Button>
+            <Text type="secondary">存完下一轮问答就用新内容</Text>
           </Space>
-        ),
-      }))}
-    />
+        </div>
+      ))}
+    </Space>
   )
 }
 
@@ -315,7 +337,7 @@ function TextKeyEditor({ keyName }: { keyName: string }) {
       .then((r: any) => {
         const list: any[] = Array.isArray(r.items) ? r.items : Object.values(r.items ?? {})
         const v = list.find((x: any) => x.key === keyName || x.name === keyName)
-        setBody(v?.body ?? v?.text ?? '')
+        setBody(v?.body ?? '')
       })
       .catch((e) => message.error((e as Error).message))
 
@@ -338,7 +360,7 @@ function TextKeyEditor({ keyName }: { keyName: string }) {
   return (
     <Space direction="vertical" size={6} style={{ width: '100%' }}>
       <Input.TextArea
-        autoSize={{ minRows: 8, maxRows: 30 }}
+        autoSize={{ minRows: 12, maxRows: 30 }}
         value={body}
         onChange={(e) => setBody(e.target.value)}
       />
@@ -352,99 +374,164 @@ function TextKeyEditor({ keyName }: { keyName: string }) {
   )
 }
 
-function ReadOnlyPeek({ endpoint, name }: { endpoint: string; name: string }) {
-  const [open, setOpen] = useState(false)
+function ReadOnlyBody({ endpoint }: { endpoint: string }) {
   const [data, setData] = useState<any>(null)
 
-  const show = () => {
-    setOpen(true)
-    if (data) return
+  useEffect(() => {
+    if (!endpoint) return
     http
       .get(endpoint)
       .then((r: any) => setData(r))
       .catch((e) => message.error((e as Error).message))
+  }, [endpoint])
+
+  if (!endpoint) return <Empty description="这一项只能在代码里看" />
+  if (!data) return <Empty description="读取中…" />
+
+  const rows: any[] = Array.isArray(data) ? data
+    : Array.isArray(data.items) ? data.items
+      : Array.isArray(data.rows) ? data.rows
+        : []
+
+  if (rows.length) {
+    const keys = Object.keys(rows[0]).filter((k) => !['ok'].includes(k)).slice(0, 6)
+    return (
+      <Table
+        size="small"
+        rowKey={(r: any, i?: number) => String(r.id ?? r.key ?? r.table_name ?? i)}
+        dataSource={rows}
+        pagination={{ pageSize: 10 }}
+        columns={keys.map((k) => ({
+          title: k,
+          dataIndex: k,
+          render: (v: any) => (typeof v === 'object' ? JSON.stringify(v) : String(v ?? '')),
+        }))}
+      />
+    )
   }
 
+  const text = typeof data === 'string' ? data
+    : Object.entries(data).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n')
   return (
-    <>
-      <Button size="small" icon={<EyeOutlined />} onClick={show}>
-        看内容
-      </Button>
-      <Drawer open={open} onClose={() => setOpen(false)} width={760} title={name}>
-        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>
-          {data ? JSON.stringify(data, null, 2).slice(0, 200000) : '读取中…'}
-        </pre>
-      </Drawer>
-    </>
+    <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0, maxHeight: 500, overflow: 'auto' }}>
+      {text.slice(0, 20000)}
+    </pre>
   )
 }
 
 function AskLane() {
-  const [segs, setSegs] = useState<any[]>([])
-  const [counts, setCounts] = useState<any>({})
+  const [rows, setRows] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState<Item | null>(null)
 
   useEffect(() => {
     promptsApi
       .impact()
       .then((r: any) => {
-        setSegs(r.segments ?? [])
-        setCounts(r.counts ?? {})
+        const flat: Item[] = []
+        for (const s of r.segments ?? []) {
+          for (const it of s.items ?? []) flat.push({ ...it, seg: s.name })
+        }
+        setRows(flat)
       })
       .catch((e) => message.error((e as Error).message))
       .finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <Empty description="读取中…" />
-
   return (
-    <Space direction="vertical" size={10} style={{ width: '100%' }}>
-      <Alert
-        type="info"
-        showIcon
-        message={`一次问数回答被 ${counts.segments ?? 0} 段、${counts.items ?? 0} 项输入影响。能就地改的直接改，改完下一轮生效。`}
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
+        一次问数回答被 {rows.length} 项输入影响。点「查看」看这一项现在是什么、能改的就地改，保存后下一轮生效。
+      </Paragraph>
+
+      <Table
+        size="small"
+        rowKey="name"
+        loading={loading}
+        pagination={false}
+        dataSource={rows}
+        columns={[
+          { title: '环节', dataIndex: 'seg', width: 190 },
+          { title: '输入', render: (_: any, it: Item) => <Text strong>{it.name}</Text> },
+          { title: '存在哪', width: 210, render: (_: any, it: Item) => <Text code>{it.where}</Text> },
+          { title: '大小', dataIndex: 'size', width: 130 },
+          {
+            title: '状态',
+            width: 100,
+            render: (_: any, it: Item) => (it.editable ? <Tag color="green">可改</Tag> : <Tag>只读</Tag>),
+          },
+          { title: '生效方式', dataIndex: 'takes_effect', width: 110 },
+          {
+            title: '操作',
+            width: 110,
+            render: (_: any, it: Item) => (
+              <Button
+                size="small"
+                icon={it.editable ? <EditOutlined /> : <EyeOutlined />}
+                onClick={() => setOpen(it)}
+              >
+                查看
+              </Button>
+            ),
+          },
+        ]}
       />
 
-      {segs.map((s: any) => (
-        <Card key={s.key} size="small" type="inner" title={s.name}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            {(s.items ?? []).map((it: any) => (
-              <div key={it.name} style={{ borderTop: '1px dashed #eee', paddingTop: 8 }}>
-                <Space wrap size={6} style={{ marginBottom: 6 }}>
-                  <Text strong>{it.name}</Text>
-                  <Text code>{it.where}</Text>
-                  <Text type="secondary">{it.size}</Text>
-                  {it.editable ? <Tag color="green">可改</Tag> : <Tag>只读</Tag>}
-                  <Text type="secondary">改完：{it.takes_effect}</Text>
-                  <Text type="secondary">{it.note}</Text>
-                </Space>
-                {String(it.editor || '').startsWith('material:') ? (
-                  <MaterialEditor slot={String(it.editor).split(':')[1]} />
-                ) : String(it.editor || '').startsWith('text:') ? (
-                  <TextKeyEditor keyName={String(it.editor).split(':')[1]} />
-                ) : it.endpoint ? (
-                  <ReadOnlyPeek endpoint={it.endpoint} name={it.name} />
-                ) : (
-                  <Text type="secondary">这个只能在代码里看</Text>
-                )}
-              </div>
-            ))}
+      <Drawer
+        open={open != null}
+        onClose={() => setOpen(null)}
+        width={820}
+        title={open ? `${open.name}　${open.size}` : ''}
+      >
+        {open ? (
+          <Space direction="vertical" size={14} style={{ width: '100%' }}>
+            <Descriptions size="small" column={2} bordered>
+              <Descriptions.Item label="环节">{open.seg}</Descriptions.Item>
+              <Descriptions.Item label="存在哪">
+                <Text code>{open.where}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="大小">{open.size}</Descriptions.Item>
+              <Descriptions.Item label="能不能改">
+                {open.editable ? '页面上可改' : '只读'}
+              </Descriptions.Item>
+              <Descriptions.Item label="生效方式">{open.takes_effect}</Descriptions.Item>
+              <Descriptions.Item label="它在决定什么">{open.note}</Descriptions.Item>
+            </Descriptions>
+
+            {open.editor.startsWith('material:') ? (
+              <SectionList slot={open.editor.split(':')[1]} />
+            ) : open.editor.startsWith('text:') ? (
+              <TextKeyEditor keyName={open.editor.split(':')[1]} />
+            ) : (
+              <ReadOnlyBody endpoint={open.endpoint} />
+            )}
           </Space>
-        </Card>
-      ))}
+        ) : null}
+      </Drawer>
     </Space>
   )
 }
 
 export default function InjectPanels() {
   return (
-    <Card title="提示词（这一轮实际发出去的是什么）" size="small">
-      <Tabs
-        items={[
-          { key: 'ask', label: '问数线', children: <AskLane /> },
-          { key: 'work', label: '干活线', children: <WorkLane /> },
-        ]}
-      />
-    </Card>
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space align="baseline">
+        <Title level={4} style={{ margin: 0 }}>
+          提示词
+        </Title>
+        <Tag color="blue">两条线分开看</Tag>
+      </Space>
+      <Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
+        每一项都显示字数、来源、状态、生效方式；点开抽屉看全文并就地改。
+      </Paragraph>
+      <Card size="small">
+        <Tabs
+          items={[
+            { key: 'ask', label: '问数线', children: <AskLane /> },
+            { key: 'work', label: '干活线', children: <WorkLane /> },
+          ]}
+        />
+      </Card>
+    </Space>
   )
 }
