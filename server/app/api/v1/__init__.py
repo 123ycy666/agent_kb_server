@@ -10,6 +10,7 @@ from app.api.v1 import (
     audit,
     auth,
     caliber,
+    catalog,
     conflicts,
     documents,
     eval as eval_api,
@@ -30,6 +31,7 @@ api_router = APIRouter()
 
 api_router.include_router(auth.router)
 api_router.include_router(kb.router)
+api_router.include_router(catalog.router)
 api_router.include_router(documents.router)
 api_router.include_router(tags.router)
 api_router.include_router(search.router)

@@ -884,6 +884,25 @@ export const injectApi = {  items: () =>
     http.get<any, any>('/inject/report', { params }),
 }
 
+export const catalogApi = {
+  seed: () => http.post<any, any>('/catalog/seed'),
+  tree: () => http.get<any, { items: any[] }>('/catalog/tree'),
+  addNode: (name: string, parent_id?: number | null, note = '') =>
+    http.post<any, any>('/catalog/node', { name, parent_id, note }),
+  setNode: (id: number, enabled: boolean) =>
+    http.post<any, any>(`/catalog/node/${id}/enabled`, { enabled }),
+  terms: (dimension = '') => http.get<any, { items: any[] }>('/catalog/terms', { params: { dimension } }),
+  addTerm: (dimension: string, term: string, synonyms = '') =>
+    http.post<any, any>('/catalog/term', { dimension, term, synonyms }),
+  setTerm: (id: number, enabled: boolean) =>
+    http.post<any, any>(`/catalog/term/${id}/enabled`, { enabled }),
+  doc: (id: number) => http.get<any, any>(`/catalog/doc/${id}`),
+  docs: (kb_id: number) => http.get<any, { items: any[] }>('/catalog/docs', { params: { kb_id } }),
+  saveDoc: (id: number, data: Record<string, unknown>) =>
+    http.post<any, any>(`/catalog/doc/${id}`, data),
+  completeness: () => http.get<any, any>('/catalog/completeness'),
+}
+
 export const promptsApi = {
   overview: () => http.get<any, any>('/prompts/overview'),
   impact: () => http.get<any, any>('/prompts/impact'),
