@@ -56,6 +56,11 @@ export default function MainLayout() {
       label: <Link to="/inject">提示词</Link>,
     },
     {
+      key: '/runtime',
+      icon: <SettingOutlined />,
+      label: <Link to="/runtime">运行配置</Link>,
+    },
+    {
       key: '/tasks',
       icon: <DeploymentUnitOutlined />,
       label: <Link to="/tasks">任务与预警</Link>,

@@ -15,6 +15,7 @@ import {
 } from 'antd'
 import { EditOutlined, EyeOutlined, SaveOutlined } from '@ant-design/icons'
 import { injectApi, promptsApi } from '../api'
+import { CompleteEditor, LexiconEditor, RouteRuleEditor } from '../components/ChainEditors'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -452,6 +453,12 @@ function ChainLane({ lane }: { lane: Lane }) {
               <SectionList slot={open.editor.split(':')[1]} />
             ) : open.editor === 'askfill' ? (
               <AskfillEditor />
+            ) : open.editor === 'route_rule' ? (
+              <RouteRuleEditor />
+            ) : open.editor === 'complete' ? (
+              <CompleteEditor />
+            ) : open.editor === 'lexicon' ? (
+              <LexiconEditor />
             ) : open.editor.startsWith('text:') ? (
               <TextKeyEditor keyName={open.editor.split(':')[1]} />
             ) : open.editor.startsWith('inject:') ? (

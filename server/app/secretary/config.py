@@ -302,7 +302,7 @@ RULES_PRIORITY = (os.environ.get('SECRETARY_RULES_PRIORITY') or '1').strip().low
 #   不是限制他」。
 # ★ 2026-11-03 定稿：设 30 —— 只防真死循环（同一个工具反复查不收敛），不含任何业务规则。
 #   复杂问题十几二十步是正常的，30 留足余量；要更长改环境变量 SECRETARY_MAX_STEPS。
-MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '40'))
+MAX_STEPS = int(os.environ.get('SECRETARY_MAX_STEPS', '100'))
 
 # HTTP 接口的**防呆上限**：历史对话类接口（/api/sessions、/api/history）在「要求全部返回」时，
 # 一次最多给这么多条，超出的截断，并在响应里带 truncated=true 让调用方知道被截了。

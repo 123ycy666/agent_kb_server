@@ -685,19 +685,6 @@ def gaps(limit: int = Query(default=200), actor: CurrentActor = Depends(get_curr
     return _jr({"total": len(rows), "rows": rows})
 
 
-@router.get("/page", summary="取异步生成的分析页面（token）")
-def page(token: str = Query(default=""), actor: CurrentActor = Depends(get_current_actor)):
-    tok = (token or "").strip()
-    got = agent_mod.page_get(tok) if tok else None
-    if not got:
-        return Response("page token not found", status_code=404, media_type="text/plain")
-    if not got.get("done"):
-        return Response("page generating", status_code=202, media_type="text/plain")
-    if got.get("html"):
-        return HTMLResponse(got["html"])
-    return Response("page failed: %s" % got.get("error", ""), status_code=500, media_type="text/plain")
-
-
 @router.get("/models", summary="可选模型清单（online=公网网关实测可用；local=内网已部署）")
 def models(actor: CurrentActor = Depends(get_current_actor)):
     return _jr({"default": sec_config.MODEL, "models": sec_config.MODELS})

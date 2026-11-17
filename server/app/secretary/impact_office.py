@@ -196,12 +196,11 @@ def _p_inj_spec(cur):
 
 
 def _p_inj_tools(cur):
-    from app.secretary import inject, prompt_text
-    body = inject.tools_text(None)
+    from app.secretary import inject_store
+    body = inject_store.get('tools_guide', user=None) or ''
     if not body.strip():
-        return _empty('工具说明为空。')
-    return _text(body, note='优先 cfg.inject_text.tools_guide，其次 cfg.prompt_text.tools，'
-                            '最后默认段（prompt_text.DEFAULT_TOOLS_GUIDE）。')
+        return _empty('工具说明为空（cfg.inject_text.tools_guide）。')
+    return _text(body)
 
 
 def _p_inj_budget(cur):

@@ -73,28 +73,6 @@ def _split_md(text: str) -> list[dict]:
     return out
 
 
-@router.get('/overview', summary='一次拿全：节点树 + 四份材料 + 代码提示词 + 注入字数')
-def overview(actor: CurrentActor = Depends(get_current_actor)):
-    """内网对接用：一个请求拿到页面需要的全部数据，不用连调六个接口。
-
-    ★ 2026-11-03 定稿：`complete`（补全表）回来了 —— 第 4 步要用它（只查不改），
-      Fred 在页面上迭代这张表。
-    """
-    from app.secretary import prompt_tree, prompt_material, prompt_text, complete_rules
-    return _jr({
-        'ok': True,
-        'nodes': prompt_tree.tree(),
-        'materials': prompt_material.summary(),
-        'texts': prompt_text.all_texts(),
-        'complete': [dict(r) for r in complete_rules.rows()],
-        'inject': {
-            'loop_block': len(prompt_material.block(('fetch', 'judge'))),
-            'final_block': len(prompt_material.block(('answer',))),
-        },
-        'actor': {'username': actor.username, 'is_admin': actor.is_admin},
-    })
-
-
 @router.get('/tools', summary='问数线工具定义原文（模型实际收到的那份）')
 def tools_def(actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import agent
@@ -141,13 +119,6 @@ def impact_office_body(key: str, actor: CurrentActor = Depends(get_current_actor
     if res.get('error'):
         return _jr(res, 404)
     return _jr(res)
-
-
-@router.get('/tree', summary='主流程节点与材料')
-def tree(actor: CurrentActor = Depends(get_current_actor)):
-    from app.secretary import prompt_tree
-    return _jr({'ok': True, 'nodes': prompt_tree.tree(),
-                'actor': {'username': actor.username, 'is_admin': actor.is_admin}})
 
 
 def _hint(body: str, n: int = 60) -> str:
@@ -215,33 +186,6 @@ async def import_material(slot: str, request: Request,
     return _jr(res, 200 if res.get('ok') else 500)
 
 
-@router.get('/preview', summary='当前基础提示词（按层）')
-def preview(mode: str = 'data', actor: CurrentActor = Depends(get_current_actor)):
-    """展示用：基础提示词五层 + 四份材料的字数。
-
-    ⚠️ 不调 agent_v2（那要一整套运行时参数）；这里直接用 prompt_stack.build
-    拿同一份常量，保证页面看到的就是代码里的原文。
-    """
-    from app.secretary import prompt_stack, prompts_data, prompt_text, prompt_material
-    # ★ 2026-11-03 定稿：红线 / 优先级 / 作答格式都从页面取（默认空 = 不注入）。
-    r = prompt_stack.build(mode=mode, identity=prompt_text.get('identity', prompts_data.IDENTITY),
-                           modes=prompt_text.mode_texts(prompts_data.MODE_TEXTS),
-                           priority=prompt_text.get('priority', ''),
-                           redlines=prompt_text.get('redlines', ''),
-                           rules_menu=prompt_material.block(('fetch',), index_slots=None))
-    layers = []
-    for x in r.get('layers') or []:
-        body = ''
-        for part in r.get('system', '').split('===== '):
-            if part.startswith(x.get('title')):
-                body = part[len(x.get('title')):].lstrip(' =====').strip()
-                break
-        layers.append({'id': x.get('id'), 'title': x.get('title'),
-                       'chars': x.get('chars'), 'source': x.get('source'), 'body': body})
-    return _jr({'ok': True, 'mode': mode, 'total': len(r.get('system') or ''),
-                'layers': layers, 'materials': prompt_material.summary()})
-
-
 # ★ 2026-11-03 定稿：补全表的 GET/PUT 在下面（`/complete`）恢复 —— 第 4 步要用。
 
 
@@ -282,35 +226,6 @@ def deleted_sections(slot: str, actor: CurrentActor = Depends(get_current_actor)
     rows = [r for r in prompt_material.sections(slot, include_disabled=True)
             if not r.get('enabled')]
     return _jr({'ok': True, 'slot': slot, 'rows': rows})
-
-
-@router.post('/import', summary='导入 markdown（格式与 /export 对称，只覆盖文件里出现的块）')
-async def import_md(request: Request, actor: CurrentActor = Depends(get_current_actor)):
-    from app.secretary import prompt_tree
-    body, err = await _json_body(request)
-    if err:
-        return _jr({'error': err}, 400)
-    text = str(body.get('text') or '')
-    if not text.strip():
-        return _jr({'error': '内容为空'}, 400)
-    res = prompt_tree.import_markdown(text, user=actor.username)
-    return _jr(res, 200 if res.get('ok') else 400)
-
-
-@router.get('/export', summary='导出 markdown（slot 为空 = 全部材料 + 文本键 + 补全表）')
-def export_md(slot: str = '', actor: CurrentActor = Depends(get_current_actor)):
-    from urllib.parse import quote
-
-    from fastapi.responses import PlainTextResponse
-
-    from app.secretary import prompt_tree
-    text = prompt_tree.export_markdown(slot)
-    if not text:
-        return _jr({'error': '没有可导出的内容'}, 404)
-    name = '提示词%s-%s.md' % ('-' + slot if slot else '', time.strftime('%Y%m%d'))
-    return PlainTextResponse(text, media_type='text/markdown; charset=utf-8',
-                             headers={'Content-Disposition':
-                                      "attachment; filename*=UTF-8''%s" % quote(name)})
 
 
 @router.get('/texts', summary='代码里的提示词（身份 / 汇报口吻 / 模式做法 / 词表）')

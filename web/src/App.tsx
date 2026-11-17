@@ -10,6 +10,7 @@ import Specs from './pages/KnowledgeBaseList'
 import AskData from './pages/SearchTest'
 import SchemaMap from './pages/SchemaMap'
 import InjectPanels from './pages/InjectPanels'
+import RuntimeConfig from './pages/RuntimeConfig'
 import { TasksPage } from './pages/TaskCenter'
 import { RecordsPage } from './pages/ChatHistory'
 import { SystemPage } from './pages/ModelConfig'
@@ -62,6 +63,7 @@ export default function App() {
           <Route path="ask-data" element={<AskData />} />
           <Route path="schema" element={<SchemaMap />} />
           <Route path="inject" element={<InjectPanels />} />
+          <Route path="runtime" element={<RuntimeConfig />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="records" element={<RecordsPage />} />
           <Route

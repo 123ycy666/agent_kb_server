@@ -19,6 +19,7 @@ from app.api.v1 import (
     models,
     prompts,
     roles,
+    runtime,
     schema_map,
     search,
     specs,
@@ -42,6 +43,7 @@ api_router.include_router(roles.router)
 api_router.include_router(models.router)
 api_router.include_router(system.router)
 api_router.include_router(prompts.router)
+api_router.include_router(runtime.router)
 api_router.include_router(caliber.router)
 api_router.include_router(specs.router)
 api_router.include_router(inject.router)

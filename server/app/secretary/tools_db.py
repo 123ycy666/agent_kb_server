@@ -63,10 +63,7 @@ _RETRY_ERRNOS = (2006, 2013, 2055)
 
 
 def _exec(sql, params=None, limit_rows=config.SQL_MAX_ROWS):
-    """所有取数都走这里；只允许 SELECT / WITH —— 本服务对业务库与字典表都是只读。"""
-    low = ' '.join(str(sql).split()).lower()
-    if not (low.startswith('select') or low.startswith('with')):
-        raise ValueError('只读：不允许执行非 SELECT 语句')
+    """所有取数都走这里。只读由业务库账号权限保证，这里不做语句检查。"""
     try:
         return _exec_once(sql, params, limit_rows)
     except pymysql.err.InterfaceError:
@@ -161,37 +158,13 @@ def _tables_live(limit: int = 60) -> list:
 
 
 def run_sql(sql):
-    """只读 SELECT；表名必须在业务字典里，否则拒绝并回可用表名。"""
-    s = safe_select(sql)
-    from app.secretary import semantic
-    from app.secretary import caliber
-    ck = caliber.check_sql(s)                # 闸1：命中契约表就必须带契约声明的必需过滤
-    if not ck.get('ok'):
-        return {'error': ck['hint'], '判定': ck.get('code') or 'ERROR_CALIBER',
-                'missing': ck.get('missing') or [], 'sql': s,
-                'columns': [], 'rows': [], 'row_count': 0}
+    """跑一条 SQL，结果原样返回。只读由业务库账号权限保证，这里不判不拦不汇总。"""
+    s = str(sql or '').strip()
     try:
         r = _exec(s)
-    except Exception as e:
-        # 把可用字段/可用表一起回给模型，省掉一轮“猜字段名”的试错。
-        # ★ 2026-11-13：原来只查业务字典，字典空就什么都不给 → 模型连着 5 轮猜
-        #   summary_type / stat_year 这种不存在的列。字典空时改问 information_schema。
-        hint = ''
-        err = str(e)
-        if '1146' in err or "doesn't exist" in err:
-            tabs = _tables_live()
-            if tabs:
-                hint = '当前库（%s）里没有这张表。可用的表：%s' % (
-                    config.SCHEMA, '、'.join(tabs))
-        else:
-            for t in sorted(semantic.tables_in_sql(s))[:1]:
-                cols = list(semantic.table_cols(t).keys()) or _cols_live(t)
-                if cols:
-                    hint = '表 %s 的真实字段：%s' % (t, '、'.join(cols[:60]))
-        return {'error': err[:300], 'hint': hint, 'sql': s,
-                'columns': [], 'rows': [], 'row_count': 0}
+    except Exception as e:                          # noqa: BLE001 - 报错原样回给模型
+        return {'error': str(e)[:300], 'sql': s, 'columns': [], 'rows': [], 'row_count': 0}
     r['sql'] = s
-    r['summary'] = _summarize(r.get('columns') or [], r.get('rows') or [])
     return r
 
 def find_column(keyword):

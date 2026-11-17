@@ -884,6 +884,12 @@ export const injectApi = {  items: () =>
     http.get<any, any>('/inject/report', { params }),
 }
 
+export const runtimeApi = {
+  config: () => http.get<any, any>('/runtime/config'),
+  save: (values: Record<string, unknown>) => http.put<any, any>('/runtime/config', values),
+  test: (values: Record<string, unknown> = {}) => http.post<any, any>('/runtime/test', values),
+}
+
 export const catalogApi = {
   seed: () => http.post<any, any>('/catalog/seed'),
   tree: () => http.get<any, { items: any[] }>('/catalog/tree'),
@@ -917,6 +923,17 @@ export const promptsApi = {
   impactOffice: () => http.get<any, any>('/prompts/impact/office'),
   impactOfficeBody: (key: string) =>
     http.get<any, any>('/prompts/impact/office/body', { params: { key } }),
+  complete: () => http.get<any, any>('/prompts/complete'),
+  saveComplete: (rows: unknown[]) => http.put<any, any>('/prompts/complete', { rows }),
+  lexicon: (key: string, q = '') =>
+    http.get<any, any>(`/prompts/lexicon/${key}`, { params: { q } }),
+  lexiconTables: () => http.get<any, any>('/prompts/lexicon'),
+  lexiconCreate: (key: string, data: Record<string, unknown>) =>
+    http.post<any, any>(`/prompts/lexicon/${key}`, data),
+  lexiconUpdate: (key: string, id: number, data: Record<string, unknown>) =>
+    http.put<any, any>(`/prompts/lexicon/${key}/${id}`, data),
+  lexiconDelete: (key: string, id: number) =>
+    http.delete<any, any>(`/prompts/lexicon/${key}/${id}`),
   material: (slot: string) => http.get<any, any>(`/prompts/material/${slot}`),
   saveSection: (id: number, body: string) =>
     http.post<any, any>(`/prompts/material/section/${id}`, { body }),

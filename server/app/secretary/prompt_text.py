@@ -17,57 +17,18 @@ import time
 from app.secretary import pgdb
 
 TEXT_KEYS = {
-    'identity': '身份',
-    # ★ 2026-11-03（Fred）：`answer_format`（汇报口吻 + 作答格式）已下线 ——
-    #   S4 整段不再注入，这个 key 留着只会让人以为改了有用。原文备份在
-    #   docs/08-历史归档/2026-11-03-删除的提示词规则/汇报口吻-自检清单-作答规则.md
-    # ★ 2026-11-03（Fred）：红线与优先级原来写死在代码里，现在搬到页面（默认空 =
-    #   不注入）。原文备份见 docs/08-历史归档/2026-11-03-删除的提示词规则/
-    #   红线-优先级-装配说明-原文.md —— 想要就自己贴回来。
-    'redlines': '红线（S0，纯文本；不填就不注入）',
-    'priority': '谁说了算（S1，纯文本；不填就不注入）',
-    'modes': '模式做法（JSON：data / doc / general / office 四段）',
-    'keywords': '业务词表 / 题型词表（JSON：produce / data / kb / explain / chat …）',
-    # ── 第 1 步 / 第 6 步（2026-11-03 定稿，Fred「流程要能在页面上改」）──────
-    # 这两段原来是代码里的词表匹配（`modes.judge`）和散在 agent 里的判断，改一次要发版。
-    # 现在都是纯文本，填什么生效什么；空着 = 这一步不做判断（见 preprocess / confirm）。
-    'intent': '① 要不要走预处理（空 = 全部走：纠错+补全+补时间地点）',
-    # ★ 2026-11-11（Fred）：补问法原来是代码里的词表（preprocess._ASKS），改一次要发版。
-    #   现在整份规则是页面上的 JSON：哪些词算"已经说清在问什么"、默认补哪句，
-    #   以及 `"on": false` 把这一步整个关掉（关掉 = 一字不加）。
-    'askfill': '③ 补问法（JSON：on / default / asked / topic / how）',
-    'confirm': '⑤ 问题确定（空 = 不归整，原样往下传）',
-    # 工具说明（2026-11-05）：告诉模型「动手前先 kb_search 取做法」。
-    # 这是机制说明，不是业务规则；页面上可改可清空。
-    'tools': '工具说明（空 = 用代码里的默认段；页面上可改）',
-    # ── 时间地点规则（2026-11-02 搬出代码）──────────────────────────
-    # 表里有值就用表里的，没有就用代码常量（行为与以前完全一致）。
-    # 只搬**数据**，不搬**逻辑**：正则、解析、比较仍留在代码里。
+    'identity': '身份（整个智能体就这一份）',
+    # 补问法：整份规则是页面上的 JSON —— 哪些词算"已经说清在问什么"、默认补哪句，
+    # 以及 `"on": false` 把这一步整个关掉（关掉 = 一字不加）。
+    'askfill': '补问法（JSON：on / default / asked / topic / how）',
+    'confirm': '问题确定（空 = 不归整，原样往下传）',
 }
 
-# 这些 key 存 JSON，保存时校验结构和可计算的值。
-_JSON_KEYS = {'modes', 'keywords', 'askfill'}
+# 这些 key 存 JSON，保存时校验结构。
+_JSON_KEYS = {'askfill'}
 
 _TTL = 60.0
 _CACHE: dict = {}
-
-# 页面 `tools` 框空着时用的默认工具说明（机制说明，不含业务词）。
-DEFAULT_TOOLS_GUIDE = (
-    '【工具说明】\n'
-    '- 问指标先 list_metrics：里面有代号的指标一律用 metric_query(代号, year, scope_id) 取数，'
-    '**不要自己写 SQL 去拼这些表** —— 表名、列名、口径过滤都在契约里，手写会撞不存在的列。\n'
-    '- 没有代号的指标才用 run_sql；写之前先 describe_table / find_column 看真实表名列名，'
-    '不要凭印象写列（例如 deleted_flag、xxx_name 这类并不存在）。\n'
-    '- 做任何一类活之前，先 kb_search 查做法（例如「速读做法」「公文格式做法」），'
-    '命中就用 kb_read 取全文照着做；没命中就按通用能力做，并在回答里说一句没有这条做法。\n'
-    '- 读文件用 read_file 分页读，next_offset 为 null 才算读完；读完再下结论。\n'
-    '- 要交文件用 make_file（docx / pptx / xlsx），它自带自检；自检不过会返回错误，按错误改。\n'
-    '- run_sql 的 sql 可以传数组：同一轮里互不依赖的查询（不同维度、不同表、不同口径）'
-    '一次全放进数组，框架并发执行，别一条一条调。\n'
-    '- 工具结果里出现 ref 或 next_offset，说明还有明细没给：用 read_result(ref, offset) 接着取；'
-    'next_offset 为 null 才表示取完。\n'
-    '- 能用结构化参数就别用 run_code。'
-)
 
 
 def clear_cache() -> None:
@@ -116,63 +77,14 @@ def get(key: str, default: str = '') -> str:
     return body if body.strip() else default
 
 
-def mode_texts(defaults: dict) -> dict:
-    """四个模式做法：表里有就覆盖对应的那几个，其余用默认。"""
-    raw = get('modes', '')
-    if not raw.strip():
-        return dict(defaults or {})
-    try:
-        extra = json.loads(raw)
-    except Exception:                              # noqa: BLE001 - JSON 写坏就退回默认
-        return dict(defaults or {})
-    out = dict(defaults or {})
-    if isinstance(extra, dict):
-        for k, v in extra.items():
-            if isinstance(v, str) and v.strip():
-                out[str(k)] = v
-    return out
-
-
-def keywords() -> dict:
-    """词表覆盖（modes.load_rules 叠加上去）。"""
-    raw = get('keywords', '')
-    if not raw.strip():
-        return {}
-    try:
-        data = json.loads(raw)
-    except Exception:                              # noqa: BLE001
-        return {}
-    out = {}
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if isinstance(v, list):
-                out[str(k)] = [str(x) for x in v]
-    return out
-
-
 def all_texts() -> list[dict]:
     """给页面：每个 key 的当前正文、是否被覆盖、字数。"""
     from app.secretary import preprocess, prompts_data
     defaults = {
         'identity': prompts_data.IDENTITY,
-        'redlines': '',          # 2026-11-03 起默认空（代码原文已移到 docs 备份）
-        'priority': '',          # 同上
-        # ★ 2026-11-03：`answer_format` 已下线（S4 汇报口吻 + 交卷检查不再注入）
-        'modes': json.dumps(prompts_data.MODE_TEXTS, ensure_ascii=False, indent=2),
-        'keywords': '',
-        # 2026-11-03：两个流程判断框，默认空（空 = 不做判断）
-        'intent': '',
-        # ★ 2026-11-11：补问法默认给代码里那套词表（页面上改，或 "on": false 关掉）
         'askfill': json.dumps(preprocess._ASKFILL_DEFAULT, ensure_ascii=False, indent=2),
         'confirm': '',
-        # 2026-11-05：工具说明，默认给一段机制说明
-        'tools': DEFAULT_TOOLS_GUIDE,
     }
-    try:
-        from app.secretary import modes
-        defaults['keywords'] = json.dumps(modes.load_rules(), ensure_ascii=False, indent=2)
-    except Exception:                              # noqa: BLE001
-        pass
     rows = _all()
     out = []
     for k, name in TEXT_KEYS.items():
