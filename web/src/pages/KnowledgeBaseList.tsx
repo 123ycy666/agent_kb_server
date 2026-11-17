@@ -42,6 +42,7 @@ import type { SpecDetail, SpecItem, SpecPending, SpecPreview, SpecRole } from '.
 import ConflictList from './ConflictList'
 import CatalogAdmin from './CatalogAdmin'
 import UploadWizard from './UploadWizard'
+import SearchProbe from './SearchProbe'
 import MaterialLibrary from './MaterialLibrary'
 import TagManagement from './TagManagement'
 
@@ -1025,6 +1026,7 @@ export default function KnowledgeBaseList() {
           { key: 'material', label: '资料库', children: <MaterialLibrary /> },
           { key: 'catalog', label: '目录与词表', children: <CatalogAdmin /> },
           { key: 'upload', label: '上传', children: <UploadWizard /> },
+          { key: 'probe', label: '检索', children: <SearchProbe /> },
           { key: 'conflicts', label: '冲突', children: <ConflictList /> },
           { key: 'tags', label: '标签', children: <TagManagement /> },
         ]}

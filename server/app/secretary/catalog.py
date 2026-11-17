@@ -147,12 +147,22 @@ def set_enabled(cid: int, enabled: bool) -> dict:
 
 
 def terms(dimension: str = '') -> list[dict]:
+    """词表 + 动态使用次数（按文档标签实时算，不维护计数器）。"""
     ensure()
-    if dimension:
-        return [dict(r) for r in _q(
-            "select * from kb.tag_term where dimension=%s order by usage_count desc, term",
-            (dimension,))]
-    return [dict(r) for r in _q("select * from kb.tag_term order by dimension, term")]
+    usage = {}
+    try:
+        rows = _q("""select t as term, count(*) as n from (
+                        select unnest(tags) as t from kb.document where is_active and status='active'
+                     ) x group by 1""")
+        usage = {r['term']: int(r['n']) for r in rows}
+    except Exception:                              # noqa: BLE001 - 统计失败不影响词表
+        pass
+    sql = ("select * from kb.tag_term where dimension=%s order by term" if dimension
+           else "select * from kb.tag_term order by dimension, term")
+    rows = [dict(r) for r in _q(sql, (dimension,) if dimension else None)]
+    for r in rows:
+        r['usage_count'] = usage.get(r['term'], 0)
+    return sorted(rows, key=lambda r: (-r['usage_count'], r['term']))
 
 
 def add_term(dimension: str, term: str, synonyms: str = '') -> dict:
