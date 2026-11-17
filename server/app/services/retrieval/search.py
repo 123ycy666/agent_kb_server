@@ -468,12 +468,38 @@ def recall_hybrid(
             score += 1.0 / (rrf_k + item.keyword_rank)
         item.fused_score = score
 
-    ranked = sorted(merged.values(), key=lambda x: -(x.fused_score or 0.0))
+    ranked = sorted(merged.values(), key=lambda x: -_score_with_title(x, query))
 
     # ⚠️ 版本压制在此处统一执行：两路各自可能召回同一文档的不同版本，
     #    必须先合并再压制，否则会出现「新版本在向量路被压掉、
     #    却在关键词路复活」的漏洞。
     return suppress_old_versions(ranked)
+
+
+def _title_hit_len(query: str, doc_name: str) -> int:
+    """问句和文档名的最长公共子串长度（用来给「问题里点了名」的文档加权）。"""
+    q = (query or '').strip()
+    name = (doc_name or '').rsplit('.', 1)[0]
+    best = 0
+    for i in range(len(name)):
+        for j in range(i + best + 1, len(name) + 1):
+            piece = name[i:j]
+            if piece in q:
+                best = max(best, len(piece))
+            else:
+                break
+    return best
+
+
+def _score_with_title(item: RecallItem, query: str) -> float:
+    """融合分 + 标题命中加权：问「值班交接」时，值班管理规定应该排前面。
+
+    为什么不改召回：召回两路都依赖向量/分词质量，改排序是成本最低、见效最直接的做法，
+    而且与「优先引用最新」是同层级的事（都是排序层策略）。
+    """
+    base = item.fused_score or 0.0
+    hit = _title_hit_len(query, item.doc_name)
+    return base + (0.004 * hit if hit >= 2 else 0.0)
 
 
 def suppress_old_versions(items: list[RecallItem]) -> list[RecallItem]:
@@ -511,8 +537,7 @@ def suppress_old_versions(items: list[RecallItem]) -> list[RecallItem]:
         if latest is not None and latest[0] == item.doc_id:
             kept.append(item)
 
-    # 压制后按原召回顺序（距离升序）恢复排序
-    kept.sort(key=lambda x: x.distance)
+    # 压制后保持调用方给的顺序（已按「融合分 + 标题命中」排好），不再按距离重排
     return kept
 
 

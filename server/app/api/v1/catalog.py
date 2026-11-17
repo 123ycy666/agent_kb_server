@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.core.deps import CurrentActor, get_current_actor
 from app.secretary import catalog as C
 
@@ -75,3 +77,41 @@ async def save_doc_meta(doc_id: int, request: Request,
 @router.get('/completeness', summary='还有多少篇缺必填项')
 def completeness(actor: CurrentActor = Depends(get_current_actor)):
     return C.completeness()
+
+
+# ── 黄金问题集 ──────────────────────────────────────────────
+@router.get('/eval', summary='黄金问题集列表')
+def eval_list(kb_id: int = 0, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import kb_eval
+    return {'items': kb_eval.rows(kb_id)}
+
+
+@router.post('/eval/seed', summary='灌默认 14 道题（幂等）')
+def eval_seed(kb_id: int = 0, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import kb_eval
+    return {'ok': True, **kb_eval.seed(kb_id)}
+
+
+@router.post('/eval', summary='新增一道题')
+async def eval_add(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import kb_eval
+    body = await request.json()
+    return kb_eval.add(int(body.get('kb_id') or 0), body.get('question') or '',
+                       body.get('expect_doc') or '', body.get('note') or '')
+
+
+@router.delete('/eval/{qid}', summary='删除一道题')
+def eval_remove(qid: int, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import kb_eval
+    return kb_eval.remove(qid)
+
+
+@router.post('/eval/run', summary='跑一遍黄金问题集，返回命中率')
+async def eval_run(request: Request, actor: CurrentActor = Depends(get_current_actor),
+                   db: Session = Depends(get_db)):
+    from app.secretary import kb_eval
+    body = await request.json()
+    kb_ids = [int(x) for x in (body.get('kb_ids') or []) if str(x).isdigit()]
+    if not kb_ids:
+        return {'error': '先指定知识库'}
+    return kb_eval.run(db, actor, kb_ids, top_k=int(body.get('top_k') or 5))

@@ -901,6 +901,13 @@ export const catalogApi = {
   saveDoc: (id: number, data: Record<string, unknown>) =>
     http.post<any, any>(`/catalog/doc/${id}`, data),
   completeness: () => http.get<any, any>('/catalog/completeness'),
+  evalList: (kb_id = 0) => http.get<any, { items: any[] }>('/catalog/eval', { params: { kb_id } }),
+  evalSeed: () => http.post<any, any>('/catalog/eval/seed'),
+  evalAdd: (kb_id: number, question: string, expect_doc = '', note = '') =>
+    http.post<any, any>('/catalog/eval', { kb_id, question, expect_doc, note }),
+  evalRemove: (id: number) => http.delete<any, any>(`/catalog/eval/${id}`),
+  evalRun: (data: { kb_ids: number[]; top_k?: number }) =>
+    http.post<any, any>('/catalog/eval/run', data),
 }
 
 export const promptsApi = {
