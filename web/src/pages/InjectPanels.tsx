@@ -374,6 +374,94 @@ function TextKeyEditor({ keyName }: { keyName: string }) {
   )
 }
 
+function AskfillEditor() {
+  const [on, setOn] = useState(true)
+  const [dflt, setDflt] = useState('')
+  const [lists, setLists] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+
+  const load = () =>
+    promptsApi
+      .texts()
+      .then((r: any) => {
+        const list: any[] = Array.isArray(r.items) ? r.items : Object.values(r.items ?? {})
+        const v = list.find((x: any) => x.key === 'askfill')
+        let cfg: any = {}
+        try {
+          cfg = JSON.parse(v?.body || '{}')
+        } catch {
+          cfg = {}
+        }
+        setOn(cfg.on !== false)
+        setDflt(String(cfg.default || ''))
+        const next: Record<string, string> = {}
+        for (const k of ['asked', 'topic', 'how']) {
+          const arr = Array.isArray(cfg[k]) ? cfg[k] : []
+          next[k] = arr.join('\n')
+        }
+        setLists(next)
+      })
+      .catch((e) => message.error((e as Error).message))
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const payload: any = {
+        on,
+        default: dflt,
+        asked: (lists.asked || '').split('\n').map((s) => s.trim()).filter(Boolean),
+        topic: (lists.topic || '').split('\n').map((s) => s.trim()).filter(Boolean),
+        how: (lists.how || '').split('\n').map((s) => s.trim()).filter(Boolean),
+      }
+      await promptsApi.saveTextKey('askfill', JSON.stringify(payload, null, 2))
+      message.success('已保存，下一轮生效')
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      <Space>
+        <Text strong>补问开关</Text>
+        <Tag.CheckableTag checked={on} onChange={setOn}>
+          {on ? '开：缺条件会补问一句' : '关：不补问，直接答'}
+        </Tag.CheckableTag>
+      </Space>
+      <div>
+        <Text strong>默认补问话术</Text>
+        <Input value={dflt} onChange={(e) => setDflt(e.target.value)} />
+      </div>
+      {[
+        ['asked', '会问哪些（一行一个）'],
+        ['topic', '按主题问（一行一个）'],
+        ['how', '怎么问（一行一个）'],
+      ].map(([k, label]) => (
+        <div key={k}>
+          <Text strong>{label}</Text>
+          <Input.TextArea
+            autoSize={{ minRows: 4, maxRows: 12 }}
+            value={lists[k] ?? ''}
+            onChange={(e) => setLists((b) => ({ ...b, [k]: e.target.value }))}
+          />
+        </div>
+      ))}
+      <Space>
+        <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
+          保存补问法
+        </Button>
+        <Text type="secondary">存完下一轮生效</Text>
+      </Space>
+    </Space>
+  )
+}
+
 function ReadOnlyBody({ endpoint }: { endpoint: string }) {
   const [data, setData] = useState<any>(null)
 
@@ -500,6 +588,8 @@ function AskLane() {
 
             {open.editor.startsWith('material:') ? (
               <SectionList slot={open.editor.split(':')[1]} />
+            ) : open.editor === 'askfill' ? (
+              <AskfillEditor />
             ) : open.editor.startsWith('text:') ? (
               <TextKeyEditor keyName={open.editor.split(':')[1]} />
             ) : (

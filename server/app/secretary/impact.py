@@ -82,8 +82,8 @@ def segments() -> list[dict]:
              'note': '第 2 步一次模型判断'},
             {'name': '补问法', 'where': 'cfg.prompt_text.askfill',
              'size': '%d 字' % _text_chars('askfill'), 'editable': True, 'takes_effect': '下一轮',
-             'endpoint': '/prompts/texts', 'editor': 'text:askfill',
-             'note': '缺时间/地点/对象时追问'},
+             'endpoint': '/prompts/texts', 'editor': 'askfill',
+             'note': '缺时间/地点/对象时追问；可整段关掉'},
         ]},
         {'key': 'fill', 'name': '④ 补全表', 'items': [
             {'name': '补全表（时间地点也在这）', 'where': 'cfg.complete_rule',
@@ -127,13 +127,8 @@ def segments() -> list[dict]:
             {'name': '工具定义与参数 schema', 'where': 'agent.TOOLS',
              'size': '%d 只' % _tool_count(), 'editable': False, 'takes_effect': '改代码',
              'endpoint': '/prompts/tools', 'editor': '',
-             'note': '模型看到的那份；description 决定它怎么用'},
-            {'name': 'SQL 安全闸', 'where': 'tools_db.safe_select', 'size': '只读·代码',
-             'editable': False, 'takes_effect': '改代码', 'endpoint': '', 'editor': '',
-             'note': '只允许 SELECT、禁分号注释、最多 200 行'},
-            {'name': '数字核对', 'where': 'caliber.verify / evidence_gate', 'size': '只读·代码',
-             'editable': False, 'takes_effect': '改代码', 'endpoint': '', 'editor': '',
-             'note': '交付前核对答案里的数是否来自查询'},
+             'note': '模型看到的那份；description 决定它怎么用。SQL 安全闸与数字核对也在代码里，'
+                     '这页不列没有内容可看的东西'},
         ]},
         {'key': 'answer', 'name': '⑩ 作答', 'items': [
             {'name': '作答规则（answer）', 'where': 'cfg.prompt_material.answer',
