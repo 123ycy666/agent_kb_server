@@ -41,18 +41,18 @@ def _fallback_identity() -> str:
         return '你是随州供电公司的办公智能助手，负责把活做成能直接用的东西。'
 
 
-def identity_text() -> str:
-    return inject_store.get('identity') or _fallback_identity()
+def identity_text(user=None) -> str:
+    return inject_store.get('identity', user=user) or _fallback_identity()
 
 
-def discipline_text() -> str:
-    bits = [inject_store.get('redlines'), inject_store.get('priority'),
-            inject_store.get('number_discipline')]
+def discipline_text(user=None) -> str:
+    bits = [inject_store.get('redlines', user=user), inject_store.get('priority', user=user),
+            inject_store.get('number_discipline', user=user)]
     return '\n'.join(b for b in (x.strip() for x in bits) if b)
 
 
-def tools_text() -> str:
-    txt = inject_store.get('tools_guide')
+def tools_text(user=None) -> str:
+    txt = inject_store.get('tools_guide', user=user)
     if txt.strip():
         return txt
     try:
@@ -123,14 +123,14 @@ def build(user_id, session_id, question, *, spec=None, history=None, files=None,
     """装配本轮 system。返回 {'system','parts','total','budget','compressed'}。"""
     budget = int(budget or inject_store.budget())
     parts = {
-        'identity': identity_text(),
-        'discipline': discipline_text(),
+        'identity': identity_text(user_id),
+        'discipline': discipline_text(user_id),
         'menu': _menu(user_id, menu_limit),
         'summary': str(summary or ''),
         'history': history_text(history),
         'files': files_text(files),
         'spec': spec_block(spec),
-        'tools': tools or tools_text(),
+        'tools': tools or tools_text(user_id),
     }
     compressed = []
 
@@ -170,8 +170,10 @@ def build(user_id, session_id, question, *, spec=None, history=None, files=None,
     src = dict(SOURCE)
     if (tools or '').strip():
         src['tools'] = '调用方传入'
-    elif inject_store.get('tools_guide').strip():
-        src['tools'] = '库'
+    else:
+        src['tools'] = inject_store.source_of('tools_guide', user_id)
+    src['identity'] = inject_store.source_of('identity', user_id)
+    src['discipline'] = inject_store.source_of('redlines', user_id)
     for k in ORDER:
         body = (parts.get(k) or '').strip()
         if not body:

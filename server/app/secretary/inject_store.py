@@ -62,6 +62,14 @@ def ensure() -> None:
            (k, label, i * 10))
     _q("insert into cfg.inject_budget (k, v, note) values ('resident_chars', 6000, "
        "'常驻上下文上限（需求 H2.2）') on conflict (k) do nothing")
+    _q("""create table if not exists cfg.scope_text (
+              scope_type  varchar(8)  not null,
+              scope_value varchar(64) not null default '',
+              k           varchar(40) not null,
+              body        text        not null default '',
+              updated_by  varchar(64) not null default '',
+              updated_at  timestamptz not null default now(),
+              primary key (scope_type, scope_value, k))""")
     _READY = True
 
 
@@ -86,12 +94,53 @@ def _rows() -> dict:
     return rows
 
 
-def get(key, default='') -> str:
-    row = _rows().get(key) or {}
-    body = str(row.get('body') or '')
+def get(key, default='', user=None) -> str:
+    """个人 > 全局 > cfg.inject_text > 内置默认。"""
+    if user not in (None, ''):
+        body = _scoped(key, 'user', str(user))
+        if body.strip():
+            return body
+    body = _scoped(key, 'global', '')
+    if body.strip():
+        return body
+    body = str((_rows().get(key) or {}).get('body') or '')
     if body.strip():
         return body
     return default or KEYS.get(key, ('', '', ''))[1]
+
+
+def _scoped(key, scope_type, scope_value) -> str:
+    ensure()
+    try:
+        rows = _q("select body from cfg.scope_text where scope_type=%s and scope_value=%s "
+                  "and k=%s", (scope_type, scope_value, key))
+        return str(rows[0]['body'] or '') if rows else ''
+    except Exception:                              # noqa: BLE001 - 读不到就按没配
+        return ''
+
+
+def source_of(key, user=None) -> str:
+    if user not in (None, '') and _scoped(key, 'user', str(user)).strip():
+        return '个人'
+    if _scoped(key, 'global', '').strip():
+        return '全局'
+    return '库'
+
+
+def set_scoped(key, body, user=None, who='') -> dict:
+    if key not in KEYS:
+        return {'error': '不认识的注入项：%s（可用：%s）' % (key, '、'.join(KEYS))}
+    ensure()
+    scope_type = 'user' if user not in (None, '') else 'global'
+    scope_value = str(user or '')
+    _q("""insert into cfg.scope_text (scope_type, scope_value, k, body, updated_by, updated_at)
+          values (%s,%s,%s,%s,%s,now())
+          on conflict (scope_type, scope_value, k) do update set body=excluded.body,
+                updated_by=excluded.updated_by, updated_at=now()""",
+       (scope_type, scope_value, key, str(body or ''), str(who or '')))
+    invalidate()
+    return {'ok': True, 'k': key, 'scope': scope_type, 'scope_value': scope_value,
+            'chars': len(str(body or ''))}
 
 
 def budget() -> int:

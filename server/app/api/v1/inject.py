@@ -36,19 +36,25 @@ def items(actor: CurrentActor = Depends(get_current_actor)):
 
 
 @router.get('/text', summary='读一项注入文本（页面编辑抽屉回显用）')
-def get_text(k: str = 'identity', actor: CurrentActor = Depends(get_current_actor)):
+def get_text(k: str = 'identity', scope: str = '', actor: CurrentActor = Depends(get_current_actor)):
     inject_store.ensure()
-    return _jr({'k': k, 'body': inject_store.get(k),
+    user = actor.user_id if scope == 'user' else None
+    body = inject_store.get(k, user=user)
+    return _jr({'k': k, 'body': body,
                 'label': inject_store.KEYS.get(k, ('', '', ''))[0],
-                'chars': len(inject_store.get(k)),
-                'source': '库 · cfg.inject_text', 'state': '可改'})
+                'chars': len(body), 'scope': scope or 'global',
+                'source': inject_store.source_of(k, actor.user_id),
+                'state': '可改'})
 
 
-@router.post('/text', summary='保存一项注入文本')
+@router.post('/text', summary='保存一项注入文本（scope=user 存个人那份）')
 async def save_text(request: Request, actor: CurrentActor = Depends(get_current_actor)):
     body = await request.json()
-    res = inject_store.save(body.get('k') or '', body.get('body') or '',
-                            user=actor.username)
+    if str(body.get('scope') or '') == 'user':
+        res = inject_store.set_scoped(body.get('k') or '', body.get('body') or '',
+                                      user=actor.user_id, who=actor.username)
+    else:
+        res = inject_store.save(body.get('k') or '', body.get('body') or '', user=actor.username)
     return _jr(res, 400 if res.get('error') else 200)
 
 
