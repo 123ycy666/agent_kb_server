@@ -52,6 +52,7 @@ def search(
             tag_filters=payload.tag_filters,
             use_rerank=payload.rerank,
             include_conflict=payload.include_conflict,
+            catalog_id=payload.catalog_id,
         )
     except RuntimeError as exc:
         raise HTTPException(

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -170,6 +171,20 @@ def _build_tag_condition(tag_filters: list[str] | None):
     return DocumentChunk.tags.contains(tags)
 
 
+_CATALOG_SCOPE: ContextVar = ContextVar("catalog_scope", default=None)
+
+
+def _catalog_subtree(db: Session, catalog_id: int) -> list[int]:
+    try:
+        rows = db.execute(text("""select id from kb.catalog c
+                                   where c.id = :cid
+                                      or c.path like (select path from kb.catalog where id = :cid) || '/%'"""),
+                          {"cid": int(catalog_id)}).all()
+        return [int(r[0]) for r in rows] or [int(catalog_id)]
+    except Exception:                              # noqa: BLE001 - 取不到就按单目录
+        return [int(catalog_id)]
+
+
 def _attach_provenance(db, results) -> None:
     """给每条结果补出处：目录路径、文号、时效、生效日期。
 
@@ -197,7 +212,11 @@ def _attach_provenance(db, results) -> None:
 
 
 def _scope_conditions(actor):
+    """目录层的范围裁剪：只看现行；敏感文档除本人与管理员外不参与召回。"""
     conds = [Document.status == "active"]
+    ids = _CATALOG_SCOPE.get()
+    if ids:
+        conds.append(Document.catalog_id.in_(ids))
     if not getattr(actor, "is_admin", False):
         conds.append(
             or_(
@@ -542,12 +561,15 @@ def search(
     tag_filters: list[str] | None = None,
     use_rerank: bool = True,
     include_conflict: bool = False,
+    catalog_id: int | None = None,
 ) -> SearchResponse:
     """完整检索流程。"""
     started = time.perf_counter()
     bundle = get_providers()
     degraded = False
     degraded_reason: str | None = None
+    if catalog_id:
+        _CATALOG_SCOPE.set(_catalog_subtree(db, int(catalog_id)))
 
     # 向量化
     try:

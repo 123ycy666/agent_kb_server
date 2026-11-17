@@ -26,6 +26,8 @@ class SearchRequest(BaseModel):
     rerank: bool = True
     # 是否包含已标记冲突的文档
     include_conflict: bool = False
+    # 目录子树裁剪：目录即权限边界，给一级目录就把下级一起算进范围
+    catalog_id: int | None = None
 
 
 class SearchResultItem(BaseModel):

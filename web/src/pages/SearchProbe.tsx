@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Input, Select, Space, Table, Tag, Typography, message } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
-import { kbApi } from '../api'
+import { kbApi, catalogApi } from '../api'
 import { http } from '../api/client'
 import type { KnowledgeBase } from '../api'
 
@@ -11,6 +11,8 @@ const { Text, Paragraph } = Typography
 export default function SearchProbe() {
   const [bases, setBases] = useState<KnowledgeBase[]>([])
   const [kbId, setKbId] = useState<number | null>(null)
+  const [cats, setCats] = useState<any[]>([])
+  const [catId, setCatId] = useState<number | undefined>()
   const [q, setQ] = useState('')
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
@@ -23,13 +25,22 @@ export default function SearchProbe() {
       const hit = items.find((b: any) => String(b.name).includes('制度')) || items[0]
       setKbId(hit?.id ?? null)
     })
+    catalogApi
+      .tree()
+      .then((r) => setCats((r.items ?? []).filter((c: any) => c.enabled)))
+      .catch(() => undefined)
   }, [])
 
   const run = async () => {
     if (!q.trim() || !kbId) return
     setLoading(true)
     try {
-      const r: any = await http.post('/search', { query: q, kb_ids: [kbId], top_k: 5 })
+      const r: any = await http.post('/search', {
+        query: q,
+        kb_ids: [kbId],
+        top_k: 5,
+        catalog_id: catId ?? null,
+      })
       setRows(r.results ?? [])
       setMeta({ total: r.total, degraded: r.degraded, notice: r.filter_notice })
     } catch (e) {
@@ -52,11 +63,19 @@ export default function SearchProbe() {
           options={bases.map((b) => ({ value: b.id, label: `${b.name}（#${b.id}）` }))}
         />
         <Input
-          style={{ width: 380 }}
+          style={{ width: 340 }}
           placeholder="例：差旅费住宿标准是多少"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onPressEnter={() => void run()}
+        />
+        <Select
+          allowClear
+          style={{ width: 200 }}
+          placeholder="限定目录（含下级）"
+          value={catId}
+          onChange={setCatId}
+          options={cats.map((c) => ({ value: c.id, label: c.path }))}
         />
         <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void run()}>
           检索
