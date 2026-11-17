@@ -843,7 +843,8 @@ export interface EvalItem {
 
 export const specsApi = {
   roles: () => http.get<any, { items: SpecRole[] }>('/specs/roles'),
-  list: () => http.get<any, SpecListResult>('/specs'),
+  list: (space?: string) =>
+    http.get<any, SpecListResult>('/specs', { params: space ? { space } : undefined }),
   upload: (form: FormData) =>
     http.post<any, any>('/specs/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },

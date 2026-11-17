@@ -40,6 +40,7 @@ import dayjs from 'dayjs'
 import { specsApi } from '../api'
 import type { SpecDetail, SpecItem, SpecPending, SpecPreview, SpecRole } from '../api'
 import ConflictList from './ConflictList'
+import MaterialLibrary from './MaterialLibrary'
 import TagManagement from './TagManagement'
 
 const { Title, Text, Paragraph } = Typography
@@ -70,7 +71,7 @@ function SpecLibrary({ space }: { space: 'spec' | 'material' }) {
   const load = async () => {
     setLoading(true)
     try {
-      const [r, role] = await Promise.all([specsApi.list(), specsApi.roles()])
+      const [r, role] = await Promise.all([specsApi.list(space), specsApi.roles()])
       setList(r)
       setRoles(role.items ?? [])
     } catch (e) {
@@ -82,7 +83,7 @@ function SpecLibrary({ space }: { space: 'spec' | 'material' }) {
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [space])
 
   const roleName = (code?: string) => roles.find((x) => x.code === code)?.label || code || '—'
 
@@ -1019,7 +1020,7 @@ export default function KnowledgeBaseList() {
         onChange={setTab}
         items={[
           { key: 'spec', label: '说明书库', children: <SpecLibrary space="spec" /> },
-          { key: 'material', label: '资料库', children: <SpecLibrary space="material" /> },
+          { key: 'material', label: '资料库', children: <MaterialLibrary /> },
           { key: 'conflicts', label: '冲突', children: <ConflictList /> },
           { key: 'tags', label: '标签', children: <TagManagement /> },
         ]}

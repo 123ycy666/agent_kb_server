@@ -8,6 +8,8 @@ import {
   Drawer,
   Empty,
   Input,
+  List,
+  Popconfirm,
   Row,
   Space,
   Spin,
@@ -17,16 +19,18 @@ import {
   message,
 } from 'antd'
 import {
+  DeleteOutlined,
   DownloadOutlined,
   FileTextOutlined,
+  PlusOutlined,
   ReloadOutlined,
   RobotOutlined,
   SendOutlined,
   StopOutlined,
   UserOutlined,
 } from '@ant-design/icons'
-import { injectApi, presetApi } from '../api'
-import type { PresetQuestion } from '../api'
+import { chatHistoryApi, injectApi, presetApi } from '../api'
+import type { ChatSession, PresetQuestion } from '../api'
 import { agentHttp } from '../api/client'
 import { FourPack } from '../components/SelfCheckPanel'
 
@@ -90,6 +94,8 @@ export default function AgentChat() {
       return ''
     }
   })
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [sessionLoading, setSessionLoading] = useState(false)
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [fileIds, setFileIds] = useState<string[]>([])
@@ -100,14 +106,21 @@ export default function AgentChat() {
   const [presets, setPresets] = useState<PresetQuestion[]>([])
   const [downloading, setDownloading] = useState('')
   const [openIdx, setOpenIdx] = useState<number | null>(null)
-  const [drawerTab, setDrawerTab] = useState('four')
+  const [drawerTab, setDrawerTab] = useState('steps')
   const stoppedRef = useRef(false)
+
+  const loadSessions = () =>
+    chatHistoryApi
+      .sessions({ limit: 30 })
+      .then((r) => setSessions(r.sessions ?? []))
+      .catch(() => undefined)
 
   useEffect(() => {
     presetApi
       .list()
       .then((r) => setPresets((r.items ?? []).slice(0, 6)))
       .catch(() => undefined)
+    void loadSessions()
     return () => {
       stoppedRef.current = true
     }
@@ -120,6 +133,59 @@ export default function AgentChat() {
         setMessages((prev) => prev.map((m, i) => (i === prev.length - 1 ? { ...m, four: x } : m))),
       )
       .catch(() => undefined)
+
+  const openSession = async (sid: string) => {
+    setSessionLoading(true)
+    try {
+      const r: any = await chatHistoryApi.history(sid, true)
+      const mapped: Msg[] = (r.messages ?? []).map((m: any) => ({
+        role: (m.direction === 1 ? 'user' : 'assistant') as 'user' | 'assistant',
+        text: m.content || '',
+        qaId: m.qa_id || undefined,
+        steps: Array.isArray(m.steps)
+          ? m.steps.map((s: any) => ({
+              seq: s.step_no,
+              kind: s.step_kind,
+              tool: s.tool_name,
+              round: s.round_no,
+              ms: s.cost_ms,
+              args: s.input_text,
+              result: {
+                sql: s.sql_text,
+                row_count: s.result_rows,
+                error: s.error_msg,
+                output: s.output_text,
+              },
+            }))
+          : [],
+      }))
+      setMessages(mapped)
+      setSessionId(sid)
+      try {
+        localStorage.setItem('secretary_session', sid)
+      } catch {
+        /* 忽略 */
+      }
+    } catch (e) {
+      message.error((e as Error).message || '读取会话失败')
+    } finally {
+      setSessionLoading(false)
+    }
+  }
+
+  const removeSession = async (sid: string) => {
+    try {
+      await chatHistoryApi.remove(sid)
+      message.success('已删除这场会话')
+      if (sid === sessionId) {
+        setMessages([])
+        setSessionId('')
+      }
+      await loadSessions()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
 
   const poll = (tid: string) => {
     const tick = async () => {
@@ -152,6 +218,7 @@ export default function AgentChat() {
             },
           ])
           if (r.qa_id) void attachFour(r.qa_id)
+          void loadSessions()
           return
         }
         window.setTimeout(tick, 900)
@@ -244,6 +311,29 @@ export default function AgentChat() {
     setOpenIdx(null)
   }
 
+  const openDrawer = (i: number) => {
+    setOpenIdx(i)
+    setDrawerTab('steps')
+    const m = messages[i]
+    if (m && !m.four && m.qaId) {
+      injectApi
+        .report({ qa_id: m.qaId })
+        .then((x: any) => setMessages((prev) => prev.map((mm, j) => (j === i ? { ...mm, four: x } : mm))))
+        .catch(() => undefined)
+    }
+  }
+
+  const newSession = () => {
+    setMessages([])
+    setSteps([])
+    setSessionId('')
+    try {
+      localStorage.removeItem('secretary_session')
+    } catch {
+      /* 忽略 */
+    }
+  }
+
   const lastIsUser = messages.length > 0 && messages[messages.length - 1].role === 'user'
   const opened = openIdx != null ? messages[openIdx] : null
   const openedArtifacts: Artifact[] = opened?.result?.artifacts ?? []
@@ -256,7 +346,7 @@ export default function AgentChat() {
             <Title level={4} style={{ margin: 0 }}>
               智能问答
             </Title>
-            <Text type="secondary">边跑边看 · 可停止 · 每轮依据在答案下方，点开看运行步骤</Text>
+            <Text type="secondary">左边是历史会话 · 每轮依据在答案下方，点开看运行步骤</Text>
           </Space>
         </Col>
         <Col>
@@ -267,158 +357,209 @@ export default function AgentChat() {
                 会话 {sessionId.slice(-8)}
               </Text>
             ) : null}
-            <Button
-              size="small"
-              icon={<ReloadOutlined />}
-              onClick={() => {
-                setMessages([])
-                setSteps([])
-                setSessionId('')
-                try {
-                  localStorage.removeItem('secretary_session')
-                } catch {
-                  /* 忽略 */
-                }
-              }}
-            >
+            <Button size="small" icon={<PlusOutlined />} onClick={newSession}>
               新会话
+            </Button>
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => void loadSessions()}>
+              刷新会话
             </Button>
           </Space>
         </Col>
       </Row>
 
-      <Card
-        size="small"
-        title="对话"
-        extra={
-          sending ? (
-            <Button size="small" danger icon={<StopOutlined />} loading={stopping} onClick={() => void stop()}>
-              停止
-            </Button>
-          ) : null
-        }
-        styles={{ body: { padding: 0 } }}
-      >
-        <div style={{ height: 560, overflowY: 'auto', padding: 14 }}>
-          {messages.length === 0 ? (
-            <div style={{ padding: '18px 8px' }}>
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                <Space>
-                  <RobotOutlined style={{ fontSize: 24, color: '#1677ff' }} />
-                  <Text strong style={{ fontSize: 16 }}>
-                    直接说人话就行
+      <Row gutter={12} align="stretch">
+        <Col span={6}>
+          <Card
+            size="small"
+            title={`历史会话（${sessions.length}）`}
+            styles={{ body: { padding: 0, height: 640, overflowY: 'auto' } }}
+          >
+            {sessions.length === 0 ? (
+              <Empty style={{ marginTop: 40 }} description="还没有会话" />
+            ) : (
+              <List
+                size="small"
+                dataSource={sessions}
+                renderItem={(s) => (
+                  <List.Item
+                    style={{
+                      cursor: 'pointer',
+                      background: s.session_id === sessionId ? '#e6f4ff' : undefined,
+                      padding: '8px 10px',
+                    }}
+                    onClick={() => void openSession(s.session_id)}
+                    actions={[
+                      <Popconfirm
+                        key="del"
+                        title="删除这场会话？"
+                        onConfirm={(e) => {
+                          e?.stopPropagation()
+                          void removeSession(s.session_id)
+                        }}
+                        onCancel={(e) => e?.stopPropagation()}
+                      >
+                        <Button
+                          size="small"
+                          type="text"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </Popconfirm>,
+                    ]}
+                  >
+                    <List.Item.Meta
+                      title={
+                        <Text style={{ fontSize: 13 }} ellipsis>
+                          {s.title || s.session_id.slice(-8)}
+                        </Text>
+                      }
+                      description={
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {s.last_msg_at ? String(s.last_msg_at).slice(5, 16) : '—'} · 问 {s.ask_count} 轮
+                        </Text>
+                      }
+                    />
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
+        </Col>
+
+        <Col span={18}>
+          <Card
+            size="small"
+            title="对话"
+            loading={sessionLoading}
+            extra={
+              sending ? (
+                <Button size="small" danger icon={<StopOutlined />} loading={stopping} onClick={() => void stop()}>
+                  停止
+                </Button>
+              ) : null
+            }
+            styles={{ body: { padding: 0 } }}
+          >
+            <div style={{ height: 500, overflowY: 'auto', padding: 14 }}>
+              {messages.length === 0 ? (
+                <div style={{ padding: '18px 8px' }}>
+                  <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                    <Space>
+                      <RobotOutlined style={{ fontSize: 24, color: '#1677ff' }} />
+                      <Text strong style={{ fontSize: 16 }}>
+                        直接说人话就行
+                      </Text>
+                    </Space>
+                    <Paragraph type="secondary" style={{ margin: 0, fontSize: 13 }}>
+                      写通知 / 做台账 / 读文件 / 查数 / 改一版都可以。每轮答案下方有一行
+                      「依据 · 自检 · 数字来源」，点它能看到这一轮每一步到底做了什么。
+                    </Paragraph>
+                    <Space wrap size={[6, 6]}>
+                      {presets.map((p) => (
+                        <Tag
+                          key={p.id}
+                          color="blue"
+                          style={{ cursor: 'pointer', whiteSpace: 'normal' }}
+                          onClick={() => setInput(p.text)}
+                        >
+                          {p.text}
+                        </Tag>
+                      ))}
+                    </Space>
+                  </Space>
+                </div>
+              ) : (
+                messages.map((m, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: 'flex',
+                      justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
+                      marginBottom: 12,
+                    }}
+                  >
+                    <Space align="start" size={8} style={{ maxWidth: '88%' }}>
+                      {m.role === 'assistant' ? (
+                        <RobotOutlined style={{ color: '#1677ff', marginTop: 4 }} />
+                      ) : null}
+                      <div>
+                        <div
+                          style={{
+                            background: m.role === 'user' ? '#1677ff' : '#f5f5f5',
+                            color: m.role === 'user' ? '#fff' : 'rgba(0,0,0,.88)',
+                            borderRadius: m.role === 'user' ? '10px 10px 2px 10px' : '10px 10px 10px 2px',
+                            padding: '8px 12px',
+                            whiteSpace: 'pre-wrap',
+                            lineHeight: 1.7,
+                            fontSize: 13,
+                          }}
+                        >
+                          {m.text}
+                        </div>
+                        {m.role === 'assistant' ? (
+                          <div
+                            style={{ marginTop: 4, fontSize: 12, color: '#1677ff', cursor: 'pointer' }}
+                            onClick={() => openDrawer(i)}
+                          >
+                            {summarize(m)} ▸
+                          </div>
+                        ) : null}
+                      </div>
+                      {m.role === 'user' ? <UserOutlined style={{ marginTop: 4 }} /> : null}
+                    </Space>
+                  </div>
+                ))
+              )}
+              {sending ? (
+                <div style={{ padding: '8px 4px' }}>
+                  <Space>
+                    <Spin size="small" />
+                    <Text type="secondary">
+                      模型在跑{steps.length ? `，已运行 ${steps.length} 步` : ''}…
+                    </Text>
+                  </Space>
+                </div>
+              ) : null}
+            </div>
+
+            <div style={{ borderTop: '1px solid #f0f0f0', padding: 12 }}>
+              {fileIds.length > 0 ? (
+                <Space wrap size={4} style={{ marginBottom: 6 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    随本轮带上：
                   </Text>
-                </Space>
-                <Paragraph type="secondary" style={{ margin: 0, fontSize: 13 }}>
-                  写通知 / 做台账 / 读文件 / 查数 / 改一版都可以。每轮答案下方有一行
-                  「依据 · 自检 · 数字来源」，点它能看到这一轮每一步到底做了什么。
-                </Paragraph>
-                <Space wrap size={[6, 6]}>
-                  {presets.map((p) => (
-                    <Tag
-                      key={p.id}
-                      color="blue"
-                      style={{ cursor: 'pointer', whiteSpace: 'normal' }}
-                      onClick={() => setInput(p.text)}
-                    >
-                      {p.text}
+                  {fileIds.map((id) => (
+                    <Tag key={id} closable onClose={() => setFileIds((xs) => xs.filter((x) => x !== id))}>
+                      <FileTextOutlined /> {id}
                     </Tag>
                   ))}
                 </Space>
-              </Space>
-            </div>
-          ) : (
-            messages.map((m, i) => (
-              <div
-                key={i}
-                style={{
-                  display: 'flex',
-                  justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
-                  marginBottom: 12,
+              ) : null}
+              <Input.TextArea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="例：把这个文件改成给领导看的汇报材料，出一份 docx"
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    void send()
+                  }
                 }}
-              >
-                <Space align="start" size={8} style={{ maxWidth: '88%' }}>
-                  {m.role === 'assistant' ? (
-                    <RobotOutlined style={{ color: '#1677ff', marginTop: 4 }} />
-                  ) : null}
-                  <div>
-                    <div
-                      style={{
-                        background: m.role === 'user' ? '#1677ff' : '#f5f5f5',
-                        color: m.role === 'user' ? '#fff' : 'rgba(0,0,0,.88)',
-                        borderRadius: m.role === 'user' ? '10px 10px 2px 10px' : '10px 10px 10px 2px',
-                        padding: '8px 12px',
-                        whiteSpace: 'pre-wrap',
-                        lineHeight: 1.7,
-                        fontSize: 13,
-                      }}
-                    >
-                      {m.text}
-                    </div>
-                    {m.role === 'assistant' ? (
-                      <div
-                        style={{ marginTop: 4, fontSize: 12, color: '#1677ff', cursor: 'pointer' }}
-                        onClick={() => {
-                          setOpenIdx(i)
-                          setDrawerTab('steps')
-                        }}
-                      >
-                        {summarize(m)} ▸
-                      </div>
-                    ) : null}
-                  </div>
-                  {m.role === 'user' ? <UserOutlined style={{ marginTop: 4 }} /> : null}
-                </Space>
-              </div>
-            ))
-          )}
-          {sending ? (
-            <div style={{ padding: '8px 4px' }}>
-              <Space>
-                <Spin size="small" />
-                <Text type="secondary">
-                  模型在跑{steps.length ? `，已运行 ${steps.length} 步` : ''}…
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Enter 发送，Shift+Enter 换行
                 </Text>
-              </Space>
+                <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={() => void send()}>
+                  发送
+                </Button>
+              </div>
             </div>
-          ) : null}
-        </div>
-
-        <div style={{ borderTop: '1px solid #f0f0f0', padding: 12 }}>
-          {fileIds.length > 0 ? (
-            <Space wrap size={4} style={{ marginBottom: 6 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                随本轮带上：
-              </Text>
-              {fileIds.map((id) => (
-                <Tag key={id} closable onClose={() => setFileIds((xs) => xs.filter((x) => x !== id))}>
-                  <FileTextOutlined /> {id}
-                </Tag>
-              ))}
-            </Space>
-          ) : null}
-          <Input.TextArea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="例：把这个文件改成给领导看的汇报材料，出一份 docx"
-            autoSize={{ minRows: 2, maxRows: 4 }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void send()
-              }
-            }}
-          />
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Enter 发送，Shift+Enter 换行
-            </Text>
-            <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={() => void send()}>
-              发送
-            </Button>
-          </div>
-        </div>
-      </Card>
+          </Card>
+        </Col>
+      </Row>
 
       <Drawer
         open={openIdx != null}
@@ -474,14 +615,6 @@ export default function AgentChat() {
                     data={{
                       ...(opened.result ?? {}),
                       ...(opened.four ?? {}),
-                      self_check: {
-                        ...((opened.four ?? opened.result)?.self_check ?? {}),
-                        verdicts:
-                          (opened.steps ?? [])
-                            .filter((s) => s.tool === 'self_check')
-                            .flatMap((s) => s.result?.verdicts ?? []) ||
-                          ((opened.four ?? opened.result)?.self_check?.verdicts ?? []),
-                      },
                     }}
                     compact
                   />
