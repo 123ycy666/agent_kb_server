@@ -52,6 +52,10 @@ class SearchResultItem(BaseModel):
     rerank_score: float | None = None
     has_conflict: bool = False
     tags: list[str] = []
+    # ── 出处（知识库目录层，2026-11-16）：每条结果都要能指回目录、文号、生效日期 ──
+    catalog_path: str | None = None
+    doc_no: str | None = None
+    doc_status: str | None = None
 
 
 class FilterNotice(BaseModel):

@@ -77,6 +77,25 @@ export default function MaterialLibrary() {
     [cats],
   )
 
+  const [kw, setKw] = useState('')
+  const [fCat, setFCat] = useState<string | undefined>()
+  const [fKind, setFKind] = useState<string | undefined>()
+  const [fStatus, setFStatus] = useState<string | undefined>()
+  const [fSecrecy, setFSecrecy] = useState<string | undefined>()
+
+  const filtered = useMemo(
+    () =>
+      rows.filter((r) => {
+        if (kw && !String(r.filename).toLowerCase().includes(kw.toLowerCase())) return false
+        if (fCat && r.catalog_path !== fCat) return false
+        if (fKind && r.doc_kind !== fKind) return false
+        if (fStatus && r.status !== fStatus) return false
+        if (fSecrecy && r.secrecy !== fSecrecy) return false
+        return true
+      }),
+    [rows, kw, fCat, fKind, fStatus, fSecrecy],
+  )
+
   const openEdit = (r: any) => {
     setEdit(r)
     setForm({
@@ -125,7 +144,55 @@ export default function MaterialLibrary() {
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => load()}>
           刷新
         </Button>
-        <Text type="secondary">共 {rows.length} 篇</Text>
+        <Text type="secondary">共 {filtered.length} / {rows.length} 篇</Text>
+      </Space>
+
+      <Space wrap size={8}>
+        <Input.Search
+          allowClear
+          placeholder="按文件名搜"
+          style={{ width: 200 }}
+          onSearch={setKw}
+          onChange={(e) => !e.target.value && setKw('')}
+        />
+        <Select
+          allowClear
+          placeholder="目录"
+          style={{ width: 180 }}
+          value={fCat}
+          onChange={setFCat}
+          options={[...new Set(rows.map((r) => r.catalog_path).filter(Boolean))].map((v: any) => ({
+            value: v,
+            label: v,
+          }))}
+        />
+        <Select
+          allowClear
+          placeholder="文种"
+          style={{ width: 120 }}
+          value={fKind}
+          onChange={setFKind}
+          options={[...new Set(rows.map((r) => r.doc_kind).filter(Boolean))].map((v: any) => ({
+            value: v,
+            label: v,
+          }))}
+        />
+        <Select
+          allowClear
+          placeholder="时效"
+          style={{ width: 120 }}
+          value={fStatus}
+          onChange={setFStatus}
+          options={Object.entries(STATUS_LABEL).map(([v, s]) => ({ value: v, label: s.label }))}
+        />
+        <Select
+          allowClear
+          placeholder="密级"
+          style={{ width: 120 }}
+          value={fSecrecy}
+          onChange={setFSecrecy}
+          options={Object.entries(SECRECY_LABEL).map(([v, s]) => ({ value: v, label: s.label }))}
+        />
       </Space>
 
       <Table
@@ -133,7 +200,7 @@ export default function MaterialLibrary() {
         rowKey="id"
         loading={loading}
         pagination={false}
-        dataSource={rows}
+        dataSource={filtered}
         columns={[
           { title: '文件', dataIndex: 'filename' },
           {

@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentActor
@@ -170,8 +170,33 @@ def _build_tag_condition(tag_filters: list[str] | None):
     return DocumentChunk.tags.contains(tags)
 
 
+def _attach_provenance(db, results) -> None:
+    """给每条结果补出处：目录路径、文号、时效、生效日期。
+
+    知识库的判据要求「每条结果必须带出处（文档名 + 目录路径 + 生效日期）」。
+    """
+    if not results:
+        return
+    ids = sorted({int(r.doc_id) for r in results})
+    try:
+        rows = db.execute(
+            text("""select d.id, d.doc_no, d.status, d.effective_from, c.path
+                      from kb.document d left join kb.catalog c on c.id = d.catalog_id
+                     where d.id = any(:ids)"""), {"ids": ids}).all()
+    except Exception:                              # noqa: BLE001 - 补出处失败不影响检索
+        return
+    meta = {int(r[0]): r for r in rows}
+    for res in results:
+        m = meta.get(int(res.doc_id))
+        if not m:
+            continue
+        res.doc_no = (m[1] or '') or None
+        res.doc_status = (m[2] or '') or None
+        res.effective_date = str(m[3]) if m[3] else None
+        res.catalog_path = (m[4] or '') or None
+
+
 def _scope_conditions(actor):
-    """目录层的范围裁剪：只看现行；敏感文档除本人与管理员外不参与召回。"""
     conds = [Document.status == "active"]
     if not getattr(actor, "is_admin", False):
         conds.append(
@@ -596,6 +621,7 @@ def search(
     ]
 
     # 空结果兜底提示 —— 避免「明明库里有却搜不到」的大量误报
+    _attach_provenance(db, results)
     notice: FilterNotice | None = None
     if not results and tag_filters:
         baseline = _count_baseline(db, actor, kb_ids)
