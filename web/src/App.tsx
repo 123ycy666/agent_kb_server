@@ -9,10 +9,9 @@ import Chat from './pages/AgentChat'
 import Specs from './pages/KnowledgeBaseList'
 import AskData from './pages/SearchTest'
 import SchemaMap from './pages/SchemaMap'
-import Inject from './pages/DocumentList'
+import InjectPanels from './pages/InjectPanels'
 import { TasksPage } from './pages/TaskCenter'
 import { RecordsPage } from './pages/ChatHistory'
-import { EvalPage } from './pages/ConflictList'
 import { SystemPage } from './pages/ModelConfig'
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -62,10 +61,9 @@ export default function App() {
           <Route path="specs" element={<Specs />} />
           <Route path="ask-data" element={<AskData />} />
           <Route path="schema" element={<SchemaMap />} />
-          <Route path="inject" element={<Inject />} />
+          <Route path="inject" element={<InjectPanels />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="records" element={<RecordsPage />} />
-          <Route path="eval" element={<EvalPage />} />
           <Route
             path="system"
             element={

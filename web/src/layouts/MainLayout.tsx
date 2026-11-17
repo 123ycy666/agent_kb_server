@@ -53,7 +53,7 @@ export default function MainLayout() {
     {
       key: '/inject',
       icon: <ThunderboltOutlined />,
-      label: <Link to="/inject">提示词与注入</Link>,
+      label: <Link to="/inject">提示词</Link>,
     },
     {
       key: '/tasks',
@@ -62,7 +62,6 @@ export default function MainLayout() {
     },
     { key: '/records', icon: <HistoryOutlined />, label: <Link to="/records">记录</Link> },
     { key: '/schema', icon: <DatabaseOutlined />, label: <Link to="/schema">库结构</Link> },
-    { key: '/eval', icon: <ExperimentOutlined />, label: <Link to="/eval">评测</Link> },
     {
       key: '/system',
       icon: <SettingOutlined />,

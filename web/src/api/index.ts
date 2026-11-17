@@ -859,12 +859,15 @@ export const specsApi = {
     http.post<any, any>('/specs/try-run', data),
 }
 
-export const injectApi = {
-  items: () =>
+export const injectApi = {  items: () =>
     http.get<any, { items: InjectItem[]; budget: number; affects: string; note: string }>(
       '/inject/items',
     ),
   saveText: (k: string, body: string) => http.post<any, any>('/inject/text', { k, body }),
+  text: (k: string) =>
+    http.get<any, { k: string; body: string; label: string; chars: number }>('/inject/text', {
+      params: { k },
+    }),
   budget: () => http.get<any, { resident_chars: number }>('/inject/budget'),
   setBudget: (resident_chars: number) =>
     http.post<any, any>('/inject/budget', { resident_chars }),
@@ -877,6 +880,10 @@ export const injectApi = {
     http.post<any, any>('/inject/route-rule', values),
   report: (params: { qa_id?: number; limit?: number }) =>
     http.get<any, any>('/inject/report', { params }),
+}
+
+export const promptsApi = {
+  overview: () => http.get<any, any>('/prompts/overview'),
 }
 
 export const evalApi = {
