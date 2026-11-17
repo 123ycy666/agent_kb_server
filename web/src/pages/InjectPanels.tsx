@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   Drawer,
   Empty,
   Input,
@@ -14,11 +15,13 @@ import {
   Typography,
   message,
 } from 'antd'
-import { EditOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons'
+import { EditOutlined, EyeOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import { injectApi, promptsApi } from '../api'
 import { http } from '../api/client'
 
 const { Text, Paragraph } = Typography
+
+/* ───────────────────────── 干活线 ───────────────────────── */
 
 type Part = {
   name: string
@@ -189,13 +192,6 @@ function WorkLane() {
         ]}
       />
 
-      <Card size="small" type="inner" title="这页怎么读">
-        <Paragraph type="secondary" style={{ margin: 0, fontSize: 13 }}>
-          顺序就是代码里的装配顺序。可改的是「库 / 全局 / 个人」那几段；「代码兜底」是库里空着才用的默认值，
-          「自动生成」是每轮现算的。改完保存，字数与占比马上重算。
-        </Paragraph>
-      </Card>
-
       <Drawer
         open={openKey != null}
         onClose={() => setOpenKey(null)}
@@ -233,14 +229,164 @@ function WorkLane() {
   )
 }
 
+/* ───────────────────────── 问数线（工作台） ───────────────────────── */
+
+function MaterialEditor({ slot }: { slot: string }) {
+  const [secs, setSecs] = useState<any[]>([])
+  const [bodies, setBodies] = useState<Record<number, string>>({})
+  const [saving, setSaving] = useState<number | null>(null)
+
+  const load = () =>
+    promptsApi
+      .material(slot)
+      .then((r: any) => {
+        const list = r.sections ?? r.items ?? []
+        setSecs(list)
+        const next: Record<number, string> = {}
+        list.forEach((s: any) => (next[s.id] = s.body ?? ''))
+        setBodies(next)
+      })
+      .catch((e) => message.error((e as Error).message))
+
+  useEffect(() => {
+    load()
+  }, [slot])
+
+  if (!secs.length) return <Empty description="这一槽没有小节（内容为空）" />
+
+  const save = async (id: number) => {
+    setSaving(id)
+    try {
+      await promptsApi.saveSection(id, bodies[id] ?? '')
+      message.success('已保存，下一轮生效')
+      await load()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  return (
+    <Collapse
+      size="small"
+      items={secs.map((s: any) => ({
+        key: String(s.id),
+        label: (
+          <Space>
+            <Text strong>{s.section}</Text>
+            <Text type="secondary">{String(s.body ?? '').length} 字</Text>
+            {s.pinned ? <Tag color="blue">必带</Tag> : <Tag>按需</Tag>}
+          </Space>
+        ),
+        children: (
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Input.TextArea
+              autoSize={{ minRows: 8, maxRows: 30 }}
+              value={bodies[s.id] ?? ''}
+              onChange={(e) => setBodies((b) => ({ ...b, [s.id]: e.target.value }))}
+            />
+            <Space>
+              <Button
+                type="primary"
+                size="small"
+                icon={<SaveOutlined />}
+                loading={saving === s.id}
+                onClick={() => void save(s.id)}
+              >
+                保存这一节
+              </Button>
+              <Text type="secondary">存完下一轮问答就用新内容</Text>
+            </Space>
+          </Space>
+        ),
+      }))}
+    />
+  )
+}
+
+function TextKeyEditor({ keyName }: { keyName: string }) {
+  const [body, setBody] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const load = () =>
+    promptsApi
+      .texts()
+      .then((r: any) => {
+        const list: any[] = Array.isArray(r.items) ? r.items : Object.values(r.items ?? {})
+        const v = list.find((x: any) => x.key === keyName || x.name === keyName)
+        setBody(v?.body ?? v?.text ?? '')
+      })
+      .catch((e) => message.error((e as Error).message))
+
+  useEffect(() => {
+    load()
+  }, [keyName])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await promptsApi.saveTextKey(keyName, body)
+      message.success('已保存，下一轮生效')
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+      <Input.TextArea
+        autoSize={{ minRows: 8, maxRows: 30 }}
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+      />
+      <Space>
+        <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
+          保存这一段
+        </Button>
+        <Text type="secondary">{body.length} 字 · 存完下一轮生效</Text>
+      </Space>
+    </Space>
+  )
+}
+
+function ReadOnlyPeek({ endpoint, name }: { endpoint: string; name: string }) {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState<any>(null)
+
+  const show = () => {
+    setOpen(true)
+    if (data) return
+    http
+      .get(endpoint)
+      .then((r: any) => setData(r))
+      .catch((e) => message.error((e as Error).message))
+  }
+
+  return (
+    <>
+      <Button size="small" icon={<EyeOutlined />} onClick={show}>
+        看内容
+      </Button>
+      <Drawer open={open} onClose={() => setOpen(false)} width={760} title={name}>
+        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>
+          {data ? JSON.stringify(data, null, 2).slice(0, 200000) : '读取中…'}
+        </pre>
+      </Drawer>
+    </>
+  )
+}
+
 function AskLane() {
   const [segs, setSegs] = useState<any[]>([])
   const [counts, setCounts] = useState<any>({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    http
-      .get('/prompts/impact')
+    promptsApi
+      .impact()
       .then((r: any) => {
         setSegs(r.segments ?? [])
         setCounts(r.counts ?? {})
@@ -256,37 +402,34 @@ function AskLane() {
       <Alert
         type="info"
         showIcon
-        message={`一次问数回答被 ${counts.segments ?? 0} 段、${counts.items ?? 0} 类输入影响。答错时按下面顺序往上找。`}
+        message={`一次问数回答被 ${counts.segments ?? 0} 段、${counts.items ?? 0} 项输入影响。能就地改的直接改，改完下一轮生效。`}
       />
 
       {segs.map((s: any) => (
         <Card key={s.key} size="small" type="inner" title={s.name}>
-          <Table
-            size="small"
-            rowKey={(it: any) => it.name}
-            pagination={false}
-            dataSource={s.items}
-            columns={[
-              { title: '输入', render: (_: any, it: any) => <Text strong>{it.name}</Text> },
-              {
-                title: '存在哪',
-                width: 220,
-                render: (_: any, it: any) => <Text code>{it.where}</Text>,
-              },
-              { title: '大小', dataIndex: 'size', width: 130 },
-              {
-                title: '能改吗',
-                width: 110,
-                render: (_: any, it: any) =>
-                  it.editable ? <Tag color="green">页面上可改</Tag> : <Tag>只读</Tag>,
-              },
-              { title: '改完多久生效', dataIndex: 'takes_effect', width: 120 },
-              {
-                title: '它在决定什么',
-                render: (_: any, it: any) => <Text type="secondary">{it.note}</Text>,
-              },
-            ]}
-          />
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {(s.items ?? []).map((it: any) => (
+              <div key={it.name} style={{ borderTop: '1px dashed #eee', paddingTop: 8 }}>
+                <Space wrap size={6} style={{ marginBottom: 6 }}>
+                  <Text strong>{it.name}</Text>
+                  <Text code>{it.where}</Text>
+                  <Text type="secondary">{it.size}</Text>
+                  {it.editable ? <Tag color="green">可改</Tag> : <Tag>只读</Tag>}
+                  <Text type="secondary">改完：{it.takes_effect}</Text>
+                  <Text type="secondary">{it.note}</Text>
+                </Space>
+                {String(it.editor || '').startsWith('material:') ? (
+                  <MaterialEditor slot={String(it.editor).split(':')[1]} />
+                ) : String(it.editor || '').startsWith('text:') ? (
+                  <TextKeyEditor keyName={String(it.editor).split(':')[1]} />
+                ) : it.endpoint ? (
+                  <ReadOnlyPeek endpoint={it.endpoint} name={it.name} />
+                ) : (
+                  <Text type="secondary">这个只能在代码里看</Text>
+                )}
+              </div>
+            ))}
+          </Space>
         </Card>
       ))}
     </Space>

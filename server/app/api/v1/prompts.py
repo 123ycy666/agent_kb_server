@@ -95,6 +95,15 @@ def overview(actor: CurrentActor = Depends(get_current_actor)):
     })
 
 
+@router.get('/tools', summary='问数线工具定义原文（模型实际收到的那份）')
+def tools_def(actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import agent
+    return _jr({'items': [{'name': t['function']['name'],
+                           'description': t['function']['description'],
+                           'parameters': t['function'].get('parameters') or {}}
+                          for t in agent.TOOLS]})
+
+
 @router.get('/impact', summary='问数线影响面：九段、13 类输入')
 def impact(actor: CurrentActor = Depends(get_current_actor)):
     """答错时要能指到「哪一段的哪个输入」。只读，不改配置。"""
@@ -279,6 +288,17 @@ def export_md(slot: str = '', actor: CurrentActor = Depends(get_current_actor)):
 def list_texts(actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import prompt_text
     return _jr({'ok': True, 'items': prompt_text.all_texts()})
+
+
+@router.post('/material/section/{sec_id}', summary='就地保存某一节正文（提示词页问数线用）')
+async def save_material_section(sec_id: int, request: Request,
+                                actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import prompt_material
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
+    res = prompt_material.save_section(int(sec_id), body.get('body') or '', user=actor.username)
+    return _jr(res, 200 if res.get('ok') else 400)
 
 
 @router.put('/texts/{key}', summary='保存一份代码提示词的覆盖值')

@@ -886,6 +886,14 @@ export const injectApi = {  items: () =>
 
 export const promptsApi = {
   overview: () => http.get<any, any>('/prompts/overview'),
+  impact: () => http.get<any, any>('/prompts/impact'),
+  material: (slot: string) => http.get<any, any>(`/prompts/material/${slot}`),
+  saveSection: (id: number, body: string) =>
+    http.post<any, any>(`/prompts/material/section/${id}`, { body }),
+  texts: () => http.get<any, any>('/prompts/texts'),
+  saveTextKey: (key: string, body: string) =>
+    http.put<any, any>(`/prompts/texts/${key}`, { body }),
+  tools: () => http.get<any, any>('/prompts/tools'),
 }
 
 export const evalApi = {
