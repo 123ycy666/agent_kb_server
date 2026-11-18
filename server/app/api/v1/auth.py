@@ -38,8 +38,21 @@ def login(
     mysql_db: Session = Depends(get_mysql_db),
 ):
     # ① MySQL 员工认证（argon2id；用户不存在/密码错/已停用统一报错，防账号枚举）
-    emp = employee.authenticate(mysql_db, payload.username, payload.password)
-    if emp is None:
+    try:
+        emp = employee.authenticate(mysql_db, payload.username, payload.password)
+    except Exception:  # noqa: BLE001 - 骨架/离线部署里没有我们的 HR 库，连不上不该 500
+        emp = None
+
+    # ①b 本地账号：密码哈希只存在 app_user.password_hash 的账号（骨架种出来的 admin）
+    user_local = None
+    if emp is None and settings.local_login_enabled:
+        from app.core.security import verify_password
+
+        row = db.execute(select(AppUser).where(AppUser.username == payload.username)).scalar_one_or_none()
+        if row is not None and row.password_hash and verify_password(payload.password, row.password_hash):
+            user_local = row
+
+    if emp is None and user_local is None:
         audit.log_action(
             db,
             actor=None,
@@ -56,7 +69,7 @@ def login(
         )
 
     # ② 同步投影 + 角色对齐（administrator_flag=1 → admin，否则 user）
-    user = employee.sync_projection(db, emp)
+    user = employee.sync_projection(db, emp) if emp is not None else user_local
 
     # 角色与权限码：按 app_user.role 取常量矩阵（2026-10-15 RBAC 收敛，去 4 张表）
     from app.core.rbac_config import permissions_for

@@ -63,7 +63,12 @@ def all(refresh: bool = False) -> dict:
 
 
 def save(data: dict, user: str = '') -> dict:
-    """存页面传来的键（只认知名的键）；空串 = 恢复成代码默认。"""
+    """存页面传来的键（只认知名的键）；空串 = 恢复成代码默认。
+
+    ⚠️ 先 ensure()：空库上第一次就 PUT（没先 GET 过）时 `cfg.runtime` 还不存在，
+       直接 insert 会报 UndefinedTable（2026-11-18 在服务器骨架实例上踩到）。
+    """
+    ensure()
     clean = {k: str(v) for k, v in (data or {}).items() if k in KEYS}
     try:
         with _conn() as c:

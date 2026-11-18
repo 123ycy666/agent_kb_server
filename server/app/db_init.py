@@ -256,6 +256,25 @@ def seed_admin(db: Session) -> dict:
         return {"synced": 0, "source": "t_employee", "skipped": str(exc)}
 
 
+def seed_local_admin(db: Session) -> dict:
+    """骨架用：给 admin 写一条本地口令（只有 LOCAL_LOGIN_ENABLED 打开时才种）。
+
+    别的项目接进来时没有我们的 HR 库，登录只能靠本地口令 —— 这条就是那个入口。
+    幂等：每次启动按 LOCAL_ADMIN_PASSWORD 重算哈希。
+    """
+    if not settings.local_login_enabled or not settings.local_admin_password:
+        return {"seeded": False}
+    from app.core.security import hash_password
+
+    row = db.execute(select(AppUser).where(AppUser.username == "admin")).scalar_one_or_none()
+    if row is None:
+        row = AppUser(username="admin", display_name="管理员", role="admin", status="active")
+        db.add(row)
+    row.password_hash = hash_password(settings.local_admin_password)
+    db.commit()
+    return {"seeded": True, "username": "admin"}
+
+
 def init_database(verbose: bool = True) -> dict:
     """完整初始化流程。幂等，可重复调用。"""
     result: dict = {}
@@ -268,6 +287,7 @@ def init_database(verbose: bool = True) -> dict:
     db = SessionLocal()
     try:
         result["admin_sync"] = seed_admin(db)
+        result["local_admin"] = seed_local_admin(db)
     finally:
         db.close()
 

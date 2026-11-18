@@ -8,7 +8,6 @@ import pymysql
 from app.secretary import config
 
 _local = threading.local()
-FORBID = re.compile(r'(;|--|/\*|\*/)')
 NAME_OK = re.compile(r'^[A-Za-z0-9_]+$')
 
 
@@ -25,14 +24,30 @@ def _drop_conn():
         except Exception:
             pass
     _local.conn = None
+    _local.key = None
+
+
+def _key():
+    """这条连接是连哪个库建的。页面换库后靠它判断要不要重建。"""
+    d = config.DB
+    return (d.get('host'), d.get('port'), d.get('db'), d.get('user'))
 
 
 def _get_conn():
-    """每个线程一条连接；用前先 ping 探活，死了就重连。"""
+    """每个线程一条连接；配置换了或连接死了就重建。
+
+    ⚠️ 必须比 `_key()`：`runtime_cfg.refresh()` 里的 `_drop_conn()` 只关掉当前线程那条，
+       而 run_sql 跑在别的工作线程上 —— 只靠 drop 会出现「换了库仍在查旧库」，
+       而 ping 探得通，所以永远不重连（2026-11-18 实测踩到）。
+    """
     c = getattr(_local, 'conn', None)
+    if c is not None and getattr(_local, 'key', None) != _key():
+        _drop_conn()
+        c = None
     if c is None:
         c = _new_conn()
         _local.conn = c
+        _local.key = _key()
         return c
     try:
         c.ping(reconnect=True)
@@ -40,6 +55,7 @@ def _get_conn():
         _drop_conn()
         c = _new_conn()
         _local.conn = c
+    _local.key = _key()
     return c
 
 
@@ -74,65 +90,6 @@ def _exec(sql, params=None, limit_rows=config.SQL_MAX_ROWS):
             _drop_conn()
             return _exec_once(sql, params, limit_rows)
         raise
-
-
-def safe_select(sql):
-    s = ' '.join(str(sql).split())
-    low = s.lower()
-    if not (low.startswith('select') or low.startswith('with')):
-        raise ValueError('只允许 SELECT 查询')
-    if FORBID.search(s):
-        raise ValueError('不允许分号或注释')
-    if not re.search(r'\blimit\b', low):
-        s += ' LIMIT %d' % config.SQL_MAX_ROWS
-    return s
-
-
-def _summarize(columns, rows):
-    """给结果集配一份「合计/均值/最小/最大」—— 汇总数由库算，别让模型把几十行自己相加。
-
-    ★ 必须有：实测模型对着 47 行分配额自己加总，报出来的全市合计与库不符
-      （1910 万被写成 1950 万 / 1880 万）。明细看得见，不等于加得对。
-    只对「至少两个值都能当数字读」的列生成；单行结果（COUNT/SUM 之类）不生成，它本来就一个数。
-    """
-    out = {}
-    for c in columns:
-        vals = []
-        for row in rows:
-            try:
-                vals.append(float(row.get(c)))
-            except (TypeError, ValueError, AttributeError):
-                pass
-        if len(vals) < 2:
-            continue
-        out[c] = {'sum': round(sum(vals), 2), 'mean': round(sum(vals) / len(vals), 2),
-                  'min': min(vals), 'max': max(vals), 'n': len(vals)}
-        if len(out) >= 12:                      # 宽表别把 summary 撑成第二份明细
-            break
-    return out
-
-
-def empty_verdict(sql):
-    """0 行到底什么意思 —— **判定只在这一处**。
-
-    三种意思必须分开（2026-11-10）：
-      EMPTY_NOT_READY：表里有数据，但请求的期间还没有 → 不能说"没有数据"
-      EMPTY_OK       ：期间没超范围、确实是空集 → 才允许说"按某口径没有记录"
-      ERROR_DICT     ：表/字段不在字典（由 run_sql 的错误分支给，不走这里）
-    判据来自 semantic.period_facts（表的时间列与最新可用期间，带缓存）。
-    """
-    from app.secretary import semantic
-    s = str(sql or '')
-    periods = re.findall(r'\b(20\d{4})\b', s)
-    for t in sorted(semantic.tables_in_sql(s)):
-        pf = semantic.period_facts(t)
-        if not pf.get('col') or not pf.get('max'):
-            continue
-        want = max(periods) if periods else ''
-        if want and want > pf['max']:
-            return {'code': 'EMPTY_NOT_READY',
-                    'note': '%s 最新只到 %s（%s），%s 还没数据' % (t, pf['max'], pf['col'], want)}
-    return {'code': 'EMPTY_OK', 'note': ''}
 
 
 def _cols_live(table: str) -> list:

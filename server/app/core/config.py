@@ -147,6 +147,15 @@ class Settings(BaseSettings):
     sso_login_enabled: bool = True
     sso_login_key: str = ""
 
+    # ── 本地账号登录（骨架 / 离线部署用，2026-11-18）────────────
+    # 骨架要给别的项目用：他们那边没有我们的 HR 库（dlj_data.t_employee），
+    # 只认 argon2id 就一个人都进不去。打开后，密码哈希落在 app_user.password_hash
+    # 的账号先按本地口令校验，其余账号照旧走 HR。
+    # ⚠️ 线上不要开：默认 false = 登录仍然只认 HR。
+    local_login_enabled: bool = False
+    # 首次启动时给 admin 写本地口令；留空 = 不种任何本地账号。
+    local_admin_password: str = ""
+
     # ── 大屏跳转意图识别（对方 Java 服务，2026-10-21）──────────
     # `/api/ask` 带 want_screen=true 时，用**补全后的问题**调这个接口，
     # 把 layer / method / mainId / data 平铺进响应，供大屏前端跳转。

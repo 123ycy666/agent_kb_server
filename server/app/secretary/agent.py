@@ -23,7 +23,6 @@ from app.secretary import semantic
 from app.secretary import tools_db
 from app.secretary import tools_file
 from app.secretary import tools_kb
-from app.secretary import tools_result
 
 _ctx = ssl.create_default_context()
 _ctx.check_hostname = False
@@ -245,9 +244,6 @@ def execute(name, args):
     if name == 'describe_table':
         # 2026-10-30：字段明细从"常驻提示词"改成"按需取"（system 里只留表清单）。
         return describe_table(args.get('table', ''))
-    if name == 'get_rule':
-        # 2026-10-30：规则不再靠向量检索《判据规则》，改成按主题/别名精确取。
-        return get_rule(args.get('topic', ''), args.get('key', ''))
     if name == 'list_metrics':
         return tools_db.list_metrics()
     if name == 'metric_query':
@@ -274,43 +270,10 @@ def execute(name, args):
                 _outs = list(_ex.map(_one_sql, _items))
             return {'multi': True, 'count': len(_outs), 'results': _outs}
         return _one_sql(_sql)
-    if name == 'read_result':
-        # 2026-11-08：取回交付层落盘的分片（工具结果太大时只管给前几条，其余放这里）。
-        return tools_result.read_result(args.get('ref', ''), args.get('offset') or 0,
-                                        args.get('limit') or 20)
-    # ── 文件类（2026-11-05）────────────────────────────────────────────
-    if name == 'read_howto':
-        # 2026-11-12：做法就是用户配的说明书，模型自己按需读；读了之后出文件自动按它套版式。
-        from app.secretary import howto as _ht
-        from app.secretary import tools_file as _tf
-        task = str(args.get('task') or '').strip()
-        if not task:
-            return {'menu': _ht.menu(), 'text': _ht.menu_text(),
-                    'note': '上面是做法目录。要写文件/表格/汇报、校对、速读前，先看有没有对应的；'
-                            '有就 read_howto(task) 取正文照做，没有就按你自己的判断做。'}
-        item = _ht.get(task) or _ht.match(task)
-        if not item:
-            return {'error': '没有这份做法：%s' % task, 'menu': _ht.tasks()}
-        _tf.set_howto(item['task'])
-        return {'task': item['task'], 'product': item['product'],
-                'tone': item.get('tone') or '', 'outline': item.get('outline') or [],
-                'length': item.get('length') or {}, 'check': item.get('check') or [],
-                'body': _ht.body(item.get('doc_id'))}
-    if name == 'read_file':
-        from app.secretary import tools_file
-        return tools_file.read_file(args.get('file_id', ''), args.get('offset') or 0,
-                                    args.get('limit') or 40)
-    if name == 'kb_read':
-        from app.secretary import tools_file
-        return tools_file.kb_read(args.get('doc_id'), args.get('doc_name') or '',
-                                  args.get('offset') or 0, args.get('limit') or 40)
     if name == 'make_file':
         from app.secretary import tools_file
         return tools_file.make_file(args.get('kind', ''), args.get('spec') or {},
                                     self_check=bool(args.get('self_check', True)))
-    if name == 'run_code':
-        from app.secretary import tools_file
-        return tools_file.run_code(args.get('code', ''), args.get('timeout') or 60)
     return {'error': 'unknown tool ' + str(name)}
 
 
@@ -350,12 +313,6 @@ def describe_table(table):
             item += '：' + desc[:120]
         lines.append('- ' + item)
     return {'table': name, 'fields': len(cols), 'text': '\n'.join(lines)}
-
-
-def get_rule(topic='', key=''):
-    """按主题取规则条目（规则文档 = 知识库里 doc_type='rule' 的文档）。"""
-    from app.secretary import rule_doc
-    return rule_doc.get(topic, key)
 
 
 def rule_slices(query, top_k=None, limit=700):
