@@ -33,6 +33,7 @@ function textOf(p: any): string {
 function itemsToView(items: any[]) {
   const bubbles: BubbleItem[] = []
   const steps: Step[] = []
+  const arts: Artifact[] = []
   for (const it of items) {
     const p = it.payload || {}
     const t = it.type
@@ -46,9 +47,15 @@ function itemsToView(items: any[]) {
         key: 't' + it.id, name: TOOL_LABEL[p.name] || p.name || '工具',
         args: String(p.arguments || ''), brief: '', status: 'success',
       })
+    } else if (t === 'tool_result') {
+      try {
+        const raw = typeof p.output === 'string' ? p.output : ''
+        const d = raw ? JSON.parse(raw) : null
+        if (d && d.url) arts.push({ name: d.name, url: d.url, file_id: d.file_id, kind: d.kind })
+      } catch { /* 不是文件结果 */ }
     }
   }
-  return { bubbles, steps }
+  return { bubbles, steps, arts }
 }
 
 export default function AgentChat() {
@@ -84,7 +91,7 @@ export default function AgentChat() {
       const v = itemsToView(r.items || [])
       setBubbles(v.bubbles)
       setSteps(v.steps)
-      setArtifacts([])
+      setArtifacts(v.arts)
       setActive(sid)
       sessionRef.current = sid
     } catch {

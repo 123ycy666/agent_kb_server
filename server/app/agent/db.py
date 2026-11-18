@@ -38,6 +38,13 @@ create table if not exists qa.agent_note (
   unique (session_id, key)
 );
 
+create table if not exists qa.agent_alias (
+  old_id text primary key,
+  session_id uuid not null,
+  user_id bigint,
+  created_at timestamptz default now()
+);
+
 create table if not exists qa.agent_memory (
   id bigserial primary key,
   user_id bigint not null,

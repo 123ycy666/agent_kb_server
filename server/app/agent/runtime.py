@@ -10,7 +10,7 @@ from datetime import date
 from agents import (Agent, OpenAIChatCompletionsModel, Runner, set_tracing_disabled)
 from openai import AsyncOpenAI
 
-from app.agent import config, memory, session as sess, skills, trace
+from app.agent import config, db, memory, session as sess, skills, trace
 from app.agent.tools import Ctx, TOOLS
 
 set_tracing_disabled(True)
@@ -44,6 +44,12 @@ def instructions(ctx: Ctx) -> str:
         '- 出文件前先看技能目录：有对应技能就 read_skill 读完整篇再照做；没有就按自己的能力做。',
         '- 技能里写了检查项的，交付前自己逐条核对并在回答里说明；不要调自检工具。',
         '- 用户说「这个文件」「刚才那份」「再改一版」时，用 read_file 按 file_id 读回来再改，别重写无关部分。',
+        '- 查数：先读《查数口径》，口径里有的表直接用；表清单最多看一次，别反复列全表。',
+        '- 同一种查询失败或返回空两次，就换做法；换不了就在回答里写「需另行核实」，别硬凑。',
+        '- 要查多个数时，把互不依赖的查询一次发出来（同一条消息里多个 query_data），别一条一条排队。',
+        '- 没有数字要求时，不要为了凑数去查库。',
+        '- 用户明确要文件（说了 word / excel / ppt，或说「出一份」「做个表」）时，先把文件做出来；'
+        '缺的信息用【待确认】标在正文里，在回答末尾列出来让他补，不要只反问不动手。',
         '- 缺关键信息又猜不出来时，问一句再动手；能从上下文推出来的不要问。',
         '',
         '【技能目录】',
@@ -75,7 +81,8 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
     """产出 SSE 事件字典。调用方负责拼成 event-stream。"""
     base, key, model_name = config.llm()
     file_ids = [str(x) for x in (file_ids or []) if str(x).strip()]
-    session_id = session_id or sess.create(user_id, title=(text or '')[:40])
+    db.ensure()
+    session_id = sess.resolve_alias(session_id or '', user_id, title=(text or '')[:40])
     sess.ensure(session_id, user_id)
     sess.touch(session_id, title=(text or '')[:40])
 
@@ -181,3 +188,46 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
 
 def stop(run_id: str) -> None:
     STOP[run_id] = True
+
+
+# ── 同步一次性运行：给老接口 /api/ask 的 office 分支用 ──────────────────
+
+def run_once(*, user_id: int, text: str, session_id: str | None = None,
+             file_ids: list[str] | None = None) -> dict:
+    """同步入口（调用方必须在线程池里跑）。内部复用同一条 SSE 循环。"""
+    async def _collect():
+        evs = []
+        async for ev in run_stream(user_id=int(user_id or 0), text=text,
+                                   session_id=session_id, file_ids=file_ids):
+            evs.append(ev)
+        return evs
+
+    t0 = time.time()
+    events = asyncio.run(_collect())
+    tools = [e.get('name') for e in events if e.get('type') == 'tool_call']
+    artifacts = [{'name': e.get('name'), 'file_id': e.get('file_id'),
+                  'url': e.get('url'), 'kind': e.get('kind')}
+                 for e in events if e.get('type') == 'artifact']
+    done = next((e for e in events if e.get('type') == 'done'), {}) or {}
+    sp = [{'kind': 'tool', 'tool': n} for n in tools]
+    return {
+        'input_question': text,
+        'answer': done.get('answer') or '',
+        'lane': 'office',
+        'product': (artifacts[0].get('kind') if artifacts else ''),
+        'howto': '', 'spec_used': {}, 'self_check': {}, 'number_sources': [],
+        'artifacts': artifacts, 'trace': sp, 'steps': len(sp),
+        'model': config.llm()[2],
+        'db_query_count': tools.count('query_data'),
+        'kb_query_count': tools.count('search_kb'),
+        'no_db_query': 'query_data' not in tools,
+        'qtype': '办公' if artifacts else '读件',
+        'today': date.today().isoformat(), 'files': [],
+        'injection': {'total': 0, 'budget': 0, 'parts': [], 'compressed': []},
+        'stopped': done.get('status') == 'stopped',
+        'elapsed_ms': int((time.time() - t0) * 1000),
+        'tokens': done.get('tokens') or 0,
+        'session_id': done.get('session_id') or session_id,
+        'qa_id': None,
+    }
+

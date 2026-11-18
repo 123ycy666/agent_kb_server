@@ -129,7 +129,10 @@ async def db_schema(ctx: RunContextWrapper[Ctx], table: str = '', keyword: str =
     def _run():
         from app.secretary import agent as A
         if list_tables:
-            return A.execute('list_tables', {'keyword': str(keyword or '')})
+            out = A.execute('list_tables', {'keyword': str(keyword or '')})
+            if isinstance(out, dict) and isinstance(out.get('rows'), list) and len(out['rows']) > 40:
+                out = dict(out, rows=out['rows'][:40], note='只列前 40 张；要具体的表用 table 看字段')
+            return out
         if keyword:
             return A.execute('find_column', {'keyword': str(keyword)})
         if table:

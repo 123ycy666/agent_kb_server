@@ -64,9 +64,11 @@ def history_for_ui(session_id: str) -> list[dict]:
 
 
 def add(session_id: str, items_: list[dict], type_: str = '') -> None:
-    """写会话项。type_ 为空时按 item 自身推断。"""
+    """写会话项。type_ 为空时按 item 自身推断。思维链不落库：下一轮用不上，只占上下文。"""
     with db.conn() as c:
         for it in items_:
+            if str(it.get('type') or '') == 'reasoning':
+                continue
             t = type_ or _type_of(it)
             c.execute(
                 'insert into qa.agent_item (session_id, type, payload, tokens) '
@@ -86,6 +88,32 @@ def _type_of(it: dict) -> str:
     if t == 'function_call_output':
         return 'tool_result'
     return t or 'item'
+
+
+def _is_uuid(v) -> bool:
+    try:
+        uuid.UUID(str(v))
+        return True
+    except Exception:                              # noqa: BLE001
+        return False
+
+
+def resolve_alias(old_id: str, user_id: int, title: str = '') -> str:
+    """老接口的会话 id（如 s_xxx）映射成智能体会话；新 id 直接用。"""
+    old_id = str(old_id or '').strip()
+    if not old_id:
+        return create(user_id, title=title)
+    row = db.one('select session_id from qa.agent_alias where old_id=%s', (old_id,))
+    if row:
+        return str(row['session_id'])
+    if _is_uuid(old_id):
+        ensure(old_id, user_id)
+        return old_id
+    new = create(user_id, title=title)
+    db.execute('insert into qa.agent_alias (old_id, session_id, user_id) values (%s,%s,%s) '
+               'on conflict (old_id) do nothing', (old_id, new, user_id))
+    row = db.one('select session_id from qa.agent_alias where old_id=%s', (old_id,))
+    return str(row['session_id']) if row else new
 
 
 class PGSession:

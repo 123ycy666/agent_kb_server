@@ -380,12 +380,17 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
         _r = {'lane': 'ask_db', 'product': '', 'why': '判断失败'}
     trace.append({'seq': len(trace) + 1, 'kind': 'route', 'tool': 'router', 'result': _r})
     if _r.get('lane') != 'ask_db' and not force_data:
-        from app.secretary import loop as _loop
-        return _loop.run(raw_question, lane='office', model=model, session_id=session_id,
-                         user_id=user_id, user_code=user_code, client_ip=client_ip,
-                         channel=channel, doc_files=list(doc_files or []) or None,
-                         doc_context=doc_context, trace=trace, should_stop=should_stop,
-                         max_steps=max_steps, today=today, routed=_r)
+        from app.agent import runtime as _agent_rt
+        fids = []
+        for f in (doc_files or []):
+            if isinstance(f, dict) and f.get('file_id'):
+                fids.append(str(f['file_id']))
+            elif isinstance(f, str):
+                fids.append(f)
+        out = _agent_rt.run_once(user_id=user_id or 0, text=raw_question,
+                                 session_id=session_id, file_ids=fids or None)
+        out['trace'] = list(trace) + list(out.get('trace') or [])
+        return out
 
     # ① 名称与错字纠错
     t_fix = time.time()
