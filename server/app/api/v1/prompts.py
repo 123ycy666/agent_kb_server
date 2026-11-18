@@ -102,11 +102,11 @@ def impact_body(key: str, actor: CurrentActor = Depends(get_current_actor)):
     return _jr(res)
 
 
-@router.get('/impact/office', summary='干活线影响面：全链路（按 loop.run 的执行顺序）')
+@router.get('/impact/office', summary='干活线影响面：全新智能体链路（入口→指令→技能→工具→会话记忆→运行产物）')
 def impact_office(actor: CurrentActor = Depends(get_current_actor)):
-    """干活线从进来到交出文件，被哪些输入影响。只读，不改配置。"""
-    from app.secretary import impact_office as O
-    segs = O.segments()
+    """干活线一条真实链路用到哪些输入。只读，不改配置。"""
+    from app.secretary import impact_agent as O
+    segs = O.segments(actor.user_id)
     return _jr({'segments': segs,
                 'counts': {'segments': len(segs),
                            'items': sum(len(s['items']) for s in segs)}})
@@ -114,8 +114,8 @@ def impact_office(actor: CurrentActor = Depends(get_current_actor)):
 
 @router.get('/impact/office/body', summary='干活线某一项输入的原文')
 def impact_office_body(key: str, actor: CurrentActor = Depends(get_current_actor)):
-    from app.secretary import impact_office as O
-    res = O.body(key)
+    from app.secretary import impact_agent as O
+    res = O.body(key, actor.user_id)
     if res.get('error'):
         return _jr(res, 404)
     return _jr(res)

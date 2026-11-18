@@ -32,29 +32,39 @@ def _model():
     return OpenAIChatCompletionsModel(model=name, openai_client=_client(base, key))
 
 
+DEFAULT_IDENTITY = ('你是随州供电公司的办公秘书，服务对象是公司员工。'
+                    '用户一句话交代，你自己判断这活怎么干。')
+
+RULES = [
+    '要读文件、查数、查制度、出文件，就用工具做；不需要工具就直接回答。',
+    '数字只能来自 query_data 的结果；查不到就写「需另行核实」。',
+    '出文件前先看技能目录：有对应技能就 read_skill 读完整篇再照做；没有就按自己的能力做。',
+    '技能里写了检查项的，交付前自己逐条核对并在回答里说明；不要调自检工具。',
+    '用户说「这个文件」「刚才那份」「再改一版」时，用 read_file 按 file_id 读回来再改，别重写无关部分。',
+    '查数：先读《查数口径》，口径里有的表直接用；表清单最多看一次，别反复列全表。',
+    '同一种查询失败或返回空两次，就换做法；换不了就在回答里写「需另行核实」，别硬凑。',
+    '要查多个数时，把互不依赖的查询一次发出来（同一条消息里多个 query_data），别一条一条排队。',
+    '没有数字要求时，不要为了凑数去查库。',
+    '用户明确要文件（说了 word / excel / ppt，或说「出一份」「做个表」）时，先把文件做出来；'
+    '缺的信息用【待确认】标在正文里，在回答末尾列出来让他补，不要只反问不动手。',
+    '缺关键信息又猜不出来时，问一句再动手；能从上下文推出来的不要问。',
+]
+
+
+def identity() -> str:
+    """身份只有一处：提示词页的「身份」。读不到才用代码兜底。"""
+    try:
+        from app.secretary import prompt_text, prompts_data
+        t = (prompt_text.get('identity', prompts_data.IDENTITY) or '').strip()
+        return t or DEFAULT_IDENTITY
+    except Exception:                              # noqa: BLE001
+        return DEFAULT_IDENTITY
+
+
 def instructions(ctx: Ctx) -> str:
     catalog = skills.catalog(ctx.user_id, config.CATALOG_MAX) or '（还没配技能，按通用能力做）'
     about = memory.about(ctx.user_id, config.ABOUT_MAX)
-    lines = [
-        '你是随州供电公司的办公秘书，服务对象是公司员工。用户一句话交代，你自己判断这活怎么干。',
-        '',
-        '【作业规则】',
-        '- 要读文件、查数、查制度、出文件，就用工具做；不需要工具就直接回答。',
-        '- 数字只能来自 query_data 的结果；查不到就写「需另行核实」。',
-        '- 出文件前先看技能目录：有对应技能就 read_skill 读完整篇再照做；没有就按自己的能力做。',
-        '- 技能里写了检查项的，交付前自己逐条核对并在回答里说明；不要调自检工具。',
-        '- 用户说「这个文件」「刚才那份」「再改一版」时，用 read_file 按 file_id 读回来再改，别重写无关部分。',
-        '- 查数：先读《查数口径》，口径里有的表直接用；表清单最多看一次，别反复列全表。',
-        '- 同一种查询失败或返回空两次，就换做法；换不了就在回答里写「需另行核实」，别硬凑。',
-        '- 要查多个数时，把互不依赖的查询一次发出来（同一条消息里多个 query_data），别一条一条排队。',
-        '- 没有数字要求时，不要为了凑数去查库。',
-        '- 用户明确要文件（说了 word / excel / ppt，或说「出一份」「做个表」）时，先把文件做出来；'
-        '缺的信息用【待确认】标在正文里，在回答末尾列出来让他补，不要只反问不动手。',
-        '- 缺关键信息又猜不出来时，问一句再动手；能从上下文推出来的不要问。',
-        '',
-        '【技能目录】',
-        catalog,
-    ]
+    lines = [identity(), '', '【作业规则】'] + ['- ' + r for r in RULES] + ['', '【技能目录】', catalog]
     if about:
         lines += ['', '【关于我】', about]
     lines += ['', '【今天】' + date.today().isoformat()]
