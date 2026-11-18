@@ -73,7 +73,7 @@ function BodyView({ data }: { data: any }) {
 
 /* ───────────────────────── 就地改：材料分节 ───────────────────────── */
 
-function SectionList({ slot }: { slot: string }) {
+function SectionList({ slot, onChanged }: { slot: string; onChanged: () => void }) {
   const [secs, setSecs] = useState<any[]>([])
   const [dead, setDead] = useState<any[]>([])
   const [saving, setSaving] = useState(false)
@@ -128,6 +128,7 @@ function SectionList({ slot }: { slot: string }) {
       const skipped = secs.length - rows.length
       message.success(skipped ? `已保存；${skipped} 节没有正文，没存` : '已保存，下一轮生效')
       await load()
+      onChanged()
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -140,6 +141,7 @@ function SectionList({ slot }: { slot: string }) {
       await promptsApi.deleteSection(s.id)
       message.success('已删除，可在「已删除」里恢复')
       await load()
+      onChanged()
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -150,6 +152,7 @@ function SectionList({ slot }: { slot: string }) {
       await promptsApi.restoreSection(s.id)
       message.success('已恢复')
       await load()
+      onChanged()
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -163,6 +166,7 @@ function SectionList({ slot }: { slot: string }) {
       setImpOpen(false)
       setImpText('')
       await load()
+      onChanged()
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -307,7 +311,7 @@ function SectionList({ slot }: { slot: string }) {
 
 /* ───────────────────────── 就地改：文本键 ───────────────────────── */
 
-function TextKeyEditor({ keyName }: { keyName: string }) {
+function TextKeyEditor({ keyName, onChanged }: { keyName: string; onChanged?: () => void }) {
   const [body, setBody] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -330,6 +334,7 @@ function TextKeyEditor({ keyName }: { keyName: string }) {
     try {
       await promptsApi.saveTextKey(keyName, body)
       message.success('已保存，下一轮生效')
+      onChanged?.()
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -342,6 +347,7 @@ function TextKeyEditor({ keyName }: { keyName: string }) {
       await promptsApi.resetTextKey(keyName)
       message.success('已恢复成代码里的默认值')
       await load()
+      onChanged?.()
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -529,6 +535,7 @@ function ChainLane({ lane }: { lane: Lane }) {
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState<Item | null>(null)
   const [bd, setBd] = useState<any>(null)
+  const [tick, setTick] = useState(0)
 
   const loadSegs = lane === 'ask' ? promptsApi.impact : promptsApi.impactOffice
   const loadBody = lane === 'ask' ? promptsApi.impactBody : promptsApi.impactOfficeBody
@@ -562,7 +569,7 @@ function ChainLane({ lane }: { lane: Lane }) {
     loadBody(open.key)
       .then((r: any) => setBd(r))
       .catch((e) => message.error((e as Error).message))
-  }, [open])
+  }, [open, tick])
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -637,7 +644,10 @@ function ChainLane({ lane }: { lane: Lane }) {
             </Descriptions>
 
             {open.editor.startsWith('material:') ? (
-              <SectionList slot={open.editor.split(':')[1]} />
+              <SectionList
+                slot={open.editor.split(':')[1]}
+                onChanged={() => setTick((t) => t + 1)}
+              />
             ) : open.editor === 'askfill' ? (
               <AskfillEditor />
             ) : open.editor === 'route_rule' ? (
@@ -647,7 +657,10 @@ function ChainLane({ lane }: { lane: Lane }) {
             ) : open.editor === 'lexicon' ? (
               <LexiconEditor />
             ) : open.editor.startsWith('text:') ? (
-              <TextKeyEditor keyName={open.editor.split(':')[1]} />
+              <TextKeyEditor
+                keyName={open.editor.split(':')[1]}
+                onChanged={() => setTick((t) => t + 1)}
+              />
             ) : open.editor.startsWith('inject:') ? (
               <InjectTextEditor keyName={open.editor.split(':')[1]} />
             ) : null}
