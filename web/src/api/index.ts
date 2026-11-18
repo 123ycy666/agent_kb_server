@@ -935,11 +935,19 @@ export const promptsApi = {
   lexiconDelete: (key: string, id: number) =>
     http.delete<any, any>(`/prompts/lexicon/${key}/${id}`),
   material: (slot: string) => http.get<any, any>(`/prompts/material/${slot}`),
-  saveSection: (id: number, body: string) =>
-    http.post<any, any>(`/prompts/material/section/${id}`, { body }),
+  materialSave: (slot: string, sections: unknown[]) =>
+    http.put<any, any>(`/prompts/material/${slot}`, { sections }),
+  materialImport: (slot: string, text: string) =>
+    http.post<any, any>(`/prompts/material/${slot}/import`, { text }),
+  materialDeleted: (slot: string) =>
+    http.get<any, any>(`/prompts/material/${slot}/deleted`),
+  deleteSection: (id: number) => http.delete<any, any>(`/prompts/material/section/${id}`),
+  restoreSection: (id: number) =>
+    http.post<any, any>(`/prompts/material/section/${id}/restore`),
   texts: () => http.get<any, any>('/prompts/texts'),
   saveTextKey: (key: string, body: string) =>
     http.put<any, any>(`/prompts/texts/${key}`, { body }),
+  resetTextKey: (key: string) => http.delete<any, any>(`/prompts/texts/${key}`),
   tools: () => http.get<any, any>('/prompts/tools'),
 }
 

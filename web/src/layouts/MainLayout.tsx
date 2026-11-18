@@ -11,7 +11,6 @@ import {
   theme,
 } from 'antd'
 import {
-  BarChartOutlined,
   BookOutlined,
   ClusterOutlined,
   DatabaseOutlined,
@@ -49,7 +48,6 @@ export default function MainLayout() {
     { key: '/home', icon: <HomeOutlined />, label: <Link to="/home">首页</Link> },
     { key: '/chat', icon: <MessageOutlined />, label: <Link to="/chat">智能问答</Link> },
     { key: '/specs', icon: <BookOutlined />, label: <Link to="/specs">知识库</Link> },
-    { key: '/ask-data', icon: <BarChartOutlined />, label: <Link to="/ask-data">问数</Link> },
     {
       key: '/inject',
       icon: <ThunderboltOutlined />,
@@ -67,11 +65,6 @@ export default function MainLayout() {
     },
     { key: '/records', icon: <HistoryOutlined />, label: <Link to="/records">记录</Link> },
     { key: '/schema', icon: <DatabaseOutlined />, label: <Link to="/schema">库结构</Link> },
-    {
-      key: '/system',
-      icon: <SettingOutlined />,
-      label: <Link to="/system">系统</Link>,
-    },
   ]
 
   return (

@@ -15,7 +15,6 @@ import {
   message,
 } from 'antd'
 import {
-  BarChartOutlined,
   BookOutlined,
   DeploymentUnitOutlined,
   ExperimentOutlined,
@@ -24,7 +23,6 @@ import {
   HomeOutlined,
   MessageOutlined,
   ReloadOutlined,
-  SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -37,12 +35,10 @@ const PAGES = [
   { path: '/home', label: '首页', desc: '今日概览', icon: <HomeOutlined /> },
   { path: '/chat', label: '智能问答', desc: '四件套 · 产物', icon: <MessageOutlined /> },
   { path: '/specs', label: '知识库', desc: '说明书 · 资料 · 冲突', icon: <BookOutlined /> },
-  { path: '/ask-data', label: '问数', desc: '只影响问数线', icon: <BarChartOutlined /> },
   { path: '/inject', label: '提示词与注入', desc: '字数 · 预算 · 预览', icon: <ThunderboltOutlined /> },
   { path: '/tasks', label: '任务与预警', desc: '只读展示', icon: <DeploymentUnitOutlined /> },
   { path: '/records', label: '记录', desc: '会话 · 四件套 · 审计', icon: <HistoryOutlined /> },
   { path: '/eval', label: '评测', desc: '题集 · 跑分 · 对比', icon: <ExperimentOutlined /> },
-  { path: '/system', label: '系统', desc: '三态注册表 · 入口判据', icon: <SettingOutlined /> },
 ]
 
 export default function Overview() {

@@ -6,6 +6,8 @@ import {
   Drawer,
   Empty,
   Input,
+  Modal,
+  Popconfirm,
   Space,
   Table,
   Tabs,
@@ -13,7 +15,7 @@ import {
   Typography,
   message,
 } from 'antd'
-import { EditOutlined, EyeOutlined, SaveOutlined } from '@ant-design/icons'
+import { EditOutlined, EyeOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
 import { injectApi, promptsApi } from '../api'
 import { CompleteEditor, LexiconEditor, RouteRuleEditor } from '../components/ChainEditors'
 
@@ -73,18 +75,17 @@ function BodyView({ data }: { data: any }) {
 
 function SectionList({ slot }: { slot: string }) {
   const [secs, setSecs] = useState<any[]>([])
-  const [bodies, setBodies] = useState<Record<number, string>>({})
-  const [saving, setSaving] = useState<number | null>(null)
+  const [dead, setDead] = useState<any[]>([])
+  const [saving, setSaving] = useState(false)
+  const [showDead, setShowDead] = useState(false)
+  const [impOpen, setImpOpen] = useState(false)
+  const [impText, setImpText] = useState('')
 
   const load = () =>
-    promptsApi
-      .material(slot)
-      .then((r: any) => {
-        const list = r.sections ?? []
-        setSecs(list)
-        const next: Record<number, string> = {}
-        list.forEach((s: any) => (next[s.id] = s.body ?? ''))
-        setBodies(next)
+    Promise.all([promptsApi.material(slot), promptsApi.materialDeleted(slot)])
+      .then(([r, d]: any) => {
+        setSecs(r.sections ?? [])
+        setDead(d.rows ?? [])
       })
       .catch((e) => message.error((e as Error).message))
 
@@ -92,49 +93,214 @@ function SectionList({ slot }: { slot: string }) {
     load()
   }, [slot])
 
-  if (!secs.length) return <Empty description="这一槽没有内容" />
+  const patch = (i: number, p: any) =>
+    setSecs((prev) => prev.map((s, j) => (j === i ? { ...s, ...p } : s)))
 
-  const save = async (id: number) => {
-    setSaving(id)
+  const move = (i: number, dir: -1 | 1) =>
+    setSecs((prev) => {
+      const j = i + dir
+      if (j < 0 || j >= prev.length) return prev
+      const next = [...prev]
+      const [x] = next.splice(i, 1)
+      next.splice(j, 0, x)
+      return next
+    })
+
+  const save = async () => {
+    const rows = secs.filter((s) => String(s.body ?? '').trim())
+    if (!rows.length) {
+      message.warning('还没有正文可存')
+      return
+    }
+    setSaving(true)
     try {
-      await promptsApi.saveSection(id, bodies[id] ?? '')
-      message.success('已保存，下一轮生效')
+      await promptsApi.materialSave(
+        slot,
+        rows.map((s, i) => ({
+          id: s.id,
+          section: s.section,
+          body: s.body,
+          pinned: s.pinned !== false,
+          sort_no: i,
+          version_no: s.version_no,
+        })),
+      )
+      const skipped = secs.length - rows.length
+      message.success(skipped ? `已保存；${skipped} 节没有正文，没存` : '已保存，下一轮生效')
       await load()
     } catch (e) {
       message.error((e as Error).message)
     } finally {
-      setSaving(null)
+      setSaving(false)
     }
   }
 
+  const del = async (s: any) => {
+    try {
+      await promptsApi.deleteSection(s.id)
+      message.success('已删除，可在「已删除」里恢复')
+      await load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const restore = async (s: any) => {
+    try {
+      await promptsApi.restoreSection(s.id)
+      message.success('已恢复')
+      await load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const doImport = async () => {
+    setSaving(true)
+    try {
+      const r: any = await promptsApi.materialImport(slot, impText)
+      message.success(`已导入 ${r.sections ?? 0} 节`)
+      setImpOpen(false)
+      setImpText('')
+      await load()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const chars = secs.reduce((n, s) => n + String(s.body ?? '').length, 0)
+  const pinned = secs.filter((s) => s.pinned !== false).length
+
   return (
-    <Space direction="vertical" size={14} style={{ width: '100%' }}>
-      {secs.map((s: any) => (
-        <div key={s.id} style={{ width: '100%' }}>
-          <Space style={{ marginBottom: 4 }}>
-            <Text strong>{s.section}</Text>
+    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      <Space wrap>
+        <Button
+          size="small"
+          icon={<PlusOutlined />}
+          onClick={() =>
+            setSecs((prev) => [
+              ...prev,
+              { section: '新规则（点这里改标题）', body: '', pinned: true },
+            ])
+          }
+        >
+          新增一节
+        </Button>
+        <Button
+          type="primary"
+          size="small"
+          icon={<SaveOutlined />}
+          loading={saving}
+          onClick={() => void save()}
+        >
+          保存这一份
+        </Button>
+        <Button size="small" onClick={() => setImpOpen(true)}>
+          按 md 整份导入
+        </Button>
+        {dead.length ? (
+          <Button type="link" size="small" danger onClick={() => setShowDead((v) => !v)}>
+            已删除 {dead.length} 节
+          </Button>
+        ) : null}
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {secs.length} 节 · 必带 {pinned} 节 · {chars} 字
+        </Text>
+      </Space>
+
+      {showDead
+        ? dead.map((s: any) => (
+            <Space key={s.id}>
+              <Text delete>{s.section}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {String(s.body ?? '').length} 字
+              </Text>
+              <Button size="small" onClick={() => void restore(s)}>
+                恢复
+              </Button>
+            </Space>
+          ))
+        : null}
+
+      {secs.length ? null : <Empty description="这一份还是空的，点「新增一节」或整份导入" />}
+
+      {secs.map((s, i) => (
+        <div key={s.id ?? `new-${i}`} style={{ width: '100%' }}>
+          <Space wrap style={{ marginBottom: 4 }}>
+            <Button size="small" type="text" disabled={i === 0} onClick={() => move(i, -1)}>
+              ↑
+            </Button>
+            <Button
+              size="small"
+              type="text"
+              disabled={i === secs.length - 1}
+              onClick={() => move(i, 1)}
+            >
+              ↓
+            </Button>
+            <Input
+              size="small"
+              value={s.section}
+              placeholder="节标题（get_rule 认这个名字）"
+              onChange={(e) => patch(i, { section: e.target.value })}
+              style={{ width: 340, fontWeight: 600 }}
+            />
+            <Tag.CheckableTag
+              checked={s.pinned !== false}
+              onChange={(v) => patch(i, { pinned: v })}
+            >
+              {s.pinned !== false ? '必带' : '按需'}
+            </Tag.CheckableTag>
             <Text type="secondary">{String(s.body ?? '').length} 字</Text>
-            {s.pinned ? <Tag color="blue">必带</Tag> : <Tag>按需</Tag>}
+            {s.id ? (
+              <Popconfirm
+                title="删掉这一节？"
+                description="不再进提示词、get_rule 也取不到；可在「已删除」里恢复。"
+                okText="删除"
+                cancelText="不删"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void del(s)}
+              >
+                <Button size="small" type="link" danger>
+                  删除
+                </Button>
+              </Popconfirm>
+            ) : (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                还没保存
+              </Text>
+            )}
           </Space>
           <Input.TextArea
-            autoSize={{ minRows: 12, maxRows: 30 }}
-            value={bodies[s.id] ?? ''}
-            onChange={(e) => setBodies((b) => ({ ...b, [s.id]: e.target.value }))}
+            autoSize={{ minRows: 8, maxRows: 24 }}
+            value={s.body ?? ''}
+            onChange={(e) => patch(i, { body: e.target.value })}
           />
-          <Space style={{ marginTop: 6 }}>
-            <Button
-              type="primary"
-              size="small"
-              icon={<SaveOutlined />}
-              loading={saving === s.id}
-              onClick={() => void save(s.id)}
-            >
-              保存这一节
-            </Button>
-            <Text type="secondary">存完下一轮问答就用新内容</Text>
-          </Space>
         </div>
       ))}
+
+      <Modal
+        open={impOpen}
+        title="按 md 整份导入"
+        width={760}
+        okText="切节并覆盖"
+        cancelText="取消"
+        confirmLoading={saving}
+        onOk={() => void doImport()}
+        onCancel={() => setImpOpen(false)}
+      >
+        <Text type="secondary">
+          按 ## / ### 标题切节（正文里带 ### 的行也会被切开），整份替换这一份；原来的节会被软删，可在「已删除」里恢复。
+        </Text>
+        <Input.TextArea
+          rows={12}
+          style={{ marginTop: 8 }}
+          value={impText}
+          onChange={(e) => setImpText(e.target.value)}
+        />
+      </Modal>
     </Space>
   )
 }
@@ -171,6 +337,16 @@ function TextKeyEditor({ keyName }: { keyName: string }) {
     }
   }
 
+  const reset = async () => {
+    try {
+      await promptsApi.resetTextKey(keyName)
+      message.success('已恢复成代码里的默认值')
+      await load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
   return (
     <Space direction="vertical" size={6} style={{ width: '100%' }}>
       <Input.TextArea
@@ -182,6 +358,17 @@ function TextKeyEditor({ keyName }: { keyName: string }) {
         <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>
           保存这一段
         </Button>
+        <Popconfirm
+          title="恢复成代码里的默认值？"
+          description="页面上的改动会作废，正文回到代码里写的那份。"
+          okText="恢复"
+          cancelText="不恢复"
+          onConfirm={() => void reset()}
+        >
+          <Button size="small" danger>
+            恢复默认
+          </Button>
+        </Popconfirm>
         <Text type="secondary">{body.length} 字 · 存完下一轮生效</Text>
       </Space>
     </Space>

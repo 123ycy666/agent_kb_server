@@ -157,9 +157,11 @@ async def save_material(slot: str, request: Request,
     for i, x in enumerate(sections):
         if not isinstance(x, dict):
             return _jr({'error': 'sections 里第 %d 项不是对象' % (i + 1)}, 400)
-        rows.append({'section': str(x.get('section') or '')[:160],
+        rows.append({'id': x.get('id') or None,
+                     'section': str(x.get('section') or '')[:160],
                      'body': str(x.get('body') or ''),
                      'sort_no': i,
+                     'pinned': x.get('pinned', True),
                      'version_no': x.get('version_no') or 1})
     res = prompt_material.replace_slot(slot, rows, user=actor.username)
     return _jr(res, 200 if res.get('ok') else 500)

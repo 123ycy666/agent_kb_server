@@ -68,7 +68,7 @@ function createClient(baseURL: string) {
         clearToken()
         // 应用身份（API Key）请求失败时不跳转登录页
         if (!location.pathname.startsWith('/login')) {
-          location.href = '/login'
+          location.href = `${import.meta.env.BASE_URL}login`
         }
       }
 
@@ -85,8 +85,14 @@ function createClient(baseURL: string) {
   return inst
 }
 
+/**
+ * 部署前缀：根路径（线上）时是空串，行为与以前完全一致；
+ * 部署在子路径（如 /sandbox/）时是 '/sandbox'，接口跟着带前缀。
+ */
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+
 /** 知识库 / 管理面接口：`/api/v1/*` */
-export const http = createClient('/api/v1')
+export const http = createClient(`${BASE}/api/v1`)
 
 /** 问数（智能问答）接口：`/api/*`（无 v1 前缀） */
-export const agentHttp = createClient('')
+export const agentHttp = createClient(BASE)

@@ -312,7 +312,8 @@ def add_section(slot: str, section: str, body: str = '', pinned: bool = True,
                     'RETURNING id',
                     (slot, section, str(body or ''), sort_no, bool(pinned), str(user or '')[:64]))
                 got = cur.fetchone()
-                new_id = int((got or {}).get('id') or 0)
+                # pgdb 的 execute 已经把 RETURNING 那行吃掉存进 lastrowid，fetchone() 恒为 None
+                new_id = int((got or {}).get('id') or cur.lastrowid or 0)
                 clear_cache()
                 return {'ok': True, 'id': new_id, 'slot': slot, 'section': section}
             finally:

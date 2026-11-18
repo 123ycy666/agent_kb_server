@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  // 部署前缀：默认根路径（线上不变）；骨架实例挂在 /sandbox/ 下时用 VITE_BASE_PATH=/sandbox/ 构建
+  base: process.env.VITE_BASE_PATH || '/',
   server: {
     port: 5173,
     host: '127.0.0.1',
@@ -15,7 +17,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    outDir: process.env.VITE_OUT_DIR || 'dist',
     sourcemap: false,
     // ⚠️ 必须关闭「清空输出目录」：本机沙箱的 safe-delete 会拦截 vite 在
     //    emptyDir 阶段对 dist/assets 的 rmSync（回收站不可用 → 操作被中止），
