@@ -229,6 +229,11 @@ from app.api.v1 import doc_jobs as doc_jobs_api    # noqa: E402
 app.include_router(doc_files_api.router, prefix="/api")
 app.include_router(doc_jobs_api.router, prefix="/api")
 
+# 干活线智能体（2026-11-17 重建）：一个循环 + 内置工具 + 技能 + 会话
+from app.agent import api as agent_api_v2  # noqa: E402
+
+app.include_router(agent_api_v2.router, prefix="/api")
+
 # 工作流框架（2026-11-06）：规则文档 / 调度方案 / 运行记录 / 事项 / 发送记录 / 参数
 from app.workflow import api as workflow_api  # noqa: E402
 
