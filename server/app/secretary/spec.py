@@ -359,6 +359,94 @@ def classify(user_id, spec_id, *, role_code='', when_to_use='', applies=None,
                                        ('产物', prod)) if not v]}
 
 
+def _save_version(spec_id, name, body, meta, user_code) -> None:
+    row = _q("select version_no from kb.spec where id=%s", (spec_id,))
+    ver = int((row[0] or {}).get('version_no') or 1) if row else 1
+    _q("""insert into kb.spec_version (spec_id, version_no, name, body, meta, saved_by)
+                values (%s,%s,%s,%s,%s::jsonb,%s)
+                on conflict (spec_id, version_no) do update
+                   set name=excluded.name, body=excluded.body, saved_by=excluded.saved_by""",
+       (spec_id, ver, name, body, json.dumps(meta, ensure_ascii=False), str(user_code or '')))
+
+
+def create(user_id, *, name, body, role_code='', when_to_use='', applies=None,
+           product='', check_items=None, owner_scope='own', user_code='') -> dict:
+    """新建一篇技能：直接写正文，不用先有文件。落「待发布」，发布后才进目录。"""
+    ensure()
+    nm = str(name or '').strip()[:120]
+    if not nm:
+        return {'error': '技能名不能空'}
+    owner = None if owner_scope == 'global' else int(user_id)
+    row = _q("""insert into kb.spec
+                (name, role_code, space, when_to_use, applies, product, owner_id, status,
+                 body, check_items, version_no, created_by, updated_by)
+                values (%s,%s,'spec',%s,%s::jsonb,%s,%s,'pending',%s,%s::jsonb,1,%s,%s)
+                returning id""",
+             (nm, str(role_code or ''), str(when_to_use or ''),
+              json.dumps(applies or [], ensure_ascii=False), str(product or ''), owner,
+              body or '', json.dumps(check_items or [], ensure_ascii=False),
+              str(user_code or ''), str(user_code or '')))
+    spec_id = int(row[0]['id'])
+    _save_version(spec_id, nm, body or '',
+                  {'role_code': role_code, 'space': 'spec'}, user_code)
+    invalidate()
+    return {'id': spec_id, 'name': nm, 'status': 'pending', 'chars': len(body or '')}
+
+
+def save_draft(user_id, spec_id, *, name=None, body=None, role_code=None, when_to_use=None,
+               applies=None, product=None, check_items=None, owner_scope=None,
+               user_code='', admin=False) -> dict:
+    """存草稿：正文与四项一起写，状态回到「待发布」（退役的重新启用，也要再发布）。"""
+    ensure()
+    row = _q("select * from kb.spec where id=%s", (spec_id,))
+    if not row:
+        return {'error': '没有这篇技能'}
+    r = row[0]
+    if r.get('owner_id') is not None and str(r['owner_id']) != str(user_id) and not admin:
+        return {'error': '别人私有的技能不能改'}
+    nm = str(name if name is not None else (r.get('name') or '')).strip()[:120] or r['name']
+    new_body = body if body is not None else (r.get('body') or '')
+    owner = r.get('owner_id')
+    if owner_scope == 'global':
+        owner = None
+    elif owner_scope == 'own':
+        owner = int(user_id)
+    _q("""update kb.spec set name=%s, role_code=%s, when_to_use=%s, applies=%s::jsonb,
+                 product=%s, check_items=%s::jsonb, owner_id=%s, body=%s,
+                 status='pending', enabled=true, updated_by=%s, updated_at=now()
+            where id=%s""",
+       (nm,
+        str(role_code if role_code is not None else (r.get('role_code') or '')),
+        str(when_to_use if when_to_use is not None else (r.get('when_to_use') or '')),
+        json.dumps(applies if applies is not None else (r.get('applies') or []),
+                   ensure_ascii=False),
+        str(product if product is not None else (r.get('product') or '')),
+        json.dumps(check_items if check_items is not None else (r.get('check_items') or []),
+                   ensure_ascii=False),
+        owner, new_body, str(user_code or ''), spec_id))
+    _save_version(spec_id, nm, new_body,
+                  {'role_code': r.get('role_code') or '', 'space': r.get('space') or 'spec'},
+                  user_code)
+    invalidate()
+    return {'id': int(spec_id), 'name': nm, 'status': 'pending', 'chars': len(new_body)}
+
+
+def edit_view(user_id, spec_id, admin=False) -> dict:
+    """编辑用：任何状态的原文与四项（不看 published，只看归属）。"""
+    ensure()
+    row = _q("select * from kb.spec where id=%s", (spec_id,))
+    if not row or (not admin and not _mine(row[0], user_id)):
+        return {}
+    r = row[0]
+    return {'id': r['id'], 'name': r['name'], 'role_code': r.get('role_code') or '',
+            'space': r.get('space') or 'spec', 'status': r.get('status') or '',
+            'when_to_use': r.get('when_to_use') or '', 'applies': r.get('applies') or [],
+            'product': r.get('product') or '', 'check_items': r.get('check_items') or [],
+            'body': r.get('body') or '', 'owner': '本人' if r.get('owner_id') else '全局',
+            'version_no': r.get('version_no'), 'enabled': bool(r.get('enabled')),
+            'updated_at': str(r.get('updated_at') or '')}
+
+
 def enforce_not_retrievable() -> dict:
     """V17：说明书正文一律不进检索（H2.4）。
 

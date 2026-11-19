@@ -185,24 +185,16 @@ export default function ChatHistory() {
 
   return (
     <>
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 16 }}
-        message="历史对话"
-        description="这里是你自己的问答记录。左侧选一场会话，右侧看完整对话、查询口径与质量标记；也可以「继续此会话」接着聊。"
-        action={
-          <Button icon={<ReloadOutlined />} onClick={loadSessions} loading={listLoading}>
-            刷新
-          </Button>
-        }
-      />
-
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         <Card
           size="small"
           style={{ width: 380, flex: '0 0 380px' }}
           styles={{ body: { padding: 12 } }}
+          extra={
+            <Button size="small" icon={<ReloadOutlined />} onClick={loadSessions} loading={listLoading}>
+              刷新
+            </Button>
+          }
           title={
             <Space>
               <HistoryOutlined />
@@ -633,32 +625,6 @@ function ReportIndex() {
           ]}
         />
       ))}
-    </Space>
-  )
-}
-
-export function RecordsPage() {
-  return (
-    <Space direction="vertical" size={14} style={{ width: '100%' }}>
-      <div>
-        <Title level={4} style={{ margin: 0 }}>
-          记录
-        </Title>
-        <Text type="secondary">会话回放、四件套与审计日志集中在同一页。</Text>
-      </div>
-      <Alert
-        type="info"
-        showIcon
-        message="每条问答都能展开四件套"
-        description="会话回放里每条 AI 回答下方新增「查看本轮四件套」；四件套页签可按 qa_id 逐条核对。"
-      />
-      <Tabs
-        items={[
-          { key: 'sessions', label: '会话与回放', children: <ChatHistory /> },
-          { key: 'four', label: '四件套', children: <ReportIndex /> },
-          { key: 'audit', label: '审计', children: <AuditLogs /> },
-        ]}
-      />
     </Space>
   )
 }

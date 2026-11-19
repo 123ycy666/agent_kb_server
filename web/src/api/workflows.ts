@@ -100,6 +100,14 @@ export interface WfItem {
 export const wfApi = {
   templates: (t: string) =>
     agentHttp.get<any, { work_type: string; label: string; sections: WfSection[] }>(`${B}/templates/${t}`),
+  /** 预警概览：按类计数、未读数、最近一轮（概览页与预警页都用） */
+  overview: () =>
+    agentHttp.get<any, {
+      alert_types: { alert_type: string; total: number }[]
+      tiers: Record<string, number>
+      unread: number
+      last_run: { doc_name: string; finished_at?: string | null; status: string; hit_n: number } | null
+    }>(`${B}/items/overview`),
   docs: (params: Record<string, unknown> = {}) =>
     agentHttp.get<any, { items: WfDoc[] }>(`${B}/docs`, { params }),
   doc: (id: number) => agentHttp.get<any, WfDoc>(`${B}/docs/${id}`),

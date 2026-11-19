@@ -1,100 +1,94 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Avatar, Dropdown, Layout, Menu, Typography } from 'antd'
 import {
-  Avatar,
-  Dropdown,
-  Layout,
-  Menu,
-  Space,
-  Tag,
-  Typography,
-  theme,
-} from 'antd'
-import {
+  AlertOutlined,
+  AppstoreOutlined,
   BookOutlined,
   ClusterOutlined,
-  DatabaseOutlined,
   DeploymentUnitOutlined,
-  ExperimentOutlined,
-  HistoryOutlined,
-  HomeOutlined,
   LogoutOutlined,
   MessageOutlined,
+  RobotOutlined,
   SettingOutlined,
   ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../store/auth'
+import { uiPrefs } from '../components/ui/prefs'
 
-const { Header, Sider, Content } = Layout
+const { Sider, Content } = Layout
 const { Text } = Typography
 
+const NAV = [
+  { key: '/home', icon: <AppstoreOutlined />, label: '概览' },
+  { key: '/chat', icon: <MessageOutlined />, label: '对话' },
+  { key: '/agent', icon: <RobotOutlined />, label: '智能体' },
+  { key: '/skills', icon: <ThunderboltOutlined />, label: '技能' },
+  { key: '/kb', icon: <BookOutlined />, label: '知识库' },
+  { key: '/prompts', icon: <ClusterOutlined />, label: '提示词' },
+  { key: '/alerts', icon: <AlertOutlined />, label: '预警' },
+  { key: '/tasks', icon: <DeploymentUnitOutlined />, label: '任务' },
+  { key: '/settings', icon: <SettingOutlined />, label: '设置' },
+]
+
 export default function MainLayout() {
-  const { user, roles, logout } = useAuth()
+  const { user, logout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const [collapsed, setCollapsed] = useState(false)
-  const {
-    token: { colorBgContainer },
-  } = theme.useToken()
+  const [prefs, setPrefs] = useState(() => uiPrefs())
+
+  useEffect(() => {
+    const onPrefs = () => setPrefs(uiPrefs())
+    window.addEventListener('kb-ui-prefs', onPrefs)
+    return () => window.removeEventListener('kb-ui-prefs', onPrefs)
+  }, [])
+
+  const dark = prefs.sider === 'dark'
 
   const selectedKey = useMemo(() => {
-    const p = location.pathname
-    const seg = p.split('/')[1] || 'home'
-    return `/${seg}`
+    const seg = '/' + (location.pathname.split('/')[1] || 'home')
+    return NAV.some((n) => n.key === seg) ? seg : '/home'
   }, [location.pathname])
-
-  const items = [
-    { key: '/home', icon: <HomeOutlined />, label: <Link to="/home">首页</Link> },
-    { key: '/chat', icon: <MessageOutlined />, label: <Link to="/chat">智能问答</Link> },
-    { key: '/specs', icon: <BookOutlined />, label: <Link to="/specs">知识库</Link> },
-    {
-      key: '/inject',
-      icon: <ThunderboltOutlined />,
-      label: <Link to="/inject">提示词</Link>,
-    },
-    {
-      key: '/runtime',
-      icon: <SettingOutlined />,
-      label: <Link to="/runtime">运行配置</Link>,
-    },
-    {
-      key: '/tasks',
-      icon: <DeploymentUnitOutlined />,
-      label: <Link to="/tasks">任务与预警</Link>,
-    },
-    { key: '/records', icon: <HistoryOutlined />, label: <Link to="/records">记录</Link> },
-    { key: '/schema', icon: <DatabaseOutlined />, label: <Link to="/schema">库结构</Link> },
-  ]
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={216}>
-        <div className="kb-logo">
-          <ClusterOutlined style={{ fontSize: 20 }} />
-          {!collapsed && <span style={{ marginLeft: 8 }}>秘书智能体</span>}
-        </div>
-        <Menu theme="dark" mode="inline" selectedKeys={[selectedKey]} items={items} />
-      </Sider>
-
-      <Layout>
-        <Header
-          style={{
-            background: colorBgContainer,
-            padding: '0 20px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderBottom: '1px solid #f0f0f0',
-          }}
-        >
-          <Text strong>统一知识库与智能问答平台 · 管理端</Text>
-          <Space size="middle">
-            {roles.map((r) => (
-              <Tag key={r} color={r === 'admin' ? 'gold' : 'blue'}>
-                {r}
-              </Tag>
-            ))}
+      <Sider
+        width={220}
+        theme={dark ? 'dark' : 'light'}
+        style={{
+          position: 'fixed',
+          left: 0,
+          top: 0,
+          bottom: 0,
+          height: '100vh',
+          background: dark ? '#001529' : '#fff',
+          borderRight: dark ? undefined : '1px solid #f0f0f0',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <div className="kb-logo" style={dark ? undefined : { background: '#fff', color: '#1677ff' }}>
+            <ClusterOutlined style={{ fontSize: 18 }} />
+            <span style={{ marginLeft: 8 }}>秘书智能体</span>
+          </div>
+          <Menu
+            theme={dark ? 'dark' : 'light'}
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            items={NAV.map((n) => ({
+              key: n.key,
+              icon: n.icon,
+              label: <Link to={n.key}>{n.label}</Link>,
+            }))}
+            style={{ borderInlineEnd: 0 }}
+          />
+          <div
+            style={{
+              marginTop: 'auto',
+              padding: 12,
+              borderTop: `1px solid ${dark ? 'rgba(255,255,255,.12)' : '#f0f0f0'}`,
+            }}
+          >
             <Dropdown
               menu={{
                 items: [
@@ -110,15 +104,22 @@ export default function MainLayout() {
                 ],
               }}
             >
-              <Space style={{ cursor: 'pointer' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                 <Avatar size="small" icon={<UserOutlined />} />
-                <Text>{user?.display_name || user?.username}</Text>
-              </Space>
+                <Text
+                  style={{ color: dark ? 'rgba(255,255,255,.85)' : undefined, fontSize: 13 }}
+                  ellipsis
+                >
+                  {user?.display_name || user?.username}
+                </Text>
+              </div>
             </Dropdown>
-          </Space>
-        </Header>
+          </div>
+        </div>
+      </Sider>
 
-        <Content style={{ margin: 16 }}>
+      <Layout style={{ marginLeft: 220 }}>
+        <Content style={{ padding: 16, minHeight: '100vh', fontSize: prefs.font }}>
           <Outlet />
         </Content>
       </Layout>

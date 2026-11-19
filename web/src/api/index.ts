@@ -102,65 +102,6 @@ export interface UploadResult {
   conflict_status?: 'checking' | 'done' | 'failed'
 }
 
-export interface Role {
-  id: number
-  name: string
-  description?: string
-  is_builtin: boolean
-  created_at: string
-  permission_codes: string[]
-  user_count: number
-}
-
-export interface Permission {
-  id: number
-  code: string
-  description?: string
-  group_name: string
-}
-
-export interface AppUser {
-  id: number
-  username: string
-  display_name?: string
-  email?: string
-  status: string
-  external_id?: string
-  created_at?: string
-  role_ids: number[]
-  role_names: string[]
-  // ── t_employee 员工字段（HR 权威，只读展示）──────────────
-  employee_id?: number
-  actual_name?: string
-  phone?: string
-  department_id?: number
-  administrator_flag?: boolean
-  disabled_flag?: boolean
-  deleted_flag?: boolean
-  /** 是否已有本地投影（登录过）；false = 尚未登录 */
-  projected?: boolean
-}
-
-export interface ConflictItem {
-  id: number
-  kb_id: number
-  new_doc_id: number
-  old_doc_id: number
-  conflict_type: string
-  relation: string
-  similarity_score?: number
-  rerank_score?: number
-  reason?: string
-  new_snippet?: string
-  old_snippet?: string
-  resolution?: string
-  status: string
-  created_at: string
-  new_doc_name?: string
-  old_doc_name?: string
-  old_doc_version?: number
-}
-
 export interface AuditLog {
   id: number
   actor_type: string
@@ -417,24 +358,6 @@ export const docApi = {
 //  标签
 // ══════════════════════════════════════════════════════════════
 
-export const tagApi = {
-  list: (keyword?: string) =>
-    http.get<any, Page<Tag>>('/tags', { params: { keyword, page_size: 300 } }),
-  create: (data: { name: string; description?: string }) =>
-    http.post<any, Tag>('/tags', data),
-  update: (id: number, data: { description?: string }) =>
-    http.patch<any, Tag>(`/tags/${id}`, data),
-  /** 重命名：会同步改写所有文档与切片上的标签值 */
-  rename: (oldName: string, newName: string) =>
-    http.post<any, any>('/tags/rename', { old_name: oldName, new_name: newName }),
-  /** 删除：会从所有文档上摘除该标签 */
-  remove: (name: string) =>
-    http.delete<any, any>(`/tags/${encodeURIComponent(name)}`),
-  /** 检索页的标签筛选可选项 */
-  options: () =>
-    http.get<any, { options: { name: string; usage_count: number }[] }>('/tags/options'),
-}
-
 // ══════════════════════════════════════════════════════════════
 //  检索
 // ══════════════════════════════════════════════════════════════
@@ -451,30 +374,6 @@ export const searchApi = {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  冲突
-// ══════════════════════════════════════════════════════════════
-
-export const conflictApi = {
-  list: (params: Record<string, unknown> = {}) =>
-    http.get<any, Page<ConflictItem>>('/conflicts', { params }),
-  stats: (kbId?: number) =>
-    http.get<any, any>('/conflicts/stats', { params: { kb_id: kbId } }),
-  detect: (docId: number) =>
-    http.post<any, any>('/conflicts/detect', { doc_id: docId }),
-  resolve: (id: number, resolution: string, note?: string) =>
-    http.post<any, any>(`/conflicts/${id}/resolve`, { resolution, note }),
-  /**
-   * 全库一致性扫描（管理员）。
-   * ⚠️ 会覆盖全部文档（含你的不可见文档），用于补上日常检测的盲区。
-   */
-  fullScan: (kbId: number, onlyUnscanned = true) =>
-    http.post<any, any>('/conflicts/scan', {
-      kb_id: kbId,
-      only_unscanned: onlyUnscanned,
-    }),
-}
-
-// ══════════════════════════════════════════════════════════════
 //  任务
 // ══════════════════════════════════════════════════════════════
 
@@ -482,19 +381,6 @@ export const taskApi = {
   list: (params: Record<string, unknown> = {}) =>
     http.get<any, Page<TaskItem>>('/tasks', { params }),
   get: (id: string) => http.get<any, TaskItem>(`/tasks/${id}`),
-}
-
-// ══════════════════════════════════════════════════════════════
-//  权限
-// ══════════════════════════════════════════════════════════════
-
-// ⚠️ 本系统只有 admin / user 两种固定角色，不提供「创建 / 修改 / 删除角色」接口。
-// ⚠️ 2026-10-14 统一用户表后用户管理收敛为只读：员工由 HR 系统维护，
-//    createUser / updateUser 已随之后端一并移除（改角色请到 HR 系统调整 administrator_flag）。
-export const rbacApi = {
-  permissions: () => http.get<any, Permission[]>('/permissions'),
-  roles: () => http.get<any, Role[]>('/roles'),
-  users: () => http.get<any, AppUser[]>('/users'),
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -530,6 +416,20 @@ export const systemApi = {
   health: () => http.get<any, any>('/system/health'),
   formats: () => http.get<any, any>('/system/formats'),
   info: () => http.get<any, any>('/system/info'),
+  /** 设置页只读信息：员工源（MySQL 地址/表/状态）与存储目录 */
+  settings: () =>
+    http.get<any, {
+      employee_source: {
+        kind: string
+        host: string
+        port: number
+        database: string
+        table: string
+        ok: boolean
+        detail: string
+      }
+      storage: { upload_dir: string; output_dir: string; max_upload_mb: number }
+    }>('/system/settings'),
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -812,39 +712,17 @@ export interface RegistryNode {
   values?: Record<string, unknown>
 }
 
-export interface EvalSuite {
-  id: number
-  name: string
-  note: string
-  n: number
-  created_at: string
-}
-
-export interface EvalRun {
-  id: number
-  suite_id: number
-  tag: string
-  total: number
-  passed: number
-  score: number
-  by_class: Record<string, number[]>
-  created_at: string
-}
-
-export interface EvalItem {
-  seq: number
-  cls: string
-  question: string
-  answer: string
-  passed: boolean
-  verdict: string
-  secs: number
-}
-
 export const specsApi = {
   roles: () => http.get<any, { items: SpecRole[] }>('/specs/roles'),
   list: (space?: string) =>
     http.get<any, SpecListResult>('/specs', { params: space ? { space } : undefined }),
+  /** 新建技能：直接写正文，不用先传文件（落「待发布」） */
+  create: (body: Record<string, unknown>) => http.post<any, any>('/specs', body),
+  /** 存草稿：正文与四项一起写，状态回「待发布」 */
+  save: (id: number, body: Record<string, unknown>) => http.put<any, any>(`/specs/${id}`, body),
+  /** 编辑用原文：任何状态都能读（按归属） */
+  edit: (id: number) => http.get<any, any>(`/specs/${id}/edit`),
+  retired: () => http.get<any, { items: any[] }>('/specs/retired'),
   upload: (form: FormData) =>
     http.post<any, any>('/specs/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -855,6 +733,7 @@ export const specsApi = {
   preview: (id: number) => http.get<any, SpecPreview>(`/specs/${id}/preview`),
   publish: (id: number) => http.post<any, any>(`/specs/${id}/publish`),
   retire: (id: number) => http.post<any, any>(`/specs/${id}/retire`),
+  enable: (id: number) => http.post<any, any>(`/specs/${id}/enable`),
   tryRun: (data: { name?: string; question?: string; spec_id?: number }) =>
     http.post<any, any>('/specs/try-run', data),
 }
@@ -949,18 +828,4 @@ export const promptsApi = {
     http.put<any, any>(`/prompts/texts/${key}`, { body }),
   resetTextKey: (key: string) => http.delete<any, any>(`/prompts/texts/${key}`),
   tools: () => http.get<any, any>('/prompts/tools'),
-}
-
-export const evalApi = {
-  classes: () => http.get<any, { items: string[] }>('/eval/classes'),
-  suites: () => http.get<any, { items: EvalSuite[] }>('/eval/suites'),
-  createSuite: (data: { name: string; note: string; questions: unknown[] }) =>
-    http.post<any, { id: number; n: number }>('/eval/suites', data),
-  run: (data: { suite_id: number; tag: string; limit: number }) =>
-    http.post<any, any>('/eval/run', data),
-  runs: () => http.get<any, { items: EvalRun[] }>('/eval/runs'),
-  runDetail: (id: number) =>
-    http.get<any, { run: EvalRun; items: EvalItem[] }>(`/eval/run/${id}`),
-  compare: (a: number, b: number) =>
-    http.get<any, any>('/eval/compare', { params: { a, b } }),
 }

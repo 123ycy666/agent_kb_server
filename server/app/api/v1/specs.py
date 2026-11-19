@@ -68,6 +68,40 @@ async def upload(file: UploadFile = File(...), role_code: str = Form(''),
     return _jr(res)
 
 
+@router.post('', summary='新建技能：直接写正文（不传文件）')
+async def create_spec(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    body = await request.json()
+    res = SP.create(actor.user_id, name=body.get('name') or '', body=body.get('body') or '',
+                    role_code=body.get('role_code') or '',
+                    when_to_use=body.get('when_to_use') or '',
+                    applies=body.get('applies') or [], product=body.get('product') or '',
+                    check_items=body.get('check_items') or [],
+                    owner_scope=body.get('owner_scope') or 'own',
+                    user_code=actor.username)
+    return _jr(res, 400 if res.get('error') else 200)
+
+
+@router.put('/{spec_id:int}', summary='存草稿：正文与四项一起写，状态回待发布')
+async def save_spec(spec_id: int, request: Request,
+                    actor: CurrentActor = Depends(get_current_actor)):
+    body = await request.json()
+    res = SP.save_draft(actor.user_id, spec_id, name=body.get('name'), body=body.get('body'),
+                        role_code=body.get('role_code'), when_to_use=body.get('when_to_use'),
+                        applies=body.get('applies'), product=body.get('product'),
+                        check_items=body.get('check_items'),
+                        owner_scope=body.get('owner_scope'), user_code=actor.username,
+                        admin=actor.is_admin)
+    return _jr(res, 400 if res.get('error') else 200)
+
+
+@router.get('/{spec_id:int}/edit', summary='编辑用原文（任何状态，按归属）')
+def edit_spec(spec_id: int, actor: CurrentActor = Depends(get_current_actor)):
+    res = SP.edit_view(actor.user_id, spec_id, admin=actor.is_admin)
+    if not res:
+        return _jr({'error': '看不到这篇技能'}, 404)
+    return _jr(res)
+
+
 @router.post('/{spec_id}/classify', summary='填四项：什么时候用 / 适用 / 产物 / 归属')
 async def classify(spec_id: int, request: Request,
                    actor: CurrentActor = Depends(get_current_actor)):

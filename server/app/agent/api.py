@@ -112,18 +112,41 @@ class ConfigIn(BaseModel):
     skills: dict | None = None
 
 
+def _when_not(t) -> str:
+    """从工具 docstring 里取「别用在：…」那一段（页面上只读展示）。"""
+    for line in (getattr(t, 'description', '') or '').split('\n'):
+        if line.strip().startswith('别用在'):
+            return line.strip()
+    return ''
+
+
 @router.get('/agent/config', summary='主智能体的配置')
 def read_config(actor: CurrentActor = Depends(get_current_actor)):
-    from app.agent import runtime, skills
+    from app.agent import config, runtime, skills
     from app.secretary import prompt_text
     off = runtime.disabled_tools()
     mode, names = runtime.skills_scope()
     return {
         'style': runtime.style_text(),
-        'tools': [{'name': t.name, 'on': t.name not in off} for t in runtime.TOOLS],
+        'tools': [{'name': t.name, 'on': t.name not in off, 'when_not': _when_not(t)}
+                  for t in runtime.TOOLS],
         'skills': {'mode': mode, 'names': names, 'available': skills.names(int(actor.user_id or 0))},
         'identity': (prompt_text.get('identity', '') or '').strip(),
+        'model': {'name': config.llm()[2], 'max_turns': config.MAX_TURNS,
+                  'context_budget': config.CONTEXT_BUDGET, 'compact_at': config.COMPACT_AT},
     }
+
+
+@router.get('/agent/overview', summary='概览页：今日轮次与失败数')
+def overview(actor: CurrentActor = Depends(get_current_actor)):
+    _ensure()
+    row = db.one("select count(*) as turns, "
+                 "count(*) filter (where status not in ('done', 'running')) as failed, "
+                 "count(distinct session_id) as sessions "
+                 "from qa.agent_run where created_at::date = current_date")
+    return {'today_turns': int(row.get('turns') or 0),
+            'today_failed': int(row.get('failed') or 0),
+            'today_sessions': int(row.get('sessions') or 0)}
 
 
 @router.put('/agent/config', summary='改主智能体的配置（保存即生效）')

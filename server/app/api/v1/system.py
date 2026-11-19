@@ -54,3 +54,27 @@ def info(_: CurrentActor = Depends(get_current_actor)):
         "max_upload_mb": settings.max_upload_mb,
         "supported_formats": sorted(parsers.SUPPORTED_EXTENSIONS),
     }
+
+
+@router.get("/settings", summary="设置页只读信息：员工源与存储")
+def settings_view(_: CurrentActor = Depends(get_current_actor)):
+    from app.core.database import check_mysql_connection
+    from app.secretary import doc_files
+
+    ok, detail = check_mysql_connection()
+    return {
+        "employee_source": {
+            "kind": "MySQL",
+            "host": settings.mysql_host,
+            "port": settings.mysql_port,
+            "database": settings.mysql_db_business,
+            "table": "t_employee",
+            "ok": ok,
+            "detail": detail,
+        },
+        "storage": {
+            "upload_dir": str(settings.upload_path),
+            "output_dir": str(doc_files.ROOT),
+            "max_upload_mb": settings.max_upload_mb,
+        },
+    }

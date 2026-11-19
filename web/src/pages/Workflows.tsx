@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Alert, Button, Card, Collapse, Descriptions, Drawer, Empty, Form, Input, InputNumber,
-  Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Typography, message,
+  Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import { wfApi } from '../api/workflows'
 import type { WfDoc, WfItem, WfRun, WfSchedule, WfSection } from '../api/workflows'
 
-const { Title, Paragraph, Text } = Typography
+const { Paragraph, Text } = Typography
 
 const TIER: Record<string, { text: string; color: string }> = {
   high: { text: '高', color: 'red' },
@@ -60,7 +60,7 @@ function LogsTable({ logs }: { logs: WfRun['logs'] }) {
 }
 
 // ══════════════════════════════════════════════ 1 规则文档
-function DocsTab({ readOnly = false }: { readOnly?: boolean }) {
+export function DocsTab({ readOnly = false }: { readOnly?: boolean }) {
   const [docs, setDocs] = useState<WfDoc[]>([])
   const [loading, setLoading] = useState(false)
   const [openNew, setOpenNew] = useState(false)
@@ -333,7 +333,7 @@ function DocEditor({ doc, onTest, onClose }: {
   )
 }
 
-function SchedulesTab({ docs, readOnly = false }: { docs: WfDoc[]; readOnly?: boolean }) {
+export function SchedulesTab({ docs, readOnly = false }: { docs: WfDoc[]; readOnly?: boolean }) {
   type T = { unit: string; n: number; hh: number; mm: number; dow: number; dom: number }
   const [list, setList] = useState<WfSchedule[]>([])
   const [open, setOpen] = useState(false)
@@ -492,7 +492,7 @@ function SchedulesTab({ docs, readOnly = false }: { docs: WfDoc[]; readOnly?: bo
   )
 }
 // ══════════════════════════════════════════════ 3 运行记录
-function RunsTab() {
+export function RunsTab() {
   const [rows, setRows] = useState<WfRun[]>([])
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<WfRun | null>(null)
@@ -574,7 +574,7 @@ function RunsTab() {
 }
 
 // ══════════════════════════════════════════════ 4 事项
-function ItemsTab({ readOnly = false }: { readOnly?: boolean }) {
+export function ItemsTab({ readOnly = false }: { readOnly?: boolean }) {
   const [rows, setRows] = useState<WfItem[]>([])
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState<string | undefined>('open')
@@ -656,7 +656,7 @@ function ItemsTab({ readOnly = false }: { readOnly?: boolean }) {
 }
 
 // ══════════════════════════════════════════════ 5 发送记录
-function NotifyTab() {
+export function NotifyTab() {
   const [rows, setRows] = useState<any[]>([])
   const load = useCallback(async () => {
     try { setRows((await wfApi.notifications()).items) } catch (e) { message.error(err(e)) }
@@ -676,37 +676,6 @@ function NotifyTab() {
           { title: '结果', dataIndex: 'ok', width: 80, render: (v) => (v ? <Tag color="green">成功</Tag> : <Tag color="red">失败</Tag>) },
         ]} />
     </Card>
-  )
-}
-
-export default function Workflows({ readOnly = false }: { readOnly?: boolean }) {
-  const [tab, setTab] = useState('docs')
-  const [docs, setDocs] = useState<WfDoc[]>([])
-
-  const reloadDocs = useCallback(async () => {
-    try { setDocs((await wfApi.docs()).items) } catch (e) { message.error(err(e)) }
-  }, [])
-  useEffect(() => { void reloadDocs() }, [reloadDocs, tab])
-
-  return (
-    <div style={{ padding: 16 }}>
-      <Title level={4} style={{ marginTop: 0 }}>工作流</Title>
-      <Paragraph type="secondary" style={{ marginBottom: 12 }}>
-        规则写在文档里，代码里没有业务口径；定时方案到点按文档跑一轮。
-      </Paragraph>
-      {readOnly ? (
-        <Alert type="info" showIcon style={{ marginBottom: 12 }}
-          message="只读展示，不参与流转"
-          description="任务与预警本页只用于查看；调整规则、启停或新建方案请到工作流维护入口。" />
-      ) : null}
-      <Tabs activeKey={tab} onChange={setTab} destroyInactiveTabPane items={[
-        { key: 'docs', label: '规则文档', children: <DocsTab readOnly={readOnly} /> },
-        { key: 'schedules', label: '定时任务', children: <SchedulesTab docs={docs} readOnly={readOnly} /> },
-        { key: 'runs', label: '运行记录', children: <RunsTab /> },
-        { key: 'items', label: '事项', children: <ItemsTab readOnly={readOnly} /> },
-        { key: 'notify', label: '发送记录', children: <NotifyTab /> },
-      ]} />
-    </div>
   )
 }
 
