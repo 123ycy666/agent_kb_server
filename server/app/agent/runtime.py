@@ -41,6 +41,7 @@ RULES = [
     '出文件前先看技能目录：有对应技能就 read_skill 读完整篇再照做；没有就按自己的能力做。',
     '技能里写了检查项的，交付前自己逐条核对并在回答里说明；不要调自检工具。',
     '用户说「这个文件」「刚才那份」「再改一版」时，用 read_file 按 file_id 读回来再改，别重写无关部分。',
+    '用户要改动（换地点、加一句、换格式）时，改完必须交出新的文件；只回一句「已改」不交文件，等于没改完。',
     '查数：先读《查数口径》，口径里有的表直接用；表清单最多看一次，别反复列全表。',
     '同一种查询失败或返回空两次，就换做法；换不了就在回答里写「需另行核实」，别硬凑。',
     '要查多个数时，把互不依赖的查询一次发出来（同一条消息里多个 query_data），别一条一条排队。',
@@ -61,11 +62,11 @@ def _field(obj, name: str) -> str:
 
 
 def identity() -> str:
-    """身份只有一处：提示词页的「身份」。读不到才用代码兜底。"""
+    """身份只有一处：提示词页的「身份」。读不到才用代码兜底。占位符要替换掉再给模型。"""
     try:
-        from app.secretary import prompt_text, prompts_data
+        from app.secretary import prompt_text, prompts_data, project
         t = (prompt_text.get('identity', prompts_data.IDENTITY) or '').strip()
-        return t or DEFAULT_IDENTITY
+        return project.fill(t) if t else DEFAULT_IDENTITY
     except Exception:                              # noqa: BLE001
         return DEFAULT_IDENTITY
 

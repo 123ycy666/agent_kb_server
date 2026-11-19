@@ -5,6 +5,7 @@ import {
 import { SaveOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { agentHttp } from '../../api/client'
+import { specsApi } from '../../api'
 
 type Cfg = {
   style: string
@@ -32,6 +33,34 @@ export default function AgentConfigPanel() {
   const [mode, setMode] = useState('all')
   const [names, setNames] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  const [skillName, setSkillName] = useState('')
+  const [whenToUse, setWhenToUse] = useState('')
+
+  const uploadSkill = async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('space', 'spec')
+    fd.append('name', skillName || '')
+    fd.append('when_to_use', whenToUse || '')
+    fd.append('applies', '')
+    fd.append('product', '')
+    fd.append('role_code', '')
+    fd.append('global_scope', '0')
+    try {
+      const r: any = await specsApi.upload(fd)
+      try {
+        await specsApi.publish(r.spec_id)
+        message.success(`已上传并发布《${r.name}》，下一轮生效`)
+      } catch {
+        message.warning(`已上传《${r.name}》，但还没发布；去知识库页补四项后发布`)
+      }
+      setSkillName('')
+      setWhenToUse('')
+      await load()
+    } catch (e: any) {
+      message.error(e?.message || '上传失败')
+    }
+  }
 
   const load = async () => {
     try {
@@ -125,6 +154,29 @@ export default function AgentConfigPanel() {
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           新增或改技能正文在 <Link to="/specs">知识库</Link> 那页；《查数口径》也在那里改。
         </Typography.Text>
+      </Card>
+
+      <Card size="small" title="上传技能">
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Input value={skillName} onChange={(e) => setSkillName(e.target.value)}
+            placeholder="技能名（留空就用文件里的名字）" />
+          <Input value={whenToUse} onChange={(e) => setWhenToUse(e.target.value)}
+            placeholder="什么时候用它（一句话，模型靠这句判断要不要读）" />
+          <Space>
+            <label style={{ cursor: 'pointer', color: '#1677ff' }}>
+              选文件上传
+              <input type="file" style={{ display: 'none' }} accept=".md,.txt,.docx"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void uploadSkill(f)
+                  e.target.value = ''
+                }} />
+            </label>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              上传后直接发布；没发布成功去知识库页补四项
+            </Typography.Text>
+          </Space>
+        </Space>
       </Card>
 
       <Card size="small" title="身份（只读）">

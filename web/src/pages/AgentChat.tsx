@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Empty, Popconfirm, Tooltip, Typography, message } from 'antd'
-import { DeleteOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
+import { DeleteOutlined, PlusOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons'
 import { agentHttp } from '../api/client'
 import { useAgent } from '../components/agent/useAgent'
 import MessageView, { JumpToBottom } from '../components/agent/MessageView'
@@ -80,6 +80,8 @@ export default function AgentChat() {
     })
   }
 
+  const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
+
   const del = async () => {
     if (!active) return
     try {
@@ -144,6 +146,12 @@ export default function AgentChat() {
             </div>
           ) : (
             msgs.map((m) => <MessageView key={m.key} m={m} />)
+          )}
+          {!running && msgs.length > 0 && lastUser && (
+            <Button size="small" icon={<ReloadOutlined />} style={{ marginBottom: 12 }}
+              onClick={() => submit(lastUser.text || '', lastUser.files || [])}>
+              重新生成
+            </Button>
           )}
         </div>
 

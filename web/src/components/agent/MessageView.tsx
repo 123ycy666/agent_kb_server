@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Spin, Typography } from 'antd'
 import {
   CheckCircleFilled, CloseCircleFilled, DownOutlined, FileExcelOutlined, FilePdfOutlined,
@@ -21,6 +21,7 @@ const mono: React.CSSProperties = {
 
 function ToolLine({ p }: { p: ToolPart }) {
   const [open, setOpen] = useState(false)
+  useEffect(() => { if (p.isError) setOpen(true) }, [p.isError])
   const icon = p.status === 'running'
     ? <Spin size="small" />
     : p.isError
@@ -137,10 +138,14 @@ export default function MessageView({ m }: { m: Msg }) {
       </div>
     )
   }
+  const hasText = m.parts.some((p) => p.kind === 'text' && p.text.trim() !== '')
   return (
     <div style={{ margin: '10px 0', maxWidth: '86%' }}>
       <Groups parts={m.parts} />
       {m.status === 'running' && m.parts.length === 0 && <Spin size="small" />}
+      {m.status !== 'running' && !hasText && m.parts.length === 0 && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>（这一轮没有正文，结果看文件卡片和右栏步骤）</Typography.Text>
+      )}
       {m.status === 'stopped' && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>已停止</Typography.Text>
       )}
