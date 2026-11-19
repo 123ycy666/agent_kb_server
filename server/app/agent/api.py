@@ -104,3 +104,39 @@ async def runs(session_id: str = '', actor: CurrentActor = Depends(get_current_a
 @router.get('/agent/runs/{run_id}/spans', summary='一轮的每一步')
 async def spans(run_id: str, actor: CurrentActor = Depends(get_current_actor)):
     return {'items': trace.spans(run_id)}
+
+
+class ConfigIn(BaseModel):
+    style: str | None = None
+    tools_off: list[str] | None = None
+    skills: dict | None = None
+
+
+@router.get('/agent/config', summary='主智能体的配置')
+def read_config(actor: CurrentActor = Depends(get_current_actor)):
+    from app.agent import runtime, skills
+    from app.secretary import prompt_text
+    off = runtime.disabled_tools()
+    mode, names = runtime.skills_scope()
+    return {
+        'style': runtime.style_text(),
+        'tools': [{'name': t.name, 'on': t.name not in off} for t in runtime.TOOLS],
+        'skills': {'mode': mode, 'names': names, 'available': skills.names(int(actor.user_id or 0))},
+        'identity': (prompt_text.get('identity', '') or '').strip(),
+    }
+
+
+@router.put('/agent/config', summary='改主智能体的配置（保存即生效）')
+def write_config(body: ConfigIn, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import prompt_text
+    who = str(actor.user_id or '')
+    out: dict = {}
+    if body.style is not None:
+        out['style'] = prompt_text.save('agent_style', body.style, who)
+    if body.tools_off is not None:
+        out['tools'] = prompt_text.save(
+            'agent_tools', json.dumps(body.tools_off, ensure_ascii=False), who)
+    if body.skills is not None:
+        out['skills'] = prompt_text.save(
+            'agent_skills', json.dumps(body.skills, ensure_ascii=False), who)
+    return out

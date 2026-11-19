@@ -74,7 +74,7 @@ def style_text() -> str:
     """回答风格是页面上的一段话；没配就不加这一节，走中性。"""
     try:
         from app.secretary import prompt_text
-        return (prompt_text.get('style', '') or '').strip()
+        return (prompt_text.get('agent_style', '') or '').strip()
     except Exception:                              # noqa: BLE001
         return ''
 
@@ -103,7 +103,7 @@ def disabled_tools() -> set[str]:
     """页面上关掉的工具名。"""
     try:
         from app.secretary import prompt_text
-        raw = (prompt_text.get('tools', '') or '').strip()
+        raw = (prompt_text.get('agent_tools', '') or '').strip()
         if raw:
             v = json.loads(raw)
             if isinstance(v, list):
@@ -118,8 +118,35 @@ def active_tools() -> list:
     return [t for t in TOOLS if getattr(t, 'name', '') not in off]
 
 
+def skills_scope() -> tuple[str, list[str]]:
+    """技能范围：all（默认）/ off / selected（只给名单里的）。"""
+    try:
+        from app.secretary import prompt_text
+        raw = (prompt_text.get('agent_skills', '') or '').strip()
+        if raw:
+            v = json.loads(raw)
+            mode = str(v.get('mode') or 'all')
+            if mode in ('off', 'selected'):
+                return mode, [str(x) for x in (v.get('names') or [])]
+    except Exception:                              # noqa: BLE001
+        pass
+    return 'all', []
+
+
+def catalog_text(user_id: int) -> str:
+    mode, names = skills_scope()
+    if mode == 'off':
+        return ''
+    text = skills.catalog(user_id, config.CATALOG_MAX) or ''
+    if mode == 'selected' and names:
+        keep = [ln for ln in text.split('\n')
+                if any(ln.lstrip('- ').strip().startswith(n) for n in names)]
+        return '\n'.join(keep)
+    return text
+
+
 def instructions(ctx: Ctx) -> str:
-    catalog = skills.catalog(ctx.user_id, config.CATALOG_MAX) or '（还没配技能，按通用能力做）'
+    catalog = catalog_text(ctx.user_id) or '（还没配技能，按通用能力做）'
     about = memory.about(ctx.user_id, config.ABOUT_MAX)
     lines = [identity(), '', '【作业规则】'] + ['- ' + r for r in RULES] + ['', '【技能目录】', catalog]
     style = style_text()

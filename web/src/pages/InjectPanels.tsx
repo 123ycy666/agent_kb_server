@@ -18,6 +18,7 @@ import {
 import { EditOutlined, EyeOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
 import { injectApi, promptsApi } from '../api'
 import { CompleteEditor, LexiconEditor, RouteRuleEditor } from '../components/ChainEditors'
+import AgentConfigPanel from '../components/agent/AgentConfigPanel'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -696,6 +697,7 @@ export default function InjectPanels() {
           items={[
             { key: 'ask', label: '问数线', children: <ChainLane lane="ask" /> },
             { key: 'work', label: '干活线', children: <ChainLane lane="office" /> },
+            { key: 'agent', label: '主智能体', children: <AgentConfigPanel /> },
           ]}
         />
       </Card>
