@@ -5,45 +5,43 @@ import { Link } from 'react-router-dom'
 import Page from '../components/ui/Page'
 import { useTab } from '../components/ui/useTab'
 import { AskfillEditor, BodyView, SectionList, TextKeyEditor } from '../components/PromptEditors'
+import { CompleteEditor, LexiconEditor, RouteRuleEditor } from '../components/ChainEditors'
 import { promptsApi } from '../api'
 
 const { Text, Paragraph } = Typography
 
-type Row = {
+type Item = {
   key: string
+  seg: string
   name: string
-  editor: 'material' | 'text' | 'askfill'
-  arg: string
-  size: string
   where: string
+  size: string
+  editable: boolean
+  takes_effect: string
+  note: string
+  editor: string
 }
 
-const ROWS: Row[] = [
-  { key: 'material_fetch', name: '口径材料', editor: 'material', arg: 'fetch', size: '', where: 'prompt_material' },
-  { key: 'material_answer', name: '作答规则', editor: 'material', arg: 'answer', size: '', where: 'prompt_material' },
-  { key: 'askfill', name: '补问法', editor: 'askfill', arg: '', size: '', where: 'prompt_text' },
-  { key: 'confirm', name: '问题确定', editor: 'text', arg: 'confirm', size: '', where: 'prompt_text' },
-]
-
 function ChainTab() {
-  const [rows, setRows] = useState<Row[]>(ROWS)
-  const [open, setOpen] = useState<Row | null>(null)
+  const [rows, setRows] = useState<Item[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState<Item | null>(null)
   const [body, setBody] = useState<any>(null)
   const [tick, setTick] = useState(0)
 
   const load = useCallback(() => {
+    setLoading(true)
     promptsApi
       .impact()
       .then((r: any) => {
-        const flat: any[] = (r.segments ?? []).flatMap((s: any) => s.items ?? [])
-        setRows(
-          ROWS.map((row) => {
-            const hit = flat.find((x: any) => x.key === row.key)
-            return { ...row, size: hit?.size || '—', where: hit?.where || row.where }
-          })
-        )
+        const flat: Item[] = []
+        for (const s of r.segments ?? []) {
+          for (const it of s.items ?? []) flat.push({ ...it, seg: s.name })
+        }
+        setRows(flat)
       })
       .catch((e) => message.error((e as Error).message))
+      .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => {
@@ -61,21 +59,23 @@ function ChainTab() {
       .catch((e) => message.error((e as Error).message))
   }, [open, tick])
 
-  const columns: ColumnsType<Row> = [
-    { title: '这一份', dataIndex: 'name', width: 160, render: (v: string) => <Text strong>{v}</Text> },
-    { title: '存在哪', dataIndex: 'where', width: 200, render: (v: string) => <Text code>{v}</Text> },
+  const columns: ColumnsType<Item> = [
+    { title: '环节', dataIndex: 'seg', width: 170, render: (v: string) => <Text strong>{v}</Text> },
+    { title: '这一份', dataIndex: 'name', ellipsis: true },
+    { title: '存哪', dataIndex: 'where', width: 230, render: (v: string) => <Text code>{v}</Text> },
     {
       title: '现在多大',
       dataIndex: 'size',
-      width: 160,
+      width: 120,
       render: (v: string) => <span style={{ fontVariantNumeric: 'tabular-nums' }}>{v}</span>,
     },
+    { title: '生效', dataIndex: 'takes_effect', width: 90 },
     {
       title: '操作',
-      width: 100,
-      render: (_: unknown, row: Row) => (
-        <Button type="link" size="small" onClick={() => setOpen(row)} aria-label={`编辑 ${row.name}`}>
-          编辑
+      width: 90,
+      render: (_: unknown, row: Item) => (
+        <Button type="link" size="small" onClick={() => setOpen(row)} aria-label={`${row.editable ? '编辑' : '查看'} ${row.name}`}>
+          {row.editable ? '编辑' : '查看'}
         </Button>
       ),
     },
@@ -83,28 +83,36 @@ function ChainTab() {
 
   return (
     <>
-      <Table<Row>
+      <Table<Item>
         size="small"
         rowKey="key"
+        loading={loading}
         columns={columns}
         dataSource={rows}
         pagination={false}
       />
-      <Drawer
-        open={open != null}
-        width={900}
-        title={open ? open.name : ''}
-        onClose={() => setOpen(null)}
-      >
+      <Drawer open={open != null} width={900} title={open ? open.name : ''} onClose={() => setOpen(null)}>
         {open ? (
           <Space direction="vertical" size={14} style={{ width: '100%' }}>
-            {open.editor === 'material' ? (
-              <SectionList slot={open.arg} onChanged={() => setTick((t) => t + 1)} />
+            <Space size={16} wrap>
+              <Text type="secondary">环节：{open.seg}</Text>
+              <Text type="secondary">存哪：{open.where}</Text>
+              <Text type="secondary">生效：{open.takes_effect}</Text>
+              <Text type="secondary">{open.note}</Text>
+            </Space>
+            {open.editor.startsWith('material:') ? (
+              <SectionList slot={open.editor.split(':')[1]} onChanged={() => setTick((t) => t + 1)} />
             ) : open.editor === 'askfill' ? (
               <AskfillEditor />
-            ) : (
-              <TextKeyEditor keyName={open.arg} onChanged={() => setTick((t) => t + 1)} />
-            )}
+            ) : open.editor === 'complete' ? (
+              <CompleteEditor />
+            ) : open.editor === 'lexicon' ? (
+              <LexiconEditor />
+            ) : open.editor === 'route_rule' ? (
+              <RouteRuleEditor />
+            ) : open.editor.startsWith('text:') ? (
+              <TextKeyEditor keyName={open.editor.split(':')[1]} onChanged={() => setTick((t) => t + 1)} />
+            ) : null}
             <div>
               <Text strong>现在注入的原文</Text>
               <div style={{ marginTop: 6 }}>
@@ -120,17 +128,10 @@ function ChainTab() {
 
 function AgentTab() {
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%', maxWidth: 900 }}>
-      <div>
-        <Text strong>身份</Text>
-        <div style={{ marginTop: 6 }}>
-          <TextKeyEditor keyName="identity" />
-        </div>
-      </div>
-      <Paragraph style={{ margin: 0 }}>
-        回答风格、技能读取范围、工具开关在 <Link to="/agent">智能体页</Link> 改。
-      </Paragraph>
-    </Space>
+    <Paragraph style={{ margin: 0 }}>
+      身份在问数线链路的第 6 项（装配 system）；回答风格、技能读取范围、工具开关、模型在{' '}
+      <Link to="/agent">智能体页</Link>。
+    </Paragraph>
   )
 }
 

@@ -114,12 +114,12 @@ export default function AgentConfigPanel() {
           label: '身份与风格',
           children: (
             <div>
-              <Field label="身份" hint="身份在提示词页改，改完下一轮生效">
+              <Field label="身份" hint="身份在提示词页问数线链路的第 ⑥ 项，改完下一轮生效">
                 <Space direction="vertical" size={4} style={{ width: '100%' }}>
                   <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }} type={cfg.identity ? undefined : 'secondary'}>
                     {cfg.identity || '（还没配身份，用代码里的兜底）'}
                   </Paragraph>
-                  <Link to="/prompts?tab=agent">去提示词页改</Link>
+                  <Link to="/prompts?tab=ask">去提示词页改</Link>
                 </Space>
               </Field>
               <Field label="回答风格" hint={`留空 = 中性默认　${style.length}/2000`}>
