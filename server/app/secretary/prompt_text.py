@@ -22,10 +22,13 @@ TEXT_KEYS = {
     # 以及 `"on": false` 把这一步整个关掉（关掉 = 一字不加）。
     'askfill': '补问法（JSON：on / default / asked / topic / how）',
     'confirm': '问题确定（空 = 不归整，原样往下传）',
+    # 主智能体（2026-11-18）：风格是用户的配置，代码不写死；工具开关也是配置。
+    'style': '回答风格（主智能体；空 = 中性）',
+    'tools': '工具开关（JSON：关掉的工具名数组，如 ["query_data"]）',
 }
 
 # 这些 key 存 JSON，保存时校验结构。
-_JSON_KEYS = {'askfill'}
+_JSON_KEYS = {'askfill', 'tools'}
 
 _TTL = 60.0
 _CACHE: dict = {}

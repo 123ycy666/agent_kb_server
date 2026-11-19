@@ -48,9 +48,7 @@ RULES = [
     '用户明确要文件（说了 word / excel / ppt，或说「出一份」「做个表」）时，先把文件做出来；'
     '缺的信息用【待确认】标在正文里，在回答末尾列出来让他补，不要只反问不动手。',
     '缺关键信息又猜不出来时，问一句再动手；能从上下文推出来的不要问。',
-    '像秘书说话：先说结果，再列要点与要补的信息；不复述工具过程，不写"根据查询结果"这类话。',
     '回答里不要出现 file_id、下载地址、/api/ 路径；文件由界面以附件卡片交付，你只说文件名和要点。',
-    '不要用 ✔ / ✗ 或表格做自检汇报；检查项自己核对，最多一句话「已按《技能名》核对」。',
 ]
 
 
@@ -72,10 +70,65 @@ def identity() -> str:
         return DEFAULT_IDENTITY
 
 
+def style_text() -> str:
+    """回答风格是页面上的一段话；没配就不加这一节，走中性。"""
+    try:
+        from app.secretary import prompt_text
+        return (prompt_text.get('style', '') or '').strip()
+    except Exception:                              # noqa: BLE001
+        return ''
+
+
+def _strip_tool(chunk: str, inside: bool) -> tuple[str, bool]:
+    """模型在没有工具可用时会把调用语法当正文吐出来，这里把它整段丢掉。"""
+    out = ''
+    while chunk:
+        if inside:
+            i = chunk.find('</tool_use>')
+            if i < 0:
+                return out, True
+            chunk = chunk[i + len('</tool_use>'):]
+            inside = False
+            continue
+        i = chunk.find('<tool_use>')
+        if i < 0:
+            return out + chunk, False
+        out += chunk[:i]
+        chunk = chunk[i + len('<tool_use>'):]
+        inside = True
+    return out, inside
+
+
+def disabled_tools() -> set[str]:
+    """页面上关掉的工具名。"""
+    try:
+        from app.secretary import prompt_text
+        raw = (prompt_text.get('tools', '') or '').strip()
+        if raw:
+            v = json.loads(raw)
+            if isinstance(v, list):
+                return {str(x) for x in v}
+    except Exception:                              # noqa: BLE001
+        pass
+    return set()
+
+
+def active_tools() -> list:
+    off = disabled_tools()
+    return [t for t in TOOLS if getattr(t, 'name', '') not in off]
+
+
 def instructions(ctx: Ctx) -> str:
     catalog = skills.catalog(ctx.user_id, config.CATALOG_MAX) or '（还没配技能，按通用能力做）'
     about = memory.about(ctx.user_id, config.ABOUT_MAX)
     lines = [identity(), '', '【作业规则】'] + ['- ' + r for r in RULES] + ['', '【技能目录】', catalog]
+    style = style_text()
+    if style:
+        lines += ['', '【回答风格】', style]
+    off = disabled_tools()
+    if off:
+        lines += ['', '【这轮不能用的工具】' + '、'.join(sorted(off)),
+                  '这些工具这轮关了：不要输出调用语法，直接说明这件事现在做不了。']
     if about:
         lines += ['', '【关于我】', about]
     lines += ['', '【今天】' + date.today().isoformat()]
@@ -117,11 +170,12 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
     artifacts: list[dict] = []
     calls: dict[str, dict] = {}
     gen_t0 = time.time()
+    leak = False
 
     yield {'type': 'run', 'run_id': run_id, 'session_id': session_id,
            'model': model_name}
 
-    agent = Agent(name='秘书', instructions=instructions(ctx), model=_model(), tools=TOOLS)
+    agent = Agent(name='秘书', instructions=instructions(ctx), model=_model(), tools=active_tools())
     result = Runner.run_streamed(agent, _input_text(text, file_ids, user_id),
                                  session=sess.PGSession(session_id),
                                  context=ctx,
@@ -140,7 +194,9 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
                     if delta:
                         if not gen_t0:
                             gen_t0 = time.time()
-                        yield {'type': 'text-delta', 'text': delta}
+                        delta, leak = _strip_tool(delta, leak)
+                        if delta:
+                            yield {'type': 'text-delta', 'text': delta}
                 elif dt in ('response.completed', 'response.incomplete'):
                     resp = getattr(d, 'response', None)
                     usage = getattr(resp, 'usage', None)
@@ -199,7 +255,7 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
         STOP.pop(run_id, None)
 
     try:
-        answer = str(getattr(result, 'final_output', '') or '')
+        answer = _strip_tool(str(getattr(result, 'final_output', '') or ''), False)[0]
     except Exception:                              # noqa: BLE001
         answer = ''
 
