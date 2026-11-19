@@ -48,7 +48,18 @@ RULES = [
     '用户明确要文件（说了 word / excel / ppt，或说「出一份」「做个表」）时，先把文件做出来；'
     '缺的信息用【待确认】标在正文里，在回答末尾列出来让他补，不要只反问不动手。',
     '缺关键信息又猜不出来时，问一句再动手；能从上下文推出来的不要问。',
+    '像秘书说话：先说结果，再列要点与要补的信息；不复述工具过程，不写"根据查询结果"这类话。',
+    '回答里不要出现 file_id、下载地址、/api/ 路径；文件由界面以附件卡片交付，你只说文件名和要点。',
+    '不要用 ✔ / ✗ 或表格做自检汇报；检查项自己核对，最多一句话「已按《技能名》核对」。',
 ]
+
+
+def _field(obj, name: str) -> str:
+    """SDK 的事件对象有的是模型、有的是 dict（工具输出就是 TypedDict），两种都取得到。"""
+    v = getattr(obj, name, None)
+    if v is None and isinstance(obj, dict):
+        v = obj.get(name)
+    return str(v or '')
 
 
 def identity() -> str:
@@ -99,11 +110,13 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
     out_dir = 'data/agent_out/%s' % session_id
     ctx = Ctx(user_id=user_id, session_id=session_id, out_dir=out_dir, actor=actor)
     run_id = trace.start(session_id, user_id, model_name)
+    root = trace.span(run_id, 'agent', '秘书', inp={'text': (text or '')[:500]})
     STOP[run_id] = False
     started = time.time()
     answer, stopped, error = '', False, ''
     artifacts: list[dict] = []
     calls: dict[str, dict] = {}
+    gen_t0 = time.time()
 
     yield {'type': 'run', 'run_id': run_id, 'session_id': session_id,
            'model': model_name}
@@ -121,49 +134,64 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
                 break
             if ev.type == 'raw_response_event':
                 d = getattr(ev, 'data', None)
-                if getattr(d, 'type', '') == 'response.output_text.delta':
+                dt = getattr(d, 'type', '')
+                if dt == 'response.output_text.delta':
                     delta = getattr(d, 'delta', '') or ''
                     if delta:
-                        yield {'type': 'delta', 'text': delta}
+                        if not gen_t0:
+                            gen_t0 = time.time()
+                        yield {'type': 'text-delta', 'text': delta}
+                elif dt in ('response.completed', 'response.incomplete'):
+                    resp = getattr(d, 'response', None)
+                    usage = getattr(resp, 'usage', None)
+                    tok = int(getattr(usage, 'total_tokens', 0) or 0)
+                    trace.span(run_id, 'generation', model_name,
+                                          parent_id=root or None,
+                                          inp={'model': model_name},
+                                          out={'tokens': tok},
+                                          ms=int((time.time() - gen_t0) * 1000) if gen_t0 else 0,
+                                          level='ERROR' if dt == 'response.incomplete' else 'DEFAULT')
+                    gen_t0 = 0.0
             elif ev.type == 'run_item_stream_event':
                 name = getattr(ev, 'name', '')
                 item = getattr(ev, 'item', None)
                 raw = getattr(item, 'raw_item', None)
                 if name == 'tool_called':
-                    fname = getattr(raw, 'name', '') or ''
-                    args = getattr(raw, 'arguments', '') or ''
-                    cid = getattr(raw, 'call_id', '') or ''
-                    calls[cid] = {'name': fname, 't0': time.time()}
-                    trace.span(run_id, 'tool', fname, {'args': str(args)[:2000]})
-                    yield {'type': 'tool_call', 'name': fname, 'args': str(args)[:2000],
-                           'call_id': cid}
+                    fname = _field(raw, 'name')
+                    args = _field(raw, 'arguments')
+                    cid = _field(raw, 'call_id')
+                    calls[cid] = {'name': fname, 'args': str(args), 't0': time.time()}
+                    yield {'type': 'tool-call-start', 'tool_call_id': cid, 'name': fname}
+                    if args:
+                        yield {'type': 'tool-call-args-delta', 'tool_call_id': cid,
+                               'text': str(args)[:2000]}
                 elif name == 'tool_output':
-                    cid = getattr(raw, 'call_id', '') or ''
-                    info = calls.pop(cid, None) or (calls.pop(next(iter(calls)), {}) if calls else {})
+                    cid = _field(raw, 'call_id')
+                    info = calls.pop(cid, None) or {}
                     fname = info.get('name') or 'tool'
                     ms = int((time.time() - info.get('t0', time.time())) * 1000)
                     body = getattr(item, 'output', '') or ''
                     text_body = body if isinstance(body, str) else json.dumps(
                         body, ensure_ascii=False, default=str)
-                    trace.span(run_id, 'tool_result', fname,
-                               {'result': text_body[:2000]}, ms=ms)
+                    is_error = text_body.startswith('工具执行失败')
+                    trace.span(run_id, 'tool', fname, parent_id=root or None, call_id=cid,
+                               inp={'args': str(info.get('args', ''))[:2000]},
+                               out={'result': text_body[:2000]}, ms=ms,
+                               level='ERROR' if is_error else 'DEFAULT')
+                    yield {'type': 'tool-call-result', 'tool_call_id': cid,
+                           'result': text_body[:4000], 'is_error': is_error}
+                    gen_t0 = time.time()
                     if fname == 'make_file':
                         try:
                             d = json.loads(text_body)
-                            if isinstance(d, dict) and d.get('url'):
-                                artifacts.append({'name': d.get('name'),
-                                                  'file_id': d.get('file_id'),
-                                                  'url': d.get('url'),
-                                                  'kind': d.get('kind')})
                         except Exception:          # noqa: BLE001
-                            pass
-                    brief = text_body[:400]
-                    yield {'type': 'tool_result', 'name': fname, 'ms': ms,
-                           'brief': brief}
-                elif name == 'message_output_created':
-                    txt = getattr(item, 'output', '') or ''
-                    if txt:
-                        yield {'type': 'message', 'text': str(txt)}
+                            d = None
+                        if isinstance(d, dict) and d.get('url'):
+                            made = {'name': d.get('name'), 'file_id': d.get('file_id'),
+                                    'url': d.get('url'), 'kind': d.get('kind'),
+                                    'size': d.get('bytes') or 0}
+                            artifacts.append(made)
+                            yield {'type': 'file', **made}
     except Exception as exc:                       # noqa: BLE001
         error = '%s: %s' % (type(exc).__name__, str(exc)[:400])
         yield {'type': 'error', 'message': error}
@@ -174,8 +202,6 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
         answer = str(getattr(result, 'final_output', '') or '')
     except Exception:                              # noqa: BLE001
         answer = ''
-    for a in artifacts:
-        yield {'type': 'artifact', **a}
 
     tokens = 0
     try:
@@ -191,9 +217,9 @@ async def run_stream(*, user_id: int, text: str, session_id: str | None = None,
         await asyncio.to_thread(sess.maybe_compact, session_id, model_name)
     except Exception:                              # noqa: BLE001
         pass
-    yield {'type': 'done', 'run_id': run_id, 'session_id': session_id,
+    yield {'type': 'finish', 'run_id': run_id, 'session_id': session_id,
            'status': status, 'answer': answer, 'artifacts': artifacts,
-           'ms': ms, 'tokens': tokens}
+           'usage': {'tokens': tokens}, 'error': error, 'ms': ms}
 
 
 def stop(run_id: str) -> None:
@@ -214,11 +240,11 @@ def run_once(*, user_id: int, text: str, session_id: str | None = None,
 
     t0 = time.time()
     events = asyncio.run(_collect())
-    tools = [e.get('name') for e in events if e.get('type') == 'tool_call']
+    tools = [e.get('name') for e in events if e.get('type') == 'tool-call-start']
     artifacts = [{'name': e.get('name'), 'file_id': e.get('file_id'),
                   'url': e.get('url'), 'kind': e.get('kind')}
-                 for e in events if e.get('type') == 'artifact']
-    done = next((e for e in events if e.get('type') == 'done'), {}) or {}
+                 for e in events if e.get('type') == 'file']
+    done = next((e for e in events if e.get('type') == 'finish'), {}) or {}
     sp = [{'kind': 'tool', 'tool': n} for n in tools]
     return {
         'input_question': text,
@@ -236,7 +262,7 @@ def run_once(*, user_id: int, text: str, session_id: str | None = None,
         'injection': {'total': 0, 'budget': 0, 'parts': [], 'compressed': []},
         'stopped': done.get('status') == 'stopped',
         'elapsed_ms': int((time.time() - t0) * 1000),
-        'tokens': done.get('tokens') or 0,
+        'tokens': (done.get('usage') or {}).get('tokens') or 0,
         'session_id': done.get('session_id') or session_id,
         'qa_id': None,
     }

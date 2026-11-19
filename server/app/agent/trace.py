@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""观测：每次运行一条 run，每次模型/工具一条 span。"""
+"""观测：一次请求一条 run；run 下挂树——模型调用 generation、工具调用 tool。"""
 from __future__ import annotations
 
-import time
 import uuid
 
 from psycopg.types.json import Jsonb
@@ -17,13 +16,17 @@ def start(session_id: str, user_id: int, model: str) -> str:
     return run_id
 
 
-def span(run_id: str, kind: str, name: str = '', payload=None, ms: int = 0) -> None:
+def span(run_id: str, kind: str, name: str = '', *, parent_id: int | None = None,
+         call_id: str = '', inp=None, out=None, ms: int = 0, level: str = 'DEFAULT') -> int:
+    """写一个观测节点，返回 id；子节点拿它当 parent_id。观测失败不影响回答。"""
     try:
-        db.execute('insert into qa.agent_span (run_id, kind, name, payload, ms) '
-                   'values (%s, %s, %s, %s, %s)',
-                   (run_id, kind, name or '', Jsonb(payload or {}), int(ms or 0)))
-    except Exception:                              # noqa: BLE001 - 观测失败不影响回答
-        pass
+        row = db.one('insert into qa.agent_span (run_id, kind, name, parent_id, call_id, '
+                     'input, output, ms, level) values (%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id',
+                     (run_id, kind, name or '', parent_id, call_id or '',
+                      Jsonb(inp or {}), Jsonb(out or {}), int(ms or 0), level or 'DEFAULT'))
+        return int(row.get('id') or 0)
+    except Exception:                              # noqa: BLE001
+        return 0
 
 
 def end(run_id: str, status: str, *, error: str = '', tokens: int = 0, ms: int = 0) -> None:

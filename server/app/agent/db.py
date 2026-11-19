@@ -79,6 +79,17 @@ create table if not exists qa.agent_span (
 create index if not exists agent_span_run_idx on qa.agent_span (run_id, id);
 """
 
+# 观测改树形：一次模型调用 / 一次工具调用各一个节点，带父子与唯一 ID。
+ALTERS = """
+alter table qa.agent_span add column if not exists parent_id bigint;
+alter table qa.agent_span add column if not exists call_id text default '';
+alter table qa.agent_span add column if not exists input jsonb;
+alter table qa.agent_span add column if not exists output jsonb;
+alter table qa.agent_span add column if not exists level text default 'DEFAULT';
+alter table qa.agent_item add column if not exists run_id uuid;
+alter table qa.agent_item add column if not exists seq int default 0;
+"""
+
 
 def conn(autocommit: bool = True):
     return psycopg.connect(pgdb.DSN, autocommit=autocommit, row_factory=dict_row)
@@ -87,6 +98,7 @@ def conn(autocommit: bool = True):
 def ensure() -> None:
     with conn() as c:
         c.execute(DDL)
+        c.execute(ALTERS)
 
 
 def query(sql: str, params=()) -> list[dict]:
