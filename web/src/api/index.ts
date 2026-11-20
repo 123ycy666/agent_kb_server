@@ -1,4 +1,4 @@
-import { agentHttp, http } from './client'
+import { agentHttp, http, siteHttp } from './client'
 
 // ══════════════════════════════════════════════════════════════
 //  类型
@@ -828,4 +828,15 @@ export const promptsApi = {
     http.put<any, any>(`/prompts/texts/${key}`, { body }),
   resetTextKey: (key: string) => http.delete<any, any>(`/prompts/texts/${key}`),
   tools: () => http.get<any, any>('/prompts/tools'),
+}
+
+// ══════════════════════════════════════════════════════════════
+//  现场配置（UI-001）：三条连接 + 连通性测试 + 保存并重连
+// ══════════════════════════════════════════════════════════════
+
+export const siteApi = {
+  status: () => siteHttp.get<any, any>('/status'),
+  config: () => siteHttp.get<any, any>('/config'),
+  save: (body: Record<string, unknown>) => siteHttp.put<any, any>('/config', body),
+  test: (body: Record<string, unknown>) => siteHttp.post<any, any>('/test', body),
 }

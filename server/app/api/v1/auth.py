@@ -37,20 +37,23 @@ def login(
     db: Session = Depends(get_db),
     mysql_db: Session = Depends(get_mysql_db),
 ):
-    # ① MySQL 员工认证（argon2id；用户不存在/密码错/已停用统一报错，防账号枚举）
-    try:
-        emp = employee.authenticate(mysql_db, payload.username, payload.password)
-    except Exception:  # noqa: BLE001 - 骨架/离线部署里没有我们的 HR 库，连不上不该 500
-        emp = None
+    # ① 当前现场库 base 片的口令（FR-LOGIN-001）：管理员在「现场配置」页种出来的账号走这条。
+    #    只要这一行有非空口令哈希就认 —— 不再看 LOCAL_LOGIN_ENABLED（那是骨架期的临时开关）。
+    from app.core.security import verify_password
 
-    # ①b 本地账号：密码哈希只存在 app_user.password_hash 的账号（骨架种出来的 admin）
     user_local = None
-    if emp is None and settings.local_login_enabled:
-        from app.core.security import verify_password
+    row = db.execute(select(AppUser).where(AppUser.username == payload.username)).scalar_one_or_none()
+    if row is not None and (row.password_hash or "").strip() \
+            and verify_password(payload.password, row.password_hash):
+        user_local = row
 
-        row = db.execute(select(AppUser).where(AppUser.username == payload.username)).scalar_one_or_none()
-        if row is not None and row.password_hash and verify_password(payload.password, row.password_hash):
-            user_local = row
+    # ② 业务库员工表（argon2id；用户不存在/密码错/已停用统一报错，防账号枚举）
+    emp = None
+    if user_local is None:
+        try:
+            emp = employee.authenticate(mysql_db, payload.username, payload.password)
+        except Exception:  # noqa: BLE001 - 骨架/离线部署里没有我们的 HR 库，连不上不该 500
+            emp = None
 
     if emp is None and user_local is None:
         audit.log_action(
@@ -122,21 +125,35 @@ def sso_login(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "SSO_DISABLED", "message": "该登录方式未启用"},
         )
-    if settings.sso_login_key and (x_sso_key or "") != settings.sso_login_key:
+    # 系统账号（X-Internal-Token）也能调这个入口：sga 后端没有浏览器、拿不到 X-SSO-Key。
+    from app.core import system_auth
+
+    via_system = bool(system_auth.token()) and system_auth.check(
+        request.headers.get("X-Internal-Token"))
+    if settings.sso_login_key and (x_sso_key or "") != settings.sso_login_key \
+            and not via_system:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "BAD_SSO_KEY", "message": "X-SSO-Key 不正确"},
         )
 
     login_name = (payload.username or "").strip()
-    emp = employee.fetch_employee(mysql_db, login_name)
+    emp = None
+    try:
+        emp = employee.fetch_employee(mysql_db, login_name)
+    except Exception:  # noqa: BLE001 - 骨架现场没有业务库，不该 500
+        emp = None
     if emp is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "USER_NOT_FOUND", "message": "员工不存在或已停用"},
-        )
-
-    user = employee.sync_projection(db, emp)
+        # 骨架/新现场没有 HR 库：账号就在当前库的 base 片，直接认它（FR-LOGIN-001）
+        row = db.execute(select(AppUser).where(AppUser.username == login_name)).scalar_one_or_none()
+        if row is None or row.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "USER_NOT_FOUND", "message": "账号不存在或已停用"},
+            )
+        user = row
+    else:
+        user = employee.sync_projection(db, emp)
 
     from app.core.rbac_config import permissions_for
 

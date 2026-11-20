@@ -11,10 +11,9 @@ from __future__ import annotations
 #   docs/08-历史归档/2026-11-03-删除的提示词规则/prompts_data-原文.py
 
 
-IDENTITY = ('你是{SITE_FULL}（{SITE_NAME}）的办公智能助手，服务本公司及所属供电所的管理人员。\n'
-            '用户问业务数据时，按系统里配的查数口径查库，再按作答规则把结果讲清楚。\n')
-
-
+# 身份正文 2026-11-19 移库：存当前库的 `cfg.prompt_text`（key=identity）。
+# 代码里只留一句**与现场无关**的兜底，避免空库时提示词里少一段导致模型跑偏。
+IDENTITY_FALLBACK = '你是办公智能助手，服务对象是本单位员工。'
 
 DOC_DEFAULTS = {'docx': {'body_font_cn': '仿宋_GB2312',
           'body_font_fallback': '仿宋',
@@ -61,17 +60,7 @@ MODE_RULES = {'produce': ['做', '写', '生成', '出一份', '出个', '整理
  'kb': ['规定', '流程', '制度', '办法', '标准', '怎么规定', '谁审批', '依据'],
  'chat': ['你好', '您好', 'hi', 'hello', '在吗', '谢谢', '你是谁', '你能干什么']}
 
-PRESET_GROUPS = ['缺陷工单', '项目预算', '线损指标']
-
-PRESET_ITEMS = [{'group': '缺陷工单', 'id': 'b_wo_open', 'text': '现在还有多少条缺陷工单没闭环？'},
- {'group': '缺陷工单', 'id': 'b_wo_new', 'text': '上个月新增了多少条缺陷工单？'},
- {'group': '缺陷工单', 'id': 'b_wo_top', 'text': '哪个供电所的缺陷工单最多？'},
- {'group': '缺陷工单', 'id': 'b_wo_node', 'text': '有多少条工单卡在审核环节？'},
- {'group': '缺陷工单', 'id': 'b_wo_flow', 'text': '缺陷工单审批要经过几个节点？'},
- {'group': '项目预算', 'id': 'b_bd_amt', 'text': '今年项目执行金额是多少？'},
- {'group': '项目预算', 'id': 'b_bd_rate', 'text': '预算执行率最低的是哪个单位？'},
- {'group': '项目预算', 'id': 'b_bd_cnt', 'text': '今年立项了多少个项目？'},
- {'group': '项目预算', 'id': 'b_bd_over', 'text': '有没有超预算的项目？'},
- {'group': '线损指标', 'id': 'b_ls_rate', 'text': '上个月全市线损率是多少？'},
- {'group': '线损指标', 'id': 'b_ls_worst', 'text': '哪个供电所的线损率最高？'},
- {'group': '线损指标', 'id': 'b_ls_sale', 'text': '今年售电量是多少？'}]
+# 示例问题 2026-11-19 移库：存当前库的 `cfg.preset_question`（页面可改）。
+# 代码里不留任何一条具体问题（两份重复副本已合并为一份入库）。
+PRESET_GROUPS: list = []
+PRESET_ITEMS: list = []

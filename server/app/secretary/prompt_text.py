@@ -86,7 +86,7 @@ def all_texts() -> list[dict]:
     """给页面：每个 key 的当前正文、是否被覆盖、字数。"""
     from app.secretary import preprocess, prompts_data
     defaults = {
-        'identity': prompts_data.IDENTITY,
+        'identity': prompts_data.IDENTITY_FALLBACK,
         'askfill': json.dumps(preprocess._ASKFILL_DEFAULT, ensure_ascii=False, indent=2),
         'confirm': '',
     }

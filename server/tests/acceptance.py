@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import urllib.error
@@ -19,9 +20,30 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-BASE = "http://127.0.0.1:8200"
+BASE = os.environ.get("AC_BASE") or "http://127.0.0.1:8200"
+# ★ 2026-11-19 勘误：测试账号改为可配置。原写死的 `kbadmin` 在业务库 t_employee 里
+#   **已不存在**（实测 128 名员工里没有它），于是 A1/A5 在任何代码版本下都必失败 ——
+#   那是环境漂移，不是被测行为。账号默认值保持不变，需要时用 AC_USER / AC_PASSWORD 覆盖。
+ACCOUNT = os.environ.get("AC_USER") or "kbadmin"
+PASSWORD = os.environ.get("AC_PASSWORD") or "Kb@123456"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SEED_DOC = PROJECT_ROOT / "data" / "seed_docs" / "信息安全管理制度.md"
+# ★ 2026-11-19 勘误：`data/` 是不入库的运行目录，夹具文档在新 clone 的机器上不存在，
+#   于是 B2（上传→入库→检索）在**任何代码版本**下都会 FileNotFoundError。
+#   夹具缺失时用一份等价的内联 markdown 顶上（测试本身会再加唯一标记）。
+FALLBACK_DOC = """# 信息安全管理制度
+
+## 一、总则
+为规范本单位信息安全管理，保护涉密与敏感信息，制定本制度。
+
+## 二、保密管理
+1. 涉密文件不得擅自复制、外传，复制须经审批。
+2. 涉密载体应登记造册，专人保管。
+3. 离岗离职应清退全部涉密资料。
+
+## 三、考核
+信息安全纳入年度考核，违规行为按情节追究责任。
+"""
 
 PASS: list[str] = []
 FAIL: list[str] = []
@@ -60,13 +82,13 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 def main() -> int:
     # ── 阶段 A：统一用户 ────────────────────────────────────────
     print("=== A. 统一用户（t_employee -> ad_new 投影 + RBAC）===")
-    s, b = req("POST", "/api/v1/auth/login", {"username": "kbadmin", "password": "Kb@123456"})
+    s, b = req("POST", "/api/v1/auth/login", {"username": ACCOUNT, "password": PASSWORD})
     d = jload(b) if s == 200 else {}
     tok = d.get("access_token", "")
     check("A1 员工账号登录", s == 200 and bool(tok),
           "roles=%s 权限数=%d" % (d.get("roles"), len(d.get("permissions", []))))
 
-    s, _ = req("POST", "/api/v1/auth/login", {"username": "kbadmin", "password": "wrong"})
+    s, _ = req("POST", "/api/v1/auth/login", {"username": ACCOUNT, "password": "wrong"})
     check("A2 错误密码被拒", s == 401, "HTTP %s" % s)
 
     s, b = req("GET", "/api/v1/auth/me", None, tok)
@@ -76,7 +98,7 @@ def main() -> int:
 
     s, b = req("GET", "/api/v1/users", None, tok)
     users = jload(b) if s == 200 else []
-    kb = [u for u in users if u.get("username") == "kbadmin"] if isinstance(users, list) else []
+    kb = [u for u in users if u.get("username") == ACCOUNT] if isinstance(users, list) else []
     check("A4 员工列表", s == 200 and len(users) > 100, "%d 名员工" % len(users))
     check("A5 投影已建 + 角色对齐",
           bool(kb) and kb[0].get("projected") and kb[0].get("role_names") == ["admin"],
@@ -93,7 +115,8 @@ def main() -> int:
     kb_id = kbs[0]["id"]
 
     # 每次跑都追加一段唯一标记，避免被系统的 SHA256 内容去重拦成 failed
-    content = SEED_DOC.read_bytes() + (
+    base = SEED_DOC.read_bytes() if SEED_DOC.is_file() else FALLBACK_DOC.encode("utf-8")
+    content = base + (
         f"\n\n<!-- acceptance run {uuid.uuid4().hex} -->\n".encode()
     )
     boundary = "----WB" + uuid.uuid4().hex
@@ -191,12 +214,13 @@ def main() -> int:
 
     # ── 阶段 D：页面 ────────────────────────────────────────────
     print("=== D. 页面与文档 ===")
+    # ★ 2026-11-19 勘误：删掉 `/agent/asr`、`/agent/skills` 两条断言 ——
+    #   ASR 页 2026-10-20 按用户要求下线（见 app/main.py「语音输入已下线」），
+    #   技能台页面也已不存在；它们在任何代码版本下都 404，留着只会让套件永远红。
     pages = [
         ("/", "SPA 首页"),
         ("/login", "登录页"),
         ("/agent/", "智能问答页"),
-        ("/agent/asr", "语音问答页"),
-        ("/agent/skills", "技能台"),
         ("/health", "健康接口"),
         ("/docs", "API 文档"),
         ("/api/v1/system/health", "系统健康"),
@@ -214,21 +238,23 @@ def main() -> int:
     check("D5a SPA 返回 index.html", s == 200 and 'id="root"' in html,
           "含 #root=%s" % ('id="root"' in html))
 
-    m_js = re.search(r'src="(/assets/[^"]+\.js)"', html)
-    m_css = re.search(r'href="(/assets/[^"]+\.css)"', html)
+    # ★ 2026-11-19：前端改成单包相对路径（FR-FE-001），index.html 里是 ./assets/…
+    #   两种写法都要认，断言本身不变：静态资源必须是 JS/CSS，不能是 HTML。
+    m_js = re.search(r'src="\.?/?(assets/[^"]+\.js)"', html)
+    m_css = re.search(r'href="\.?/?(assets/[^"]+\.css)"', html)
     if m_js:
-        s, b = req("GET", m_js.group(1), timeout=60)
+        s, b = req("GET", "/" + m_js.group(1), timeout=60)
         # JS 内容不会以 <!doctype 开头；HTML 会
         is_js = not b.lstrip()[:20].lower().startswith(b"<!doctype")
         check("D5b JS 返回 JS 而非 HTML", s == 200 and is_js and len(b) > 10000,
-              "%s → HTTP %s, %d bytes, 是JS=%s" % (m_js.group(1), s, len(b), is_js))
+              "/%s → HTTP %s, %d bytes, 是JS=%s" % (m_js.group(1), s, len(b), is_js))
     else:
         check("D5b JS 返回 JS 而非 HTML", False, "index.html 里没找到 /assets/*.js")
     if m_css:
-        s, b = req("GET", m_css.group(1), timeout=30)
+        s, b = req("GET", "/" + m_css.group(1), timeout=30)
         is_css = not b.lstrip()[:20].lower().startswith(b"<!doctype")
         check("D5c CSS 返回 CSS", s == 200 and is_css,
-              "%s → HTTP %s, %d bytes" % (m_css.group(1), s, len(b)))
+              "/%s → HTTP %s, %d bytes" % (m_css.group(1), s, len(b)))
     else:
         check("D5c CSS 返回 CSS", False, "index.html 里没找到 /assets/*.css")
 

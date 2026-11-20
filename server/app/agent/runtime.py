@@ -32,8 +32,8 @@ def _model():
     return OpenAIChatCompletionsModel(model=name, openai_client=_client(base, key))
 
 
-DEFAULT_IDENTITY = ('你是随州供电公司的办公秘书，服务对象是公司员工。'
-                    '用户一句话交代，你自己判断这活怎么干。')
+# 兜底身份：与现场无关的一句（真正的身份在库里的 cfg.prompt_text，key=identity）。
+DEFAULT_IDENTITY = '你是办公智能助手，服务对象是本单位员工。用户一句话交代，你自己判断这活怎么干。'
 
 RULES = [
     '要读文件、查数、查制度、出文件，就用工具做；不需要工具就直接回答。',
@@ -65,7 +65,7 @@ def identity() -> str:
     """身份只有一处：提示词页的「身份」。读不到才用代码兜底。占位符要替换掉再给模型。"""
     try:
         from app.secretary import prompt_text, prompts_data, project
-        t = (prompt_text.get('identity', prompts_data.IDENTITY) or '').strip()
+        t = (prompt_text.get('identity', prompts_data.IDENTITY_FALLBACK) or '').strip()
         return project.fill(t) if t else DEFAULT_IDENTITY
     except Exception:                              # noqa: BLE001
         return DEFAULT_IDENTITY

@@ -4,7 +4,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { Link } from 'react-router-dom'
 import Page from '../components/ui/Page'
 import { useTab } from '../components/ui/useTab'
-import { AskfillEditor, BodyView, SectionList, TextKeyEditor } from '../components/PromptEditors'
+import { AskfillEditor, SectionList, TextKeyEditor } from '../components/PromptEditors'
 import { CompleteEditor, LexiconEditor, RouteRuleEditor } from '../components/ChainEditors'
 import { promptsApi } from '../api'
 
@@ -26,8 +26,6 @@ function ChainTab() {
   const [rows, setRows] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState<Item | null>(null)
-  const [body, setBody] = useState<any>(null)
-  const [tick, setTick] = useState(0)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -47,17 +45,6 @@ function ChainTab() {
   useEffect(() => {
     load()
   }, [load])
-
-  useEffect(() => {
-    if (!open) {
-      setBody(null)
-      return
-    }
-    promptsApi
-      .impactBody(open.key)
-      .then((r: any) => setBody(r))
-      .catch((e) => message.error((e as Error).message))
-  }, [open, tick])
 
   const columns: ColumnsType<Item> = [
     { title: '环节', dataIndex: 'seg', width: 170, render: (v: string) => <Text strong>{v}</Text> },
@@ -101,7 +88,7 @@ function ChainTab() {
               <Text type="secondary">{open.note}</Text>
             </Space>
             {open.editor.startsWith('material:') ? (
-              <SectionList slot={open.editor.split(':')[1]} onChanged={() => setTick((t) => t + 1)} />
+              <SectionList slot={open.editor.split(':')[1]} onChanged={() => void load()} />
             ) : open.editor === 'askfill' ? (
               <AskfillEditor />
             ) : open.editor === 'complete' ? (
@@ -111,14 +98,8 @@ function ChainTab() {
             ) : open.editor === 'route_rule' ? (
               <RouteRuleEditor />
             ) : open.editor.startsWith('text:') ? (
-              <TextKeyEditor keyName={open.editor.split(':')[1]} onChanged={() => setTick((t) => t + 1)} />
+              <TextKeyEditor keyName={open.editor.split(':')[1]} onChanged={() => void load()} />
             ) : null}
-            <div>
-              <Text strong>现在注入的原文</Text>
-              <div style={{ marginTop: 6 }}>
-                <BodyView data={body} />
-              </div>
-            </div>
           </Space>
         ) : null}
       </Drawer>

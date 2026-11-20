@@ -26,7 +26,7 @@ WHITELIST = {
     'line_spacing_pt': ('num', '固定行距（磅），20–36'),
     'amount_unit': ('str', '金额单位：元 / 万元'),
     'date_format': ('str', '日期格式：YYYY-MM-DD / YYYY年M月D日'),
-    'sign_off': ('str', '常用落款，如 XX供电所'),
+    'sign_off': ('str', '常用落款（单位/部门名）'),
 }
 _RANGES = {'body_pt': (12, 22), 'title_pt': (16, 36), 'line_spacing_pt': (20, 36)}
 

@@ -3,8 +3,11 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  // 部署前缀：默认根路径（线上不变）；骨架实例挂在 /sandbox/ 下时用 VITE_BASE_PATH=/sandbox/ 构建
-  base: process.env.VITE_BASE_PATH || '/',
+  // ★ 只产出一份包（FR-FE-001）：base 用**相对路径**，站点前缀由 nginx 剥。
+  //   根路径站点：./assets/x.js → /assets/x.js
+  //   带前缀站点：/sandbox/ 下 → /sandbox/assets/x.js（后端 SPA 兜底照常命中）
+  //   包内不出现任何前缀（构建后 grep 不到 /sandbox）。
+  base: './',
   server: {
     port: 5173,
     host: '127.0.0.1',
@@ -17,7 +20,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: process.env.VITE_OUT_DIR || 'dist',
+    outDir: 'dist',
     sourcemap: false,
     // ⚠️ 必须关闭「清空输出目录」：本机沙箱的 safe-delete 会拦截 vite 在
     //    emptyDir 阶段对 dist/assets 的 rmSync（回收站不可用 → 操作被中止），

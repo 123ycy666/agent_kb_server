@@ -4,7 +4,6 @@
 dist
 data
 docs
-db
 docker
 deploy
 web/node_modules

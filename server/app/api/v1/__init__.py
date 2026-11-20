@@ -22,6 +22,7 @@ from app.api.v1 import (
     runtime,
     schema_map,
     search,
+    site,
     specs,
     system,
     tags,
@@ -48,6 +49,7 @@ api_router.include_router(caliber.router)
 api_router.include_router(specs.router)
 api_router.include_router(inject.router)
 api_router.include_router(schema_map.router)
+api_router.include_router(site.router)
 api_router.include_router(eval_api.router)
 
 __all__ = ["api_router"]

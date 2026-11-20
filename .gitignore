@@ -70,3 +70,7 @@ A924-POC/
 # 本地临时目录（PG 数据、PDF 试验产物等），不入库
 server/.tmp/
 
+
+# 引导配置含现场库口令，只留示例文件入库
+config/site.json
+config/site.json.tmp

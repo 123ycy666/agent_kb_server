@@ -118,25 +118,37 @@ def verify_employee_password(
 
 
 def create_access_token(subject: str | int, extra: dict[str, Any] | None = None) -> str:
-    """签发访问令牌。subject 为用户 id。"""
+    """签发访问令牌。subject 为用户 id。
+
+    ★ 密钥与载荷都绑当前现场（FR-LOGIN-001）：切库后密钥变、sid 也对不上，
+      旧 token 必然失效 —— 用户必须重新登录，不会把 A 现场的身份带去 B 现场。
+    """
+    from app.core import site
+
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": str(subject),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=settings.access_token_expire_minutes)).timestamp()),
         "typ": "access",
+        "sid": site.site_id(),
     }
     if extra:
         payload.update(extra)
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(payload, site.jwt_key(), algorithm=settings.jwt_algorithm)
 
 
 def decode_access_token(token: str) -> dict[str, Any] | None:
     """解析访问令牌，失败返回 None（不抛异常，便于中间件处理）。"""
+    from app.core import site
+
     try:
-        return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, site.jwt_key(), algorithms=[settings.jwt_algorithm])
     except jwt.PyJWTError:
         return None
+    if str(payload.get("sid") or "") != site.site_id():
+        return None
+    return payload
 
 
 # ══════════════════════════════════════════════════════════════

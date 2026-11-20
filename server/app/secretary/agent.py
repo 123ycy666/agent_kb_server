@@ -441,7 +441,7 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
     body = conf['text'] if conf.get('used') else (conf.get('block') or str(question or ''))
     user_content = '【本轮要办的事】\n' + str(body) + '\n\n【今天】' + _now
 
-    # ⑤ 提示词：身份 + 查数口径 + 作答规则（全部来自页面）
+    # ⑤ 提示词：身份 + 查数口径（作答规则不在这一段，见 ⑦）
     messages = [{'role': 'system', 'content': agent_v2.system(_now)},
                 {'role': 'user', 'content': user_content}]
     trace.append({'seq': len(trace) + 1, 'kind': 'system', 'tool': 'system',
@@ -493,6 +493,29 @@ def ask(question, model=None, max_steps=None, profile=None, want_page=False, tod
             messages.append({'role': 'tool', 'tool_call_id': tc.get('id'), 'content': body_out})
         print('[agent] 第 %d 轮：工具 %d 次，本轮模型 %d ms，累计 %.1f s'
               % (step, len(calls), llm_ms, time.time() - t_all), flush=True)
+
+    # ⑦ 整理段：作答规则不在查数循环里（进了循环模型就不查了），循环完再要一次正文
+    # 事实由循环给、这一段只改口吻：整理段不再从十几条 tool 结果里重读数字
+    # （实测重读会把「缺陷库项目（状态2）」读成「已完工」，也会偶发返回空正文）
+    rules = agent_v2.answer_rules()
+    last_kind = (trace[-1].get('kind') if trace else '')
+    if rules and answer and last_kind == 'answer':
+        msgs2 = [{'role': 'system', 'content': rules},
+                 {'role': 'user', 'content': '【本轮查到的结果】\n' + answer}]
+        t2 = time.time()
+        try:
+            resp2 = _chat(msgs2, model, use_tools=False, think=False)
+            text2 = str((resp2['choices'][0]['message'] or {}).get('content') or '').strip()
+        except Exception as exc:                      # noqa: BLE001 - 整理段失败用循环正文兜底
+            text2 = ''
+            print('[agent] 整理段失败（用循环正文）：%s: %s'
+                  % (type(exc).__name__, str(exc)[:120]), flush=True)
+        if text2:
+            answer = text2
+        trace.append({'seq': len(trace) + 1, 'kind': 'compose', 'tool': 'compose',
+                      'model_ms': int((time.time() - t2) * 1000), 'content': text2[:600]})
+        if not text2:
+            print('[agent] 整理段返回空正文（沿用循环正文）：%s' % str(resp2)[:300], flush=True)
 
     if not answer:
         answer = _final_answer(messages, model)

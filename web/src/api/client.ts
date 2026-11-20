@@ -34,7 +34,11 @@ export interface ApiError extends Error {
  *    · 问数（智能问答）：`/api/*`（**不带 v1**，见 docs/接口契约.md）
  *  而 axios 会拼接 baseURL 与 url（url 以 "/" 开头也会拼），
  *  若用 v1 实例调 `/api/sessions`，最终会变成 `/api/v1/api/sessions` → 404。
- *  故问数侧用 baseURL 为空串的独立实例，url 直接写全路径。
+ *  故问数侧用 baseURL 为 `api` 的独立实例，url 直接写全路径。
+ *
+ * ★ 2026-11-19 单包化（FR-FE-001）：baseURL **不带前导斜杠**，拼出来就是相对路径
+ *   （`api/v1/kb`）。站点挂在 `/` 还是 `/sandbox/` 由 nginx 剥前缀决定，包内不写死前缀 ——
+ *   同一份产物可以同时喂给两个实例。
  */
 function createClient(baseURL: string) {
   const inst = axios.create({ baseURL, timeout: 180000 })
@@ -43,6 +47,12 @@ function createClient(baseURL: string) {
     const token = getToken()
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
+    }
+    // ★ 一律走**相对路径**：去掉 url 的前导斜杠，浏览器按当前页面 URL 解析。
+    //   这样根路径站点是 /api/...，带前缀站点自动是 /sandbox/api/...（前缀由 nginx 剥）。
+    //   调用方仍然照旧写 '/api/sessions'、'/kb'，不用改上百处。
+    if (config.url && config.url.startsWith('/')) {
+      config.url = config.url.slice(1)
     }
     return config
   })
@@ -64,11 +74,16 @@ function createClient(baseURL: string) {
         msg = '无法连接后端服务，请确认服务已启动（默认 127.0.0.1:8200）'
       }
 
-      if (status === 401) {
+      // 现场没配好：不跳登录，交给现场配置页
+      const needSetup = code === 'SITE_NOT_CONFIGURED'
+      if (needSetup) {
+        window.dispatchEvent(new Event('kb-site-down'))
+      }
+
+      if (status === 401 && !needSetup) {
         clearToken()
-        // 应用身份（API Key）请求失败时不跳转登录页
-        if (!location.pathname.startsWith('/login')) {
-          location.href = `${import.meta.env.BASE_URL}login`
+        if (!location.pathname.endsWith('/login')) {
+          location.replace('./login')
         }
       }
 
@@ -85,14 +100,16 @@ function createClient(baseURL: string) {
   return inst
 }
 
+/** 知识库 / 管理面接口：`api/v1/*`（相对路径，前缀由 nginx 剥） */
+export const http = createClient('api/v1')
+
 /**
- * 部署前缀：根路径（线上）时是空串，行为与以前完全一致；
- * 部署在子路径（如 /sandbox/）时是 '/sandbox'，接口跟着带前缀。
+ * 问数 / 智能体 / 工作流接口。
+ * ⚠️ 调用方写的是完整路径（'/api/sessions'、'/api/workflows/docs'），所以 baseURL 必须为空：
+ *    前导斜杠由请求拦截器去掉，浏览器按当前页面 URL 解析成相对路径。
+ *    （baseURL 若再给 'api'，拼出来就是 api/api/sessions → 404，2026-11-19 踩过。）
  */
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+export const agentHttp = createClient('')
 
-/** 知识库 / 管理面接口：`/api/v1/*` */
-export const http = createClient(`${BASE}/api/v1`)
-
-/** 问数（智能问答）接口：`/api/*`（无 v1 前缀） */
-export const agentHttp = createClient(BASE)
+/** 现场配置接口：`api/v1/site/*` */
+export const siteHttp = createClient('api/v1/site')

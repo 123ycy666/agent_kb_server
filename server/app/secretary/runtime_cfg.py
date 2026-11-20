@@ -16,6 +16,11 @@ _CACHE: dict = {'at': 0.0, 'rows': {}}
 
 KEYS = {
     'model': '问数用的模型',
+    # ── 模型通道（IF-MODEL-001）：网关地址 + API Key + 模型名，存当前库 ──
+    'model_channel': '模型通道（local / online）',
+    'llm_base_url': '模型网关地址（OpenAI 兼容 base_url）',
+    'llm_api_key': '模型网关 API Key',
+    'llm_model': '模型名',
     'max_steps': '单题最多几轮工具调用',
     'db_host': '业务库地址',
     'db_port': '业务库端口',
@@ -42,6 +47,33 @@ def ensure() -> None:
                               updated_at timestamptz not null default now())""")
     except Exception as exc:                          # noqa: BLE001
         print('[runtime] 建表失败：%s: %s' % (type(exc).__name__, str(exc)[:120]), flush=True)
+
+
+_ENV_MODEL = {
+    'MODEL_CHANNEL': None, 'LLM_BASE': None, 'LLM_KEY': None, 'MODEL': None,
+}
+
+
+def capture_env_model() -> None:
+    """记下 `.env` 派生的模型通道（切现场时的复位基准）。"""
+    from app.secretary import config
+
+    _ENV_MODEL.update({'MODEL_CHANNEL': config.MODEL_CHANNEL, 'LLM_BASE': config.LLM_BASE,
+                       'LLM_KEY': config.LLM_KEY, 'MODEL': config.MODEL})
+
+
+def reset_model() -> None:
+    """恢复成 `.env` 的模型通道。
+
+    ★ 与 reset_db 同理：refresh() 只在**新库有值**时才覆盖字段。不复位的话，
+      从已配现场切到空现场，新现场会静默沿用上一个现场的网关地址与 API Key。
+    基线在**模块导入时**取一次（此后 config 里的值可能已被某个现场覆盖）。
+    """
+    from app.secretary import config
+
+    for k, v in _ENV_MODEL.items():
+        if v is not None:
+            setattr(config, k, v)
 
 
 def all(refresh: bool = False) -> dict:
@@ -91,6 +123,15 @@ def refresh() -> dict:
 
     if vals.get('model'):
         config.MODEL = vals['model']
+    # 模型通道（页面可改，存本库；切现场跟着换）
+    if vals.get('model_channel') in ('local', 'online'):
+        config.MODEL_CHANNEL = vals['model_channel']
+    if vals.get('llm_base_url'):
+        config.LLM_BASE = vals['llm_base_url'].rstrip('/')
+    if vals.get('llm_api_key'):
+        config.LLM_KEY = vals['llm_api_key']
+    if vals.get('llm_model'):
+        config.MODEL = vals['llm_model']
     for key, attr, cast in (('max_steps', 'MAX_STEPS', int),
                             ('sql_timeout_ms', 'SQL_TIMEOUT_MS', int),
                             ('tool_result_chars', 'TOOL_RESULT_CHARS', int)):
@@ -157,3 +198,10 @@ def test_conn(target: dict | None = None) -> dict:
         return {'ok': True, 'result': row, 'host': t.get('host'), 'db': t.get('db')}
     except Exception as exc:                          # noqa: BLE001 - 只是试连
         return {'ok': False, 'error': '%s: %s' % (type(exc).__name__, str(exc)[:200])}
+
+
+# 模块导入即记下 `.env` 基线：之后 config 里的模型字段会被「当前现场」的 cfg.runtime 覆盖。
+try:
+    capture_env_model()
+except Exception:                                     # noqa: BLE001
+    pass

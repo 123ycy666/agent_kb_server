@@ -31,29 +31,35 @@ async def lifespan(app: FastAPI):
     logger.info("  模型通道 MODEL_CHANNEL = %s", settings.model_channel)
     logger.info("=" * 68)
 
-    try:
-        from app.db_init import init_database
+    # ── 当前现场（引导配置 → 产品库）─────────────────────────
+    # 连不上 / 没配置都不许中断启动：降级成「只有现场配置页」，比整机起不来好。
+    from app.core import site
 
-        result = init_database(verbose=False)
-        logger.info(
-            "数据库就绪 | 扩展=%s | 新增权限点=%s | 新增角色=%s | 管理员同步=%s",
-            result.get("extensions"),
-            result.get("permissions_added"),
-            result.get("roles_added"),
-            result.get("admin_sync"),
-        )
+    try:
+        _st = site.boot()
+        logger.info("现场 | ok=%s | %s | %s", _st.get("ok"), _st.get("site_id") or "-",
+                    _st.get("error") or "已连接")
     except Exception as exc:  # noqa: BLE001
-        # ⚠️ 这里**不中断启动**（老库表已存在时服务仍可用），但必须把「哪一步失败」说清楚。
-        #    曾经这条日志只写"请确认 PostgreSQL 已启动"，把 `NameError` 这类代码问题
-        #    也伪装成数据库连接问题，白排查了很久 —— 所以现在带上异常类型。
-        logger.error(
-            "数据库初始化失败（%s: %s）\n"
-            "服务会继续启动，但建表 / 扩展 / 增量迁移 / 管理员同步都**未执行**。\n"
-            "若是首次部署，请确认 PostgreSQL 已启动（docker compose up -d）"
-            "且 .env 的 DATABASE_URL 正确。",
-            type(exc).__name__,
-            exc,
-        )
+        logger.error("现场引导失败（%s: %s），本实例只提供现场配置页", type(exc).__name__, exc)
+
+    if site.ok():
+        try:
+            from app.db_init import init_database
+
+            # 结构由 core/site.py 负责（空库一次建好、老库只刷视图）；
+            # 这里只同步 HR 管理员投影，别再跑 create_all 去碰 public 的同名视图。
+            result = init_database(verbose=False, structural=False)
+            logger.info(
+                "数据库就绪 | 管理员同步=%s",
+                result.get("admin_sync"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "数据库初始化失败（%s: %s）\n"
+                "服务会继续启动，但管理员同步**未执行**。",
+                type(exc).__name__,
+                exc,
+            )
 
     bundle = None
     try:
@@ -92,6 +98,8 @@ async def lifespan(app: FastAPI):
 
     # 问数智能体预热（语义字典 + 会话摘要补跑，后台线程，异常不影响服务）
     try:
+        if not site.ok():
+            raise RuntimeError('现场未就绪，跳过预热')
         from app.api.v1.agent import preheat
 
         preheat()
@@ -102,6 +110,8 @@ async def lifespan(app: FastAPI):
     # 多 worker 部署时设 SITE_JOBS=0，只让一个进程跑（APScheduler 是进程内调度器）。
     _sch = {"on": False}
     try:
+        if not site.ok():
+            raise RuntimeError('现场未就绪，跳过调度')
         if (os.environ.get("SITE_JOBS") or "1").strip() not in ("0", "false", "no"):
             from app.workflow import scheduler as _wfsched
 
@@ -150,6 +160,33 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Request-Id"],
 )
+
+# ── 现场门（FR-BOOT-001 / UI-002）─────────────────────────────
+# 当前现场连不上或没配置时：**只剩现场配置页**。
+# 放行三类：① 现场配置自己的接口；② 前端静态资源与 SPA 兜底（否则连配置页都打不开）；
+#          ③ 探活 / 文档（运维看得见服务活着）。
+_SITE_OPEN_PREFIX = ("/api/v1/site",)
+_SITE_OPEN_EXACT = {"/health", "/docs", "/redoc", "/openapi.json", "/api"}
+
+
+@app.middleware("http")
+async def site_gate(request: Request, call_next):
+    from app.core import site
+
+    if site.ok():
+        return await call_next(request)
+
+    path = request.url.path
+    if path in _SITE_OPEN_EXACT or any(path.startswith(p) for p in _SITE_OPEN_PREFIX):
+        return await call_next(request)
+    if not path.startswith("/api"):
+        return await call_next(request)
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": {"code": "SITE_NOT_CONFIGURED",
+                            "message": "该现场尚未配置或数据库连接失败，请先完成「现场配置」"}},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ── 统一错误格式 ─────────────────────────────────────────────
@@ -238,6 +275,13 @@ app.include_router(agent_api_v2.router, prefix="/api")
 from app.workflow import api as workflow_api  # noqa: E402
 
 app.include_router(workflow_api.router, prefix="/api")
+
+# 系统账号域（FR-SYS-001）：/api/alerts/*、/api/internal/*，只认 X-Internal-Token
+from app.api.v1 import alerts as alerts_api  # noqa: E402
+from app.api.v1 import internal as internal_api  # noqa: E402
+
+app.include_router(alerts_api.router, prefix="/api")
+app.include_router(internal_api.router, prefix="/api")
 
 
 @app.get("/api", tags=["系统"], summary="服务信息")
@@ -345,6 +389,13 @@ def spa_fallback(full_path: str):
                 return _FileResponse(target)
         except (OSError, ValueError):
             pass  # 非法路径（含 .. / 编码异常）→ 当作前端路由处理
+
+    # 尾斜杠会改变相对路径的基准（./assets/x.js → /prompts/assets/x.js → 白屏），
+    # 统一 301 到不带斜杠的同一路径。
+    if full_path.endswith("/") and full_path.strip("/"):
+        from fastapi.responses import RedirectResponse
+
+        return RedirectResponse("/" + full_path.rstrip("/"), status_code=301)
 
     # /api/* 没有匹配到任何接口 → 必须回 404 JSON，不能落到前端 index.html：
     # 否则「接口删了」这件事在页面上表现为 200 + 一坨 HTML，排查时完全看不出来。

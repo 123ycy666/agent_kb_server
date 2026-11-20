@@ -32,17 +32,24 @@ SOURCE = {'identity': '库', 'discipline': '库', 'menu': '自动生成', 'summa
 
 
 def _fallback_identity() -> str:
+    """兜底身份：与现场无关的一句，**不含任何单位名**（NFR-004）。"""
     try:
         from app.secretary import prompts_data
-        lines = [ln for ln in (prompts_data.IDENTITY or '').strip().splitlines()
+        lines = [ln for ln in (prompts_data.IDENTITY_FALLBACK or '').strip().splitlines()
                  if not ln.lstrip().startswith('#')]
         return '\n'.join(lines).strip()
     except Exception:                              # noqa: BLE001
-        return '你是随州供电公司的办公智能助手，负责把活做成能直接用的东西。'
+        return '你是办公智能助手，服务对象是本单位员工。'
 
 
 def identity_text(user=None) -> str:
-    return inject_store.get('identity', user=user) or _fallback_identity()
+    """身份正文：页面/库里配的优先，且**必须替换现场占位符**再给模型。
+
+    ★ 2026-11-19 补 fill()：身份原文里写着 `{SITE_FULL}（{SITE_NAME}）`，
+      这里不替换，模型看到的就是字面花括号 —— 等于身份段少了一半信息。
+    """
+    from app.secretary import project
+    return project.fill(inject_store.get('identity', user=user) or _fallback_identity()).strip()
 
 
 def discipline_text(user=None) -> str:

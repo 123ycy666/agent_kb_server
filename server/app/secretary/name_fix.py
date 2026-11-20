@@ -7,7 +7,7 @@
 为什么必须排在 complete_question() 之前：
     「环谈供电所的台区线损」
       → 不改字：拿「环谈供电所」去检索知识库，检索不到 → 补全规则命中不了
-      → 改对字：检索「环潭供电所」→ 命中补全规则 → 才可能补成标准问题
+      → 改对字：检索「S供电所」→ 命中补全规则 → 才可能补成标准问题
     字都没改对，后面的检索、补全、写 SQL 全是白费。
 
 纠错库本身零第三方依赖（只用标准库，拼音查离线表），但它默认**从数据库取词典**：
@@ -89,30 +89,38 @@ def _build_source():
 
 
 # 项目级「禁入常用词」补充：纠错库漏掉、但绝不能当地名归一的常用业务词。
-# 纠错库自带的禁入表 = 行业术语 + COMMON_WORDS + GENERIC_WORDS，「资金」三条都不在，
-# 于是它被当地名归一：资金(zijin) 与 紫金(zijin) 同音 →
-#   「哪些申请资金明显不合理？」→「哪些申请紫金台区明显不合理？」
-# 整句意思就没了，模型只能回一句「未找到相关信息」。
-# 只加**实测被误改**的词（实测 40 个常用业务词里只有它被改写）；以后再发现新的往这里加。
-NO_PARTIAL_EXTRA = ('资金',)
+# 这类词已统一进库表 `cfg.t_nc_word`（kind=common_word），与其它停用词一起由
+# `lex_words.load()` 注入 —— 代码里不再留任何具体词面（FR-MIGR-002）。
 
 
 def _load_corrector():
     """构造一个全新的 Corrector（含数据源）。"""
     if _LIB not in sys.path:
         sys.path.insert(0, _LIB)
-    from app.secretary.libs.name_correction_lib import Corrector, use_source
+    from app.secretary.libs.name_correction_lib import Corrector, configure, use_source
     from app.secretary.libs.name_correction_lib.name_corrector import normalize
 
     src = _build_source()
     use_source(src)                 # ★ 必须在构造之前：所有索引都是 __init__ 里建的
     try:
+        words = _load_words()
+        configure(words)            # ★ 词面在库（cfg.t_nc_word），算法在这个库里
         c = Corrector()
     finally:
         if src is not None:
             src.close()             # ★ 加载完立刻关连接，不做长连接
-    c.no_partial |= {normalize(w) for w in NO_PARTIAL_EXTRA}
     return c
+
+
+def _load_words() -> dict:
+    """读库里的纠错词表；读不到就是空表（只做错别字层，不误改）。"""
+    try:
+        from app.secretary import lex_words
+        return lex_words.load()
+    except Exception as e:                      # noqa: BLE001
+        print('[namefix] 词表读取失败（按空表跑，不做名称归一）：%s: %s'
+              % (type(e).__name__, e), flush=True)
+        return {}
 
 
 def _peek_version():
@@ -257,7 +265,7 @@ def fix(question):
         # 不提示的话，模型很可能拿它做等值匹配，一条都查不到还以为是空数据。
         synth = [d for d in out['names'] if d.get('库内精确名') is False]
         if synth:
-            parts = ['%s（按前缀 %s%% 查，共 %s 个同名台区）'
+            parts = ['%s（按前缀 %s%% 查，共 %s 个同名对象）'
                      % (d['标准名'], d.get('建议前缀', ''), d.get('同名候选数', '?'))
                      for d in synth]
             out['hint'] = ('下面的名称是按「地名层」归一的合成名，**库里没有这几个字的精确名**，'
@@ -272,11 +280,23 @@ def fix(question):
 
 if __name__ == '__main__':
     # 自测：python name_fix.py
+    # 样例**从库里取**（第一条名称 + 一条错别字），代码里不写死任何现场地名。
+    import sys
+
     sys.stdout.reconfigure(encoding='utf-8')
     print('可用：%s' % available())
-    for q in ['帮我查一下环谈供电所上个月的台去线损',
-              '公家棚线损', '公家彭', '白鹤变压器',
-              '厉山的线损', '凉水的线损', '情况怎么样']:
+    samples = []
+    try:
+        from app.secretary import pgdb
+        with pgdb.connect(autocommit=True) as c:
+            cur = c.cursor()
+            cur.execute('select name from t_nc_catalog where name <> %s limit 2', ('',))
+            samples += [str(r['name']) for r in cur.fetchall()]
+            cur.execute('select wrong from t_nc_typo where wrong <> %s limit 2', ('',))
+            samples += [str(r['wrong']) for r in cur.fetchall()]
+    except Exception as e:                      # noqa: BLE001
+        print('（样例读取失败：%s）' % e)
+    for q in (samples or ['情况怎么样']):
         r = fix(q)
         print('  %-22s → %-28s (%d ms)' % (q, r['text'], r['ms']))
         if r['hint']:

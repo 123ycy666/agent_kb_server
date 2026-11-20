@@ -19,6 +19,7 @@ echo "[2/4] 必需文件检查"
 [ -f web/dist/index.html ] || { echo "✗ 缺少 web/dist/index.html（先 npm run build）"; exit 1; }
 [ -f server/app/main.py ]  || { echo "✗ 缺少 server/app/main.py"; exit 1; }
 [ -f db/lexicon.sql ]      || echo "  ⚠ 缺 db/lexicon.sql（新库将没有纠错词典）"
+[ -f config/site.example.json ] || echo "  ⚠ 缺 config/site.example.json（部署时要自己建引导配置）"
 
 echo "[3/4] 打包"
 VC=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -35,6 +36,8 @@ tar czf "$OUT" \
   --exclude=./data \
   --exclude=./.env \
   --exclude=./.env.local \
+  --exclude=./config/site.json \
+  --exclude=./config/site.json.tmp \
   --exclude=./server/tests/output \
   --exclude=./output \
   --exclude=./.dsh \

@@ -87,13 +87,49 @@ def _build_llm_pair(
     return llm, provider_cls(model_id=judge, api_key=api_key, base_url=base_url)
 
 
+def _runtime_overrides() -> tuple[str | None, str | None, str | None, str | None]:
+    """页面上的模型通道（存当前现场库的 `cfg.runtime`）。
+
+    返回 ``(mode, base_url, api_key, model)``；没配的项是 None（回落 `.env`）。
+    为什么在装配时读：IF-MODEL-001 要求「存产品库、可在页面修改」——
+    读库这一层不能在 import 时做（那时还没有现场），必须每次装配时问一次。
+    """
+    try:
+        from app.secretary import runtime_cfg
+
+        vals = runtime_cfg.all()
+    except Exception:                                 # noqa: BLE001
+        return None, None, None, None
+    mode = vals.get("model_channel") if vals.get("model_channel") in ("local", "online") else None
+    return mode, vals.get("llm_base_url") or None, vals.get("llm_api_key") or None, \
+        vals.get("llm_model") or None
+
+
+def _merge(base: ProviderOverrides, extra: ProviderOverrides) -> ProviderOverrides:
+    """把运行期配置叠到显式传入的 overrides 上（显式优先）。"""
+    out = ProviderOverrides(**{k: v for k, v in vars(base).items()})
+    for k, v in vars(extra).items():
+        if v is not None and getattr(out, k) is None:
+            setattr(out, k, v)
+    return out
+
+
 def build_bundle(
     mode: str | None = None,
     overrides: ProviderOverrides | None = None,
 ) -> ProviderBundle:
     """构造 Provider 集合（无缓存，用于测试连接或指定档位）。"""
-    target = (mode or settings.provider_mode).lower()
+    rt_mode, rt_base, rt_key, rt_model = _runtime_overrides()
+    target = (mode or rt_mode or settings.provider_mode).lower()
     ov = overrides or ProviderOverrides()
+    if mode is None and target == "local" and (rt_base or rt_key or rt_model):
+        rt = ProviderOverrides(local_llm_base_url=rt_base, local_llm_api_key=rt_key,
+                               local_llm_model=rt_model)
+        ov = _merge(ov, rt)
+    elif mode is None and target == "online" and (rt_base or rt_key or rt_model):
+        rt = ProviderOverrides(online_llm_base_url=rt_base, online_llm_api_key=rt_key,
+                               online_llm_model=rt_model)
+        ov = _merge(ov, rt)
     dim = ov.embedding_dim or settings.embedding_dim
 
     # ══════════════════════════════════════════════════════════

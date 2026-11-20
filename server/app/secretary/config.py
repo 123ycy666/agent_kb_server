@@ -55,22 +55,39 @@ ENV = load_env()
 # 业务库名（问数读哪一套表）：SECRETARY_DB > DB_NAME（.env 旧键）> dlj_data。
 # 与 core 的 MYSQL_DB_BUSINESS 故意分开：那个还担着登录（dlj_data.t_employee），
 # 切问数不该把登录一起搬走。
-DB = {
-    'host': ENV.get('MYSQL_HOST') or ENV.get('DB_HOST') or '',
-    'port': int(ENV.get('MYSQL_PORT') or ENV.get('DB_PORT') or 3306),
-    'user': ENV.get('MYSQL_USER') or ENV.get('DB_USER') or '',
-    'password': ENV.get('MYSQL_PASSWORD') or ENV.get('DB_PASSWORD') or '',
-    'db': (os.environ.get('SECRETARY_DB') or ENV.get('SECRETARY_DB')
-           or ENV.get('DB_NAME') or 'dlj_data'),
-}
+def _env_db() -> dict:
+    """`.env` 里的业务库连接（切现场时的复位基准）。"""
+    return {
+        'host': ENV.get('MYSQL_HOST') or ENV.get('DB_HOST') or '',
+        'port': int(ENV.get('MYSQL_PORT') or ENV.get('DB_PORT') or 3306),
+        'user': ENV.get('MYSQL_USER') or ENV.get('DB_USER') or '',
+        'password': ENV.get('MYSQL_PASSWORD') or ENV.get('DB_PASSWORD') or '',
+        'db': (os.environ.get('SECRETARY_DB') or ENV.get('SECRETARY_DB')
+               or ENV.get('DB_NAME') or 'dlj_data'),
+    }
+
+
+DB = _env_db()
 SCHEMA = DB['db']
 
+
+def reset_db() -> None:
+    """恢复成 `.env` 里的业务库连接。
+
+    ★ 为什么必须有：切现场时 `runtime_cfg.refresh()` 只在**新库有值**时才覆盖
+      `config.DB` 的字段。不先复位的话，B 现场会把 A 现场（或 A 现场没配时 .env）
+      的业务库密码带过去 —— 跨现场串库，属于最不该出现的泄漏。
+    """
+    global DB, SCHEMA
+    DB = _env_db()
+    SCHEMA = DB['db']
+
 _missing_db = [k for k in ('host', 'user', 'password') if not DB[k]]
+# ⚠️ 不再 SystemExit：骨架现场的业务库在「现场配置」页里填，进程必须先能起来。
+#    缺连接时只警告；真去查业务库时再带着原因报错。
 if _missing_db:
-    raise SystemExit('[配置] %s 里 MySQL 连接项为空：%s\n'
-                     '       填 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD'
-                     '（或旧键 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD）。'
-                     % (ENV_PATH, ' / '.join(_missing_db)))
+    print('[配置] MySQL 连接项为空：%s（业务库可在「现场配置」页填写）'
+          % ' / '.join(_missing_db), flush=True)
 
 # 对话记录/词典库名（与知识库后端 .env 保持一致）
 AGENT_DB = (os.environ.get('SECRETARY_AGENT_DB')
@@ -133,10 +150,10 @@ RULES_ON = (os.environ.get('SECRETARY_RULES') or '1').strip().lower() \
 #   online = 线上 API（阿里云百炼 compatible-mode）
 # 旧键 LLM_BASE_URL / LLM_API_KEY / SECRETARY_MODEL 仍可作为覆盖。
 MODEL_CHANNEL = (os.environ.get('MODEL_CHANNEL') or ENV.get('MODEL_CHANNEL') or 'local').strip().lower()
+# ⚠️ 不再 raise SystemExit：骨架要能「先起来、再去现场配置页填模型」。
+#    值不合法时按 online 走（线上 API 是默认形态），端点为空则真正调用时才报错。
 if MODEL_CHANNEL not in ('local', 'online'):
-    raise SystemExit(
-        '[配置] MODEL_CHANNEL=%s 不支持：问答服务需要真实模型（local / online）。\n'
-        '       知识库后端可以用 mock 演示，但问数 agent 不行 —— 没有模型就没有答案。' % MODEL_CHANNEL)
+    MODEL_CHANNEL = 'online'
 
 if MODEL_CHANNEL == 'online':
     LLM_BASE = (os.environ.get('LLM_BASE_URL') or ENV.get('LLM_BASE_URL')
@@ -153,16 +170,9 @@ else:  # local
     MODEL = (os.environ.get('SECRETARY_MODEL') or ENV.get('LOCAL_LLM_MODEL')
              or ENV.get('LLM_MODEL_ANSWER') or ENV.get('LLM_MODEL_ROUTER') or 'deepseek-chat').strip()
 
-if not LLM_BASE:
-    raise SystemExit(
-        '[配置] MODEL_CHANNEL=%s 但 LLM 端点为空：\n'
-        '       local  → 填 LOCAL_LLM_BASE_URL\n'
-        '       online → 填 ONLINE_LLM_BASE_URL\n'
-        '       各项说明见 .env.example。' % MODEL_CHANNEL)
-if MODEL_CHANNEL == 'online' and not LLM_KEY:
-    raise SystemExit(
-        '[配置] MODEL_CHANNEL=online 但 ONLINE_LLM_API_KEY 为空。\n'
-        '       线上 API 必须填 Key；本地 vLLM/Ollama 一般无需 Key，可切 local。')
+# 模型通道没配好时不拦启动：现场配置页要先能打开（FR-CFG-003）。
+# 真正调用模型时会带着「通道 / 端点 / Key」三项状态报错，便于定位。
+LLM_CONFIG_OK = bool(LLM_BASE) and not (MODEL_CHANNEL == 'online' and not LLM_KEY)
 
 # 公网通道（online）候选清单：挑自网关 GET /models 里适合本场景的。
 # group 用于前端分组；note 写清"什么时候该用它"。
@@ -242,10 +252,7 @@ MODEL_IDS = [m['id'] for m in MODELS]
 # ---------------------------------------------------------------------------
 KB_BASE = (os.environ.get('SECRETARY_KB_BASE')
            or ENV.get('SECRETARY_KB_BASE') or 'http://127.0.0.1:8200/api/v1').strip()
-# 内部服务令牌（与知识库后端 .env 的 INTERNAL_SERVICE_TOKEN 一致）；
-# 预警等「无登录身份的外部定时任务」也用它放行，见 app/api/v1/agent.py。
-KB_INTERNAL_TOKEN = (os.environ.get('INTERNAL_SERVICE_TOKEN')
-                     or ENV.get('INTERNAL_SERVICE_TOKEN') or '').strip()
+# 内部服务令牌 2026-11-19 迁到 app/core/system_auth.py（唯一入口，切现场不重建）。
 # 兼容保留：连外部知识库（非本地）时才需要账号密码登录
 KB_USER = (os.environ.get('SECRETARY_KB_USER')
            or ENV.get('SECRETARY_KB_USER') or '').strip()
@@ -282,7 +289,7 @@ QUESTION_BUDGET_S = float(ENV.get('SECRETARY_QUESTION_BUDGET') or '0')
 # 这里保留 PROMPTS 只为兼容老调用（默认空表），运维仍可用 .env 临时覆盖。
 PROMPTS = [x for x in os.environ.get('SECRETARY_PROMPTS', '').replace(' ', '').split(',') if x]
 
-# 上游「信息补全」工作流应用（含机构名自动纠错，如 凉水供电所→两水供电所）。
+# 上游「信息补全」工作流应用（含机构名自动纠错，如 X错供电所→X供电所）。
 # 已不在问答链路里，但 tools_app.py 还在用它，保留以免打断那个工具。
 COMPLETION_APP_ID = os.environ.get('SECRETARY_COMPLETION_APP', 'e207644fd37247af957b7fbc613e6efc')
 COMPLETION_URL = (LLM_BASE.split('/compatible-mode')[0] +

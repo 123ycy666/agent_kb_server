@@ -23,21 +23,12 @@ sys.path.insert(0, str(ROOT / 'server'))
 
 URL = os.environ.get('DATABASE_URL_RAW') or 'postgresql://kb:kb_dev_pwd@127.0.0.1:5433/ad_new'
 
-# 表 → 目标 schema（需求定稿 §四 数据归属）
-MOVES: dict[str, str] = {}
-for _t in ('knowledge_base', 'document', 'document_chunk', 'conflict_record', 'tag'):
-    MOVES[_t] = 'kb'
-# `howto_task` 不在归位清单里：阶段 2 已把它迁成 kb.spec，原表改名 kb.spec_legacy 归档，
-# public 也不再留它的视图（V15：同类配置只留一份在用的真身）。
-for _t in ('prompt_text', 'prompt_material', 'caliber_metric', 'caliber_metric_ver',
-           'caliber_base', 'complete_rule', 'data_meta_override',
-           't_nc_ambiguous', 't_nc_catalog', 't_nc_pinyin', 't_nc_term', 't_nc_typo',
-           't_nc_wordlist'):
-    MOVES[_t] = 'cfg'
-for _t in ('t_chat_session', 't_chat_message', 't_chat_query_trace', 't_chat_trace_step'):
-    MOVES[_t] = 'qa'
-for _t in ('app_user', 't_user', 't_user_pref', 'async_task', 'audit_log'):
-    MOVES[_t] = 'base'
+# 表 → 目标 schema：**唯一事实来源在 app/core/pg_schema.py**，
+# 运行期切现场（core/site.py）用的是同一份映射，这里不再抄第二份。
+from app.core.pg_schema import MOVES, SCHEMAS  # noqa: E402
+
+# 兼容旧调用方：本文件内部用 TARGETS 表示 schema 集合
+TARGETS = SCHEMAS
 
 
 def connect():

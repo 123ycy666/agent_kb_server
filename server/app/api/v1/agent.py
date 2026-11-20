@@ -223,6 +223,22 @@ async def ask_data(request: Request, actor: CurrentActor = Depends(get_current_a
     return await _ask_entry(request, actor, force_data=True)
 
 
+# ══════════════════════════════════════════════════════════════
+#  空现场（FR-EMPTY-001）：库里没有任何业务配置时的回答
+#  一句话说清「还没配」，**不给数字**（编数字是最坏的退化方式）。
+# ══════════════════════════════════════════════════════════════
+
+SITE_EMPTY_ANSWER = ("该现场尚未配置业务内容，暂时无法取数。"
+                     "请先把本现场的提示词、口径与知识库配置进这个库，再从页面重新提问。")
+SITE_EMPTY_HINT = "该现场尚未配置"
+
+
+def SITE_EMPTY_PAYLOAD(session_id: str) -> dict:
+    return {"answer": SITE_EMPTY_ANSWER, "site_empty": True, "hint": SITE_EMPTY_HINT,
+            "session_id": session_id, "qa_id": None, "trace": [],
+            "steps": [], "files": [], "evidence": {}}
+
+
 async def _ask_entry(request: Request, actor: CurrentActor, force_data: bool = False):
     # ★ 同一个 URL 收两种请求（2026-10-19 加，见 docs/03-设计/办公文档能力-接口设计.md）：
     #   ① application/json           —— 现状，纯问答 / 带 file_ids 引用已上传的文件
@@ -240,11 +256,19 @@ async def _ask_entry(request: Request, actor: CurrentActor, force_data: bool = F
     if not q:
         return _jr({"answer": "问题为空", "trace": []})
 
+    session_id = (data.get("session_id") or "").strip() or ("s_" + uuid.uuid4().hex)
+    # ── 空现场（FR-EMPTY-001 / AC-03）────────────────────────────
+    # 这个库还没有任何业务配置时**不查库、不编数字**，直接说清（UI-004 同一句文案）。
+    from app.core import site as _site
+
+    if _site.business_empty():
+        return _jr(SITE_EMPTY_PAYLOAD(session_id))
+
     model = data.get("model") or None
     max_steps = data.get("max_steps") or None
     profile = (data.get("profile") or "").strip() or None
     # 会话与身份：不传 session_id 则服务端生成；user_id 取当前登录用户（统一用户表）
-    session_id = (data.get("session_id") or "").strip() or ("s_" + uuid.uuid4().hex)
+    session_id = session_id
     user_code = (data.get("uid") or data.get("user_code") or "").strip() or None
     user_name = (data.get("user_name") or "").strip() or actor.display_name or actor.username
     channel = (data.get("channel") or "").strip() or "web"
@@ -440,7 +464,7 @@ async def _ask_entry(request: Request, actor: CurrentActor, force_data: bool = F
     # ── 大屏跳转意图（2026-10-21）──────────────────────────────────────
     # 只有带 want_screen 的调用（大屏前端）才调，其它调用方零开销。
     # 用**补全后**的问题：completed_question 只做地名/时间补全、不改写语义，
-    # 比原始问法更容易被对方识别（「环谭」已纠成「环潭」、「今年」已补成具体年份）。
+    # 比原始问法更容易被对方识别（「S错」已纠成「S」、「今年」已补成具体年份）。
     # 结果**平铺**进响应（layer / method / mainId / data，字段名与对方一致）；
     # 调用失败或没识别就什么都不加 —— 前端没有 method 即不跳转，正常看问答。
     if want_screen and screen_intent_svc.enabled():
@@ -722,41 +746,6 @@ async def feedback(request: Request, actor: CurrentActor = Depends(get_current_a
         return _jr({"ok": n > 0, "updated": n, "qa_id": qa_id, "feedback": fb})
     except Exception as e:                         # noqa: BLE001
         return _jr({"error": "%s: %s" % (type(e).__name__, str(e)[:200])}, status_code=500)
-
-
-# ══════════════════════════════════════════════════════════════
-#  每日预警（外部定时任务调用）：按账号返回「这个人今天该办的事」
-#
-#  ⚠️ 鉴权与其它 /api/* 不同：调用方是定时任务（上游业务系统 / 推送服务），
-#     拿不到用户 JWT。所以用**内部服务令牌**（.env 的 INTERNAL_SERVICE_TOKEN）
-#     放行；没配令牌时（本地开发）不校验，线上必须配上。
-#  ⚠️ 前端不做这个页面（2026-10-19 Fred：前端不是我们做，有接口就行）。
-# ══════════════════════════════════════════════════════════════
-
-@router.post("/alerts/daily", summary="每日预警（内部令牌鉴权；按账号返回今日该办的事）")
-async def alerts_daily(request: Request):
-    want = sec_config.KB_INTERNAL_TOKEN
-    got = request.headers.get("X-Internal-Token") or ""
-    if want and got != want:
-        return _jr({"status": "unauthorized", "error": "内部令牌不正确"}, 401)
-
-    from app.secretary import alerts as alerts_mod   # 用到才导入，健康检查不背这个依赖
-
-    data = await _read_json(request)
-    acct = (data.get("account") or data.get("uid") or "").strip()
-    try:
-        # 预警要扫多张业务表（实测 100~160ms），丢线程池，别阻塞全站
-        r = await run_in_threadpool(
-            alerts_mod.daily, acct,
-            (data.get("today") or data.get("business_date") or "").strip() or None,
-            (data.get("when") or data.get("triggered_at") or "").strip() or None,
-            int(data.get("limit") or 10),
-        )
-    except Exception as e:                          # noqa: BLE001
-        r = {"status": "unknown", "account": acct, "alerts": [],
-             "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
-             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-    return _jr(r)
 
 
 # ══════════════════════════════════════════════════════════════

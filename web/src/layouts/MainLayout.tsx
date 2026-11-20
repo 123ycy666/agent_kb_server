@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Avatar, Dropdown, Layout, Menu, Typography } from 'antd'
+import { Alert, Avatar, Dropdown, Layout, Menu, Typography } from 'antd'
 import {
   AlertOutlined,
   AppstoreOutlined,
   BookOutlined,
+  CloudServerOutlined,
   ClusterOutlined,
   DeploymentUnitOutlined,
+  DesktopOutlined,
   LogoutOutlined,
   MessageOutlined,
   RobotOutlined,
@@ -16,6 +18,7 @@ import {
 } from '@ant-design/icons'
 import { useAuth } from '../store/auth'
 import { uiPrefs } from '../components/ui/prefs'
+import { useSite } from '../store/site'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
@@ -23,17 +26,19 @@ const { Text } = Typography
 const NAV = [
   { key: '/home', icon: <AppstoreOutlined />, label: '概览' },
   { key: '/chat', icon: <MessageOutlined />, label: '对话' },
+  { key: '/screen', icon: <DesktopOutlined />, label: '大屏问数' },
   { key: '/agent', icon: <RobotOutlined />, label: '智能体' },
   { key: '/skills', icon: <ThunderboltOutlined />, label: '技能' },
   { key: '/kb', icon: <BookOutlined />, label: '知识库' },
   { key: '/prompts', icon: <ClusterOutlined />, label: '提示词' },
   { key: '/alerts', icon: <AlertOutlined />, label: '预警' },
   { key: '/tasks', icon: <DeploymentUnitOutlined />, label: '任务' },
-  { key: '/settings', icon: <SettingOutlined />, label: '设置' },
+  { key: '/site', icon: <CloudServerOutlined />, label: '配置' },
 ]
 
 export default function MainLayout() {
   const { user, logout } = useAuth()
+  const { status } = useSite()
   const navigate = useNavigate()
   const location = useLocation()
   const [prefs, setPrefs] = useState(() => uiPrefs())
@@ -120,6 +125,16 @@ export default function MainLayout() {
 
       <Layout style={{ marginLeft: 220 }}>
         <Content style={{ padding: 16, minHeight: '100vh', fontSize: prefs.font }}>
+          {/* UI-004：业务配置为空的现场，先说清「还没配」，不显示任何现场内容 */}
+          {status?.business_empty && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="该现场尚未配置"
+              description="这个库还没有写入业务配置。请先到「现场配置」或「提示词 / 知识库」把本现场的内容配进去。"
+            />
+          )}
           <Outlet />
         </Content>
       </Layout>

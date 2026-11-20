@@ -9,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import Session
 
-from app.core.database import SessionLocalWF, wf_engine as engine
+from app.core import database as _db
+from app.core.database import SessionLocalWF
 from app.workflow.models import (
     DEFAULT_PARAMS, TABLES, Item, Notify, Param, RuleDoc, Run, RunLog,
 )
@@ -49,7 +50,7 @@ def ensure_tables() -> None:
             db.execute(text('ALTER TABLE IF EXISTS wf_item DROP CONSTRAINT IF EXISTS %s' % c))
             db.execute(text('ALTER TABLE IF EXISTS wf_notify DROP CONSTRAINT IF EXISTS %s' % c))
         db.commit()
-    Base.metadata.create_all(bind=engine, tables=[t.__table__ for t in TABLES])
+    Base.metadata.create_all(bind=_db.wf_engine, tables=[t.__table__ for t in TABLES])
     with SessionLocalWF() as db:
         # 发送文档指回取数文档：一份取数只挂一份发送（9 对 9 由库卡住）
         db.execute(text('ALTER TABLE wf_doc ADD COLUMN IF NOT EXISTS pair_doc_id bigint'))

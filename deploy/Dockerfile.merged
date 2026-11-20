@@ -13,6 +13,11 @@ COPY server/ /app/
 # 前端构建产物：main.py 在 /app/app/main.py → parents[2] = / → 必须放到 /web/dist
 COPY web/dist/ /web/dist/
 
+# 结构 SQL（chat_tables / user_pref / caliber / lexicon）：空现场启动时由
+# app/core/pg_schema.py 读取建表，容器里没有 db/ 就建不出这几张表。
+# ⚠️ 只带 .sql：词典内容（db/lexicon.sql 的数据段不会被用到，代码只取 DDL）
+COPY db/ /db/
+
 # 站点包已随代码走（server/app/secretary/sites/ 已在上一行 COPY server/ 里），
 # 2026-10-30 起不再从仓库根 COPY config/ —— 原来漏 COPY 就是"读不到但也不报错"
 # （2026-10-28 部署时踩过：包内定时任务空转）。

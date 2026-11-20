@@ -77,5 +77,5 @@ class AskResponse(BaseModel):
         default=None, description="页面跳转用的业务主键；可为 null")
     data: list = Field(
         default_factory=list,
-        description="意图参数列表（如 [{'stationName':'两水供电所','year':'2026'}]）",
+        description="意图参数列表（如 [{'stationName':'X供电所','year':'2026'}]）",
     )

@@ -120,6 +120,33 @@ def get_current_actor(
     return actor
 
 
+def get_current_actor_optional(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> CurrentActor | None:
+    """「有身份就解析、没有就 None」—— 给现场配置页用。
+
+    ⚠️ 两条约束：
+    1. 不能用 `Depends(get_db)`：现场未就绪时根本没有库，注册那个依赖会 500。
+    2. 现场未就绪时恒返回 None（此时页面本来就不需要登录，见 FR-CFG-001）。
+    """
+    from app.core import site
+
+    if not site.ok():
+        return None
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    from app.core.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return _authenticate_by_jwt(db, authorization[7:].strip())
+    except HTTPException:
+        return None
+    finally:
+        db.close()
+
+
 def require_permission(*codes: str):
     """权限点校验依赖工厂。
 

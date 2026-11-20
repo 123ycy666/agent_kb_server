@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # ─── 数据库 ──────────────────────────────────────────────
     database_url: str = "postgresql+psycopg://kb:kb_dev_pwd@127.0.0.1:5433/kb_system"
     db_echo: bool = False
+    # 老现场的任务/预警数据在独立库时用这个指过去（新现场默认用自己库里的 wf_* 表）
+    wf_database_url: str = ""
 
     # ─── MySQL（员工表 / 业务库 / 字典库 / 记录库）────────────
     # 统一用户表权威源在 MySQL：dlj_data.t_employee
@@ -146,6 +148,11 @@ class Settings(BaseSettings):
     # ⚠️ 等于「知道用户名就能拿 token」，仅限内网/受信系统；对外暴露前关闭或配置 SSO_LOGIN_KEY。
     sso_login_enabled: bool = True
     sso_login_key: str = ""
+
+    # ── 系统账号（外部系统调用，不经页面登录，切换现场后仍然有效）──
+    # IF-SYS-001：请求头 `X-Internal-Token` 的令牌值，64 位十六进制，存服务配置不进库。
+    # 留空 = 不校验（本地开发）；线上 .env.production 必须配。
+    internal_service_token: str = ""
 
     # ── 本地账号登录（骨架 / 离线部署用，2026-11-18）────────────
     # 骨架要给别的项目用：他们那边没有我们的 HR 库（dlj_data.t_employee），

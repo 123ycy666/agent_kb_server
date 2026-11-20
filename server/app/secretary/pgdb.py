@@ -52,13 +52,33 @@ def _build_dsn() -> str:
                     host=u.hostname, port=u.port or 5432,
                     dbname=(u.path or "/ad_new").lstrip("/"),
                     user=unquote(u.username or "kb"),
-                    password=unquote(u.password or ""))
+                    password=unquote(u.password or ""),
+                    # ★ search_path 固定 public：库账号叫 kb 时默认 search_path 的
+                    #   `$user` 会指到真实 schema kb，不带前缀的表会建错地方。
+                    options="-csearch_path=public")
             except Exception:
                 pass
-    return "host=127.0.0.1 port=5433 dbname=ad_new user=kb password=kb_dev_pwd"
+    return ("host=127.0.0.1 port=5433 dbname=ad_new user=kb password=kb_dev_pwd "
+            "options='-csearch_path=public'")
 
 
 DSN = _build_dsn()
+
+
+def set_dsn(dsn: str) -> None:
+    """切现场时换连接串。
+
+    这里必须改**模块属性** DSN：所有 `connect()` 都在调用时才读它，
+    所以 `agent/db.py`、`prompt_text`、`runtime_cfg` 等一批直连模块会自动跟随，
+    不需要挨个改。DSN 只含连接信息，不缓存连接。
+    """
+    global DSN
+    DSN = str(dsn or DSN)
+
+
+def reset_pools() -> None:
+    """没有连接池可清（每次 connect 都新建）；留着这个钩子给 site.reset_caches 统一调用。"""
+    return None
 
 
 def _translate(sql: str) -> str:
@@ -132,6 +152,12 @@ class _Conn:
 
     def ping(self, reconnect: bool = True) -> bool:
         return True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
 
 
 def connect(autocommit: bool = True, **_kwargs) -> _Conn:

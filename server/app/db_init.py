@@ -17,7 +17,8 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import Base, SessionLocal, engine
+from app.core import database
+from app.core.database import Base, SessionLocal
 from app.core.security import hash_password
 from app.models import AppUser
 
@@ -179,7 +180,7 @@ def ensure_extensions() -> list[str]:
 
     幂等：`CREATE EXTENSION IF NOT EXISTS` 重复执行无副作用。
     """
-    with engine.begin() as conn:
+    with database.engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     return ["vector"]
 
@@ -191,13 +192,13 @@ def create_tables() -> None:
     因此后续阶段新增的字段必须登记到 `EXTRA_DDL`（见文件头注释），
     由 `ensure_extra_columns()` 负责增量迁移 —— 两者缺一不可。
     """
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=database.engine)
 
 
 def ensure_extra_columns() -> list[str]:
     """补齐后续阶段新增的列与索引。幂等，可反复执行。"""
     applied: list[str] = []
-    with engine.connect() as conn:
+    with database.engine.connect() as conn:
         for label, sql in EXTRA_DDL:
             try:
                 conn.execute(text(sql))
@@ -275,14 +276,20 @@ def seed_local_admin(db: Session) -> dict:
     return {"seeded": True, "username": "admin"}
 
 
-def init_database(verbose: bool = True) -> dict:
-    """完整初始化流程。幂等，可重复调用。"""
+def init_database(verbose: bool = True, structural: bool = True) -> dict:
+    """完整初始化流程。幂等，可重复调用。
+
+    structural=False：只做「同步管理员」，不建表不迁列。
+    切现场后由 core/site.py 负责建库结构（空库一次建好、老库只刷视图），
+    这里再跑一遍 create_all 会对 public 的同名视图下手（报错或误建），所以由调用方决定。
+    """
     result: dict = {}
 
-    result["extensions"] = ensure_extensions()
-    create_tables()
-    result["tables"] = "created"
-    result["migrations"] = ensure_extra_columns()
+    if structural:
+        result["extensions"] = ensure_extensions()
+        create_tables()
+        result["tables"] = "created"
+        result["migrations"] = ensure_extra_columns()
 
     db = SessionLocal()
     try:

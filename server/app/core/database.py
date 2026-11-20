@@ -19,14 +19,20 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import settings
 
-engine = create_engine(
-    settings.database_url,
-    echo=settings.db_echo,
-    pool_pre_ping=True,      # 断线自动重连
-    pool_recycle=1800,       # 主动换掉超过 30 分钟的空闲连接（见下方 MySQL 注释）
-    pool_size=10,
-    max_overflow=20,
-    future=True,
+def _engine_options(**extra):
+    opts = dict(
+        echo=settings.db_echo,
+        pool_pre_ping=True,      # 断线自动重连
+        pool_recycle=1800,       # 主动换掉超过 30 分钟的空闲连接（见下方 MySQL 注释）
+        pool_size=10,
+        max_overflow=20,
+        future=True,
+    )
+    opts.update(extra)
+    return opts
+
+
+def _connect_args() -> dict:
     # ★ 2026-11-16：search_path 固定成 public。
     #   默认 search_path 是 `"$user", public`，而库账号就叫 `kb` —— 阶段 1 建出
     #   `kb` schema 之后 `$user` 指到了真实 schema，未加前缀的表名（ORM 模型全是
@@ -35,8 +41,14 @@ engine = create_engine(
     #   页面上的提示词覆盖项全部失效（实测踩到，见 output/test_results/
     #   2026-11-16-阶段1-PG重排/00-index.md 的「search_path 影子表」一节）。
     #   固定成 public 后与迁移前完全一致：未加前缀的名字全部走 public 兼容视图。
-    connect_args={'options': '-csearch_path=public'},
-)
+    return {'options': '-csearch_path=public'}
+
+
+def _make_engine(url: str, **extra):
+    return create_engine(url, connect_args=_connect_args(), **_engine_options(**extra))
+
+
+engine = _make_engine(settings.database_url)
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -44,6 +56,24 @@ SessionLocal = sessionmaker(
     autocommit=False,
     expire_on_commit=False,
 )
+
+
+def rebind(url: str) -> None:
+    """把产品库连接换成新现场的库（切现场时调用）。
+
+    ⚠️ 为什么不是 `create_engine` 一个新对象就完事：20 多个模块在 import 时就把
+       `SessionLocal` 拿走了。这里原地 `configure(bind=...)`，那些旧引用照样生效。
+       而 `engine` 本身换对象，所以使用方必须读 `database.engine`（模块属性），
+       不要 `from app.core.database import engine`。
+    """
+    global engine
+
+    old, engine = engine, _make_engine(url)
+    SessionLocal.configure(bind=engine)
+    try:
+        old.dispose()
+    except Exception:                                 # noqa: BLE001
+        pass
 
 
 class Base(DeclarativeBase):
@@ -173,14 +203,7 @@ def _wf_database_url() -> str:
     return make_url(settings.database_url).set(database='ad_wf').render_as_string(hide_password=False)
 
 
-wf_engine = create_engine(
-    _wf_database_url(),
-    pool_pre_ping=True,
-    pool_recycle=1800,
-    pool_size=5,
-    max_overflow=10,
-    future=True,
-)
+wf_engine = _make_engine(_wf_database_url(), pool_size=5, max_overflow=10)
 
 SessionLocalWF = sessionmaker(
     bind=wf_engine,
@@ -188,6 +211,18 @@ SessionLocalWF = sessionmaker(
     autocommit=False,
     expire_on_commit=False,
 )
+
+
+def rebind_wf(url: str) -> None:
+    """工作流库跟着现场切（只在引导配置写了 wf_database 时才会换成别的库）。"""
+    global wf_engine
+
+    old, wf_engine = wf_engine, _make_engine(url, pool_size=5, max_overflow=10)
+    SessionLocalWF.configure(bind=wf_engine)
+    try:
+        old.dispose()
+    except Exception:                                 # noqa: BLE001
+        pass
 
 
 class WFBase(DeclarativeBase):

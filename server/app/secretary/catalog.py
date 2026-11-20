@@ -17,13 +17,9 @@ STATUSES = ('draft', 'active', 'superseded', 'archived')
 SECRECY = ('public', 'internal', 'sensitive')
 
 # 一级 = 业务条线；二级 = 事项域。目录即权限边界，新增要管理员。
-TREE = {
-    '综合': ('公文处理', '会议管理', '值班应急', '保密档案', '综合文秘'),
-    '安监': ('安全责任', '隐患排查', '事故调查'),
-    '运检': ('检修计划', '缺陷管理'),
-    '营销': ('服务规范', '电费回收'),
-    '财务': ('预算管理', '报销差旅'),
-}
+# ★ 2026-11-19 移库：目录树存 `kb.catalog`（页面可增删改），代码里不再写死业务分类。
+#   空现场 = 空目录，管理员照自己的条线建；不再回落任何现场的分类树。
+TREE: dict = {}
 
 
 def _q(sql, params=None):
@@ -88,11 +84,14 @@ def _repair_compat_view() -> None:
         print('[catalog] 兼容视图修复失败：%s: %s' % (type(exc).__name__, exc), flush=True)
 
 
-def seed() -> dict:
+def seed(tree: dict | None = None) -> dict:
     """灌默认目录与两份词表；已有则不覆盖。"""
     ensure()
     made = 0
-    for i, (top, subs) in enumerate(TREE.items(), 1):
+    tree = tree if tree is not None else TREE
+    if not tree:
+        return {"ok": True, "created": 0, "note": "目录树为空（代码不再内置业务分类，由库里或调用方提供）"}
+    for i, (top, subs) in enumerate(tree.items(), 1):
         rows = _q("select id from kb.catalog where parent_id is null and name=%s", (top,))
         if rows:
             pid = rows[0]['id']

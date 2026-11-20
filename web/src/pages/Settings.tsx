@@ -38,8 +38,8 @@ function ModelTab() {
 
   useEffect(() => {
     modelApi.config().then(setCfg).catch((e) => message.error(e?.message || '模型配置拉不出来'))
-    http
-      .get<any, { default: string; models: any[] }>('/models')
+    agentHttp
+      .get<any, { default: string; models: any[] }>('/api/models')
       .catch(() => agentHttp.get<any, { default: string; models: any[] }>('/api/models'))
       .then((r) => setAgent({ ...r, name: r.default }))
       .catch(() => setAgent(null))
@@ -61,12 +61,12 @@ function ModelTab() {
   return (
     <div>
       <Field label="模式">{cfg ? <Tag color="blue">{cfg.mode_label || cfg.mode}</Tag> : '—'}</Field>
-      <Field label="向量模型">
+      <Field label="向量模型（只读）">
         {cfg ? `${cfg.embedding?.model_id}（${cfg.embedding_dim} 维）` : '—'}
       </Field>
       <Field label="精排模型">{cfg?.rerank?.model_id || '—'}</Field>
       <Field label="对话模型">{agent?.name || cfg?.llm?.model_id || '—'}</Field>
-      <Field label="端点" hint="三路模型共用一个网关地址">
+      <Field label="端点" hint="三路模型共用一个网关地址（只读；改它去「现场 → 模型通道」）">
         {online.online_llm_base_url || '—'}
       </Field>
       <Field label="可选模型">
@@ -79,7 +79,7 @@ function ModelTab() {
               </Tag>
             ))}
           <Text type="secondary" style={{ fontSize: 12 }}>
-            共 {agent?.models?.length ?? 0} 个可选，换模型在运行时配置里
+            共 {agent?.models?.length ?? 0} 个可选（这一页只读；改连接去「现场」）
           </Text>
         </Space>
       </Field>

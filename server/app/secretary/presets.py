@@ -1,68 +1,81 @@
 # -*- coding: utf-8 -*-
-"""预设问题清单 —— 问答页「点一下就能问」的入口。
+"""示例问题（问答页「点一下就能问」）—— 2026-11-19 起存当前库 `cfg.preset_question`。
 
-为什么要有它（2026-10-20 新增）
--------------------------------
-空输入框最劝退：新用户不知道这个系统能答什么、该怎么描述。
-给一批**真实能跑通**的示例，比写一段使用说明有效得多。
+为什么进库：它是**每个现场不同**的业务内容，而代码只发一份（NFR-004 / FR-MIGR-001）。
+原来有两份重复副本（`prompts_data.PRESET_ITEMS` 与 `presets.PRESETS`），已合并成库里的
+一份；代码里不再写任何一条具体问题。
 
-两条硬约束（都是被用户骂出来的）
---------------------------------
-① **必须是业务问题**：这个系统管的是缺陷治理工单 / 项目预算 / 线损指标。
-   之前放「年假有几天」「病假工资怎么算」这种 HR 考勤题，用户第一眼
-   就以为打开的是个内部制度问答机器人 —— 跟系统的定位完全不符。
-② **必须简单**：单事实、单指标、一次检索或一条 SQL 就能答。
-   放「今年存在哪些问题、下一步怎么改进」这类分析题，单条要跑 20~40 秒，
-   用户点一个等半天会以为系统卡死。预设是用来「快速验证能用」的，不是秀上限。
-
-维护约定
---------
-- 每条都必须是**当前环境真有数据、能答出来**的问题。
-- 不写死年份/月份（"上个月""今年"由代码按今天算）。
-- 分组顺序 = 业务主线顺序（工单 → 预算 → 指标）。
+读不到就是空列表 —— 空现场的问答页不给示例，也不回落任何现场的内容。
 """
 from __future__ import annotations
 
-PRESETS: list[dict] = [
-    # ── 缺陷治理工单（系统主线）──────────────────────────────
-    {'id': 'b_wo_open', 'group': '缺陷工单', 'text': '现在还有多少条缺陷工单没闭环？'},
-    {'id': 'b_wo_new', 'group': '缺陷工单', 'text': '上个月新增了多少条缺陷工单？'},
-    {'id': 'b_wo_top', 'group': '缺陷工单', 'text': '哪个供电所的缺陷工单最多？'},
-    {'id': 'b_wo_node', 'group': '缺陷工单', 'text': '有多少条工单卡在审核环节？'},
-    {'id': 'b_wo_flow', 'group': '缺陷工单', 'text': '缺陷工单审批要经过几个节点？'},
+import time
 
-    # ── 项目与预算 ─────────────────────────────────────────
-    {'id': 'b_bd_amt', 'group': '项目预算', 'text': '今年项目执行金额是多少？'},
-    {'id': 'b_bd_rate', 'group': '项目预算', 'text': '预算执行率最低的是哪个单位？'},
-    {'id': 'b_bd_cnt', 'group': '项目预算', 'text': '今年立项了多少个项目？'},
-    {'id': 'b_bd_over', 'group': '项目预算', 'text': '有没有超预算的项目？'},
+from app.secretary import pgdb
 
-    # ── 线损与经营指标 ─────────────────────────────────────
-    {'id': 'b_ls_rate', 'group': '线损指标', 'text': '上个月全市线损率是多少？'},
-    {'id': 'b_ls_worst', 'group': '线损指标', 'text': '哪个供电所的线损率最高？'},
-    {'id': 'b_ls_sale', 'group': '线损指标', 'text': '今年售电量是多少？'},
-]
+TTL = 30.0
+_CACHE: dict = {"at": 0.0, "rows": None}
 
-GROUPS = ['缺陷工单', '项目预算', '线损指标']
+
+def ensure() -> None:
+    with pgdb.connect(autocommit=True) as c:
+        c.cursor().execute("""create table if not exists cfg.preset_question (
+                                  id bigserial primary key,
+                                  group_name varchar(40) not null default '',
+                                  qid varchar(40) not null,
+                                  text varchar(200) not null,
+                                  sort_no int not null default 0,
+                                  enabled boolean not null default true,
+                                  updated_at timestamptz not null default now(),
+                                  unique (qid))""")
+
+
+def clear_cache() -> None:
+    _CACHE.update({"rows": None, "at": 0.0})
+
+
+def rows(refresh: bool = False) -> list[dict]:
+    now = time.time()
+    if not refresh and _CACHE["rows"] is not None and (now - _CACHE["at"]) < TTL:
+        return list(_CACHE["rows"])
+    try:
+        with pgdb.connect(autocommit=True) as c:
+            cur = c.cursor()
+            cur.execute("select group_name, qid, text from cfg.preset_question "
+                        "where enabled order by sort_no, id")
+            out = [{"id": str(r["qid"]), "group": str(r["group_name"] or ""),
+                    "text": str(r["text"] or "")} for r in cur.fetchall()]
+    except Exception:                                 # noqa: BLE001 - 空库/连不上都当没有
+        out = []
+    _CACHE.update({"rows": out, "at": now})
+    return list(out)
 
 
 def current() -> dict:
-    """当前生效的预设：代码默认 ← 站点包覆盖（**运行时**读）。
-
-    ⚠️ 原来是在 import 时把站点包内容写进模块常量 —— 那是"部署文件改代码"：
-       改完要重启，测试也测不出差异（2026-10-30 统一改成运行时读）。
-    """
-    try:
-        from app.secretary import prompts_data
-        groups = [tuple(x) if isinstance(x, list) else x
-                  for x in (prompts_data.PRESET_GROUPS or GROUPS)] or GROUPS
-        items = list(prompts_data.PRESET_ITEMS or PRESETS) or PRESETS
-    except Exception:                              # noqa: BLE001
-        groups, items = GROUPS, PRESETS
-    return {'groups': groups, 'items': items}
+    items = rows()
+    groups: list = []
+    for it in items:
+        g = it.get("group") or ""
+        if g and g not in groups:
+            groups.append(g)
+    return {"groups": groups, "items": items}
 
 
 def payload() -> dict:
-    """给前端的结构（附带分组顺序，前端不用自己猜）。"""
     cur = current()
-    return {'total': len(cur['items']), 'groups': cur['groups'], 'items': cur['items']}
+    return {"total": len(cur["items"]), "groups": cur["groups"], "items": cur["items"]}
+
+
+def replace(items: list[dict]) -> dict:
+    """整份替换（迁移脚本用；页面上的增删改走 prompts 页那套）。"""
+    ensure()
+    with pgdb.connect(autocommit=True) as c:
+        cur = c.cursor()
+        cur.execute("delete from cfg.preset_question")
+        for i, it in enumerate(items or ()):
+            cur.execute("insert into cfg.preset_question (group_name, qid, text, sort_no) "
+                        "values (%s,%s,%s,%s)",
+                        (str(it.get("group") or ""), str(it.get("id") or ""),
+                         str(it.get("text") or ""), i))
+    clear_cache()
+    return {"ok": True, "items": len(items or ())}
