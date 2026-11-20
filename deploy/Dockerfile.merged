@@ -24,8 +24,11 @@ COPY db/ /db/
 
 # 旧镜像缺这几个：pymysql（统一用户表 MySQL 只读）、argon2（HR 密码校验）、
 # apscheduler（站点包 jobs.yml 的定时调度，2026-10-28 部署时发现缺失 → 定时任务空转）
+# 2026-11-20：补 openai-agents（app/agent/runtime.py 在模块层 import agents，
+# 缺了容器直接 ModuleNotFoundError 起不来）。版本对齐本地验收环境。
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
-        pymysql argon2-cffi apscheduler
+        pymysql argon2-cffi apscheduler \
+        openai-agents==0.25.0 openai==3.1.0
 
 EXPOSE 8200
 
