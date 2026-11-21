@@ -198,9 +198,54 @@ def _maybe_reload():
         print('[namefix] 检测到词典更新，已重载（版本 %s）' % v, flush=True)
 
 
+def reload_now() -> dict:
+    """立刻重建纠错引擎（页面「立即生效」按钮）。
+
+    平时靠 `_maybe_reload` 每 60 秒探一次版本；导入完想立刻看到效果时调这里。
+    重建失败保留旧引擎（不能因为一次重载失败把纠错整步关掉）。
+    """
+    global _CORRECTOR, _VER, _VER_AT, _FAILED
+    err = ''
+    with _LOAD_LOCK:
+        try:
+            new = _load_corrector()
+        except Exception as e:                      # noqa: BLE001
+            err = '%s: %s' % (type(e).__name__, str(e)[:200])
+        else:
+            _CORRECTOR = new
+            _VER = _peek_version() if _DB_MODE else None
+            _VER_AT = time.time()
+            _FAILED = False
+    # ★ status() 会调 _corrector()，那里面也要 _LOAD_LOCK —— 必须出了 with 再调，
+    #   否则同一线程重复获取非可重入锁，直接自死锁（2026-11-21 实测）。
+    if err:
+        return {'ok': False, 'error': err, 'status': status()}
+    return {'ok': True, 'status': status()}
+
+
 def available():
     """本步当前是否可用（页面/自测可以据此显示状态）。"""
     return bool(_enabled() and _corrector() is not None)
+
+
+def _dict_rows() -> int:
+    """六张词典表一共多少行（含拼音表）；查不动返回 -1，不据此判空。"""
+    try:
+        from app.secretary import pgdb
+        conn = pgdb.connect(autocommit=True)
+        try:
+            cur = conn.cursor()
+            cur.execute('SELECT (SELECT count(*) FROM t_nc_typo WHERE deleted_flag = 0)'
+                        ' + (SELECT count(*) FROM t_nc_term WHERE deleted_flag = 0)'
+                        ' + (SELECT count(*) FROM t_nc_ambiguous WHERE deleted_flag = 0)'
+                        ' + (SELECT count(*) FROM t_nc_wordlist WHERE deleted_flag = 0)'
+                        ' + (SELECT count(*) FROM t_nc_catalog WHERE deleted_flag = 0)'
+                        ' + (SELECT count(*) FROM t_nc_pinyin WHERE deleted_flag = 0) AS n')
+            return int((cur.fetchone() or {}).get('n') or 0)
+        finally:
+            conn.close()
+    except Exception:                                  # noqa: BLE001
+        return -1
 
 
 def status():
@@ -208,18 +253,23 @@ def status():
 
     词典可能**静默失效**，所以要能一眼看出来：
       · file 模式：libs/name_correction_lib/data/ 不在（clone 下来默认是缺的）
-      · db   模式：agent_data 的 t_nc_* 表没建 / 表是空的 / 连接不上
+      · db   模式：t_nc_* 表没建 / 表是空的 / 连接不上
     不报出来就只能靠比对 name_fix_used 才发现了。
     """
     if not _enabled():
         return {'available': False, 'reason': '已通过 SECRETARY_NAMEFIX=0 关闭',
                 'source': _source_label()}
     if _corrector() is None:
-        reason = ('纠错词典未就绪（数据源 db：agent_data 的 t_nc_* 表没建、为空或连不上）'
+        reason = ('纠错词典未就绪（数据源 db：t_nc_* 表没建或连不上）'
                   if _DB_MODE else
                   '纠错词典未就绪（libs/name_correction_lib/data/ 缺失）')
         return {'available': False, 'reason': reason + '，本步已降级',
                 'source': _source_label()}
+    if _DB_MODE and _dict_rows() == 0:
+        # 空表不再抛异常（从零导入时缺哪张只少那一层），所以在这儿点名一次。
+        return {'available': False, 'source': _source_label(),
+                'reason': '纠错词典是空的（六张 t_nc_* 表 0 行）：先到页面'
+                          '「提示词 → 问数线 → ② 名称与错字纠错 → 批量导入」导拼音表与名称库'}
     return {'available': True, 'reason': '', 'source': _source_label()}
 
 

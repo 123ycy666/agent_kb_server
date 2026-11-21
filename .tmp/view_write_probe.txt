@@ -1,0 +1,30 @@
+=== view t_nc_typo
+ SELECT id,
+    org,
+    wrong,
+    right_word,
+    freq_level,
+    reason,
+    sample,
+    deleted_flag,
+    create_time,
+    update_time
+   FROM cfg.t_nc_typo;
+=== view t_nc_catalog
+ SELECT id,
+    name,
+    kind,
+    owner,
+    py_full,
+    py_strict,
+    initials,
+    core_code,
+    source_id,
+    deleted_flag,
+    create_time,
+    update_time
+   FROM cfg.t_nc_catalog;
+
+current_schema=('public',)
+insert OK id=(107,)
+update OK rowcount=1

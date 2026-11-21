@@ -56,6 +56,7 @@ export default function SiteConfig() {
   const [dbTest, setDbTest] = useState<TestResult>(null)
   const [modelTest, setModelTest] = useState<TestResult>(null)
   const [saving, setSaving] = useState(false)
+  const [dbSource, setDbSource] = useState('')
   const [sites, setSites] = useState<SavedSite[]>(() => loadSites())
   const [switching, setSwitching] = useState('')
 
@@ -88,6 +89,7 @@ export default function SiteConfig() {
       .then((c: any) => {
         pgForm.setFieldsValue({ ...c.pg, admin_username: c.admin?.username })
         dbForm.setFieldsValue(c.mysql ?? {})
+        setDbSource(c.mysql_source || '')
         modelForm.setFieldsValue({
           model_channel: c.model?.channel || 'online',
           llm_base_url: c.model?.base_url ?? '',
@@ -333,6 +335,11 @@ export default function SiteConfig() {
                       问数只读这个库；连接信息存当前现场的产品库。
                     </Text>
                   </Space>
+                  <div style={{ marginTop: 6 }}>
+                    <Text type={dbSource === 'page' ? 'success' : 'warning'} style={{ fontSize: 12 }}>
+                      当前生效：{dbSource === 'page' ? '上面这份页面配置' : '环境变量默认值（还没在这里保存过）'}
+                    </Text>
+                  </div>
                   <TestLine result={dbTest} />
                 </Form>
               ),

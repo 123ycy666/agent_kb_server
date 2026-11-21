@@ -1,0 +1,131 @@
+
+### yc_dlj_data | select table_name, table_rows from information_schema.tables where table_schema='yc_dlj_data' and (table_name like 't_power%' or table_name like '%area%' or table_name like '%org%' or table_name like '%station%' or table_name like '%company%') order by table_name
+cols: ['TABLE_NAME', 'TABLE_ROWS']
+  t_power_ai_area_effect | 8120
+  t_power_ai_city_summary | 23
+  t_power_ai_company_budget_result | 139
+  t_power_ai_district_summary | 88
+  t_power_ai_metric_comparison | 20590
+  t_power_ai_metric_snapshot | 14540
+  t_power_ai_station_score_detail | 47
+  t_power_ai_station_summary | 1081
+  t_power_ai_work_order | 5795
+  t_power_area | 24699
+  t_power_area_benefit | 131
+  t_power_area_copy1 | 0
+  t_power_company | 88
+  t_power_company_assessment | 176
+  t_power_company_budget_allocation | 13
+  t_power_company_budget_profile | 47
+  t_power_company_budget_result | 264
+  t_power_company_rank_weight | 23
+  t_power_company_scoring_standard | 16
+  t_power_feedback | 5
+  t_power_line | 669
+  t_power_push_area | 19611
+  t_power_push_city_month_summary | 48
+  t_power_push_city_year_summary | 1
+  t_power_push_district_month_summary | 176
+  t_power_push_district_year_summary | 4
+  t_power_push_fault_ticket | 8417
+  t_power_push_line | 606
+  t_power_push_line_loss | 241668
+  t_power_push_opinion_ticket | 628
+  t_power_push_outage | 338150
+  t_power_push_sales_volume | 240607
+  t_power_push_station_month_summary | 2053
+  t_power_push_station_score | 139
+  t_power_push_station_year_summary | 47
+  t_power_push_trip | 4339
+  t_power_station_monthly_core_stat | 376
+  t_power_station_score_detail | 8744
+  t_power_substation | 8
+  t_power_supply_company | 13
+
+### yc_dlj_data | select * from t_power_supply_company where coalesce(deleted_flag,0)=0 limit 20
+cols: ['id', 'name', 'status', 'deleted_flag', 'create_name', 'update_name', 'create_time', 'update_time', 'department_id']
+  1 | 西陵区供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  2 | 伍家岗区供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  3 | 夷陵区供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  4 | 点军区供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  5 | 猇亭区供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  6 | 远安县供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  7 | 长阳县供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  8 | 秭归县供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  9 | 兴山县供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  10 | 五峰县供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  11 | 当阳市供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  12 | 枝江市供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+  13 | 宜都市供电公司 | 1 | 0 | admin | admin | 2026-11-13 10:31:36 | 2026-11-13 10:31:36 | None
+
+### yc_dlj_data | select * from t_power_company where coalesce(deleted_flag,0)=0 limit 25
+cols: ['id', 'code', 'name', 'short_name', 'nature', 'level', 'parent_id', 'province_code', 'city_code', 'county_code', 'address', 'tencent_address', 'longitude', 'phone', 'email', 'sort_order', 'show_key_value', 'status', 'deleted_flag', 'create_name', 'update_name', 'create_time', 'update_time', 'department_id']
+  1 | 000037 | 五峰渔洋关供电所 | None | None | 3 | 10 | 420000000000 | 420500000000 | None | 五峰县供电公司 | 五峰县供电公司 | {"longitude":111.074210,"latitude":30.184250} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  2 | 000038 | 五峰镇供电所 | None | None | 3 | 10 | 420000000000 | 420500000000 | None | 五峰县供电公司 | 五峰县供电公司 | {"longitude":110.682340,"latitude":30.215320} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  3 | 000039 | 长乐坪供电所 | None | None | 3 | 10 | 420000000000 | 420500000000 | None | 五峰县供电公司 | 五峰县供电公司 | {"longitude":110.813250,"latitude":30.204210} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  4 | 000040 | 湾潭供电所 | None | None | 3 | 10 | 420000000000 | 420500000000 | None | 五峰县供电公司 | 五峰县供电公司 | {"longitude":110.542160,"latitude":30.142530} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  5 | 000041 | 仁和坪供电所 | None | None | 3 | 10 | 420000000000 | 420500000000 | None | 五峰县供电公司 | 五峰县供电公司 | {"longitude":111.201540,"latitude":30.123620} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  6 | 000042 | 采花供电所 | None | None | 3 | 10 | 420000000000 | 420500000000 | None | 五峰县供电公司 | 五峰县供电公司 | {"longitude":110.463210,"latitude":30.284250} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  7 | 000043 | 傅家堰供电所 | None | None | 3 | 10 | 420000000000 | 420500000000 | None | 五峰县供电公司 | 五峰县供电公司 | {"longitude":110.584230,"latitude":30.342160} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  8 | 000044 | 牛庄供电所 | None | None | 3 | 10 | 420000000000 | 420500000000 | None | 五峰县供电公司 | 五峰县供电公司 | {"longitude":110.421530,"latitude":30.384210} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  9 | 000045 | 当阳玉阳供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":111.792540,"latitude":30.821450} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  10 | 000046 | 坝陵供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":111.813240,"latitude":30.842530} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  11 | 000047 | 河溶供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":111.984210,"latitude":30.784250} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  12 | 000048 | 两河供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":111.682340,"latitude":30.863210} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  13 | 000049 | 王店供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":111.603250,"latitude":30.742160} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  14 | 000050 | 半月供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":111.524160,"latitude":30.684250} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  15 | 000051 | 淯溪供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":111.902530,"latitude":30.721450} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  16 | 000052 | 庙前供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":111.643210,"latitude":30.924250} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  17 | 000053 | 草埠湖供电所 | None | None | 3 | 11 | 420000000000 | 420500000000 | None | 当阳市供电公司 | 当阳市供电公司 | {"longitude":112.041540,"latitude":30.642130} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  18 | 000054 | 枝江马家店供电所 | None | None | 3 | 12 | 420000000000 | 420500000000 | None | 枝江市供电公司 | 枝江市供电公司 | {"longitude":111.742150,"latitude":30.421340} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  19 | 000055 | 董市供电所 | None | None | 3 | 12 | 420000000000 | 420500000000 | None | 枝江市供电公司 | 枝江市供电公司 | {"longitude":111.643240,"latitude":30.462150} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  20 | 000056 | 白洋供电所 | None | None | 3 | 12 | 420000000000 | 420500000000 | None | 枝江市供电公司 | 枝江市供电公司 | {"longitude":111.485320,"latitude":30.524210} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  21 | 000057 | 问安供电所 | None | None | 3 | 12 | 420000000000 | 420500000000 | None | 枝江市供电公司 | 枝江市供电公司 | {"longitude":111.842160,"latitude":30.384250} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  22 | 000058 | 仙女供电所 | None | None | 3 | 12 | 420000000000 | 420500000000 | None | 枝江市供电公司 | 枝江市供电公司 | {"longitude":111.684230,"latitude":30.342150} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  23 | 000059 | 安福寺供电所 | None | None | 3 | 12 | 420000000000 | 420500000000 | None | 枝江市供电公司 | 枝江市供电公司 | {"longitude":111.542530,"latitude":30.284210} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  24 | 000060 | 顾家店供电所 | None | None | 3 | 12 | 420000000000 | 420500000000 | None | 枝江市供电公司 | 枝江市供电公司 | {"longitude":111.421640,"latitude":30.342530} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+  25 | 000061 | 七星台供电所 | None | None | 3 | 12 | 420000000000 | 420500000000 | None | 枝江市供电公司 | 枝江市供电公司 | {"longitude":111.942150,"latitude":30.302410} | None | None | 0 | None | 1 | 0 | system | system | 2026-11-13 10:35:38 | 2026-11-19 11:01:04 | None
+
+### yc_dlj_data | select area_name, station_name from t_power_push_area where coalesce(deleted_flag,0)=0 limit 15
+cols: ['area_name', 'station_name']
+  10kV变压器9000087247变压器 | 鸦鹊岭供电服务站
+  10kV路灯(加压站)9000160846柱上变001变压器001 | 鸦鹊岭供电服务站
+  10kV森源(实业)随州有限公司变压器 | 鸦鹊岭供电服务站
+  10kV随州市白云湖拦河闸除险加固工程项目办公室6653858409柱上变001变压器001 | 鸦鹊岭供电服务站
+  10kV随州市花木公司900S96556柱上变001变压器001 | 鸦鹊岭供电服务站
+  4219925751827湖北致力智能装备有限公司250kVA1#变 | 鸦鹊岭供电服务站
+  6862356675曾都区何店镇向阳村民委员会(向阳棚户区)500kVA#1变 | 鸦鹊岭供电服务站
+  6920367197曾都区何店镇向阳村民委员会250kVA#1变 | 鸦鹊岭供电服务站
+  9007022715湖北卫东府河化工有限公司315kVA#1变 | 鸦鹊岭供电服务站
+  9007022716随州飞扬体育健身有限公司100kVA#1变 | 鸦鹊岭供电服务站
+  9007022717随州市公安局交通警察支队四大队100kVA#1变 | 鸦鹊岭供电服务站
+  9007022719广州军区管理局湖北分局80kVA#1变 | 鸦鹊岭供电服务站
+  C白云10号 | 鸦鹊岭供电服务站
+  C白云1号 | 鸦鹊岭供电服务站
+  C齿轮北区 | 鸦鹊岭供电服务站
+
+### yc_dlj_data | select count(*) from t_power_push_area where coalesce(deleted_flag,0)=0
+cols: ['count(*)']
+  20275
+
+### ai_data | select table_name, table_rows from information_schema.tables where table_schema='ai_data' and (table_name like 't_power%' or table_name like '%area%' or table_name like '%org%' or table_name like '%station%' or table_name like '%company%') order by table_name
+cols: ['TABLE_NAME', 'TABLE_ROWS']
+  t_power_ai_area_effect | 8270
+  t_power_ai_city_summary | 24
+  t_power_ai_company_budget_result | 139
+  t_power_ai_district_summary | 88
+  t_power_ai_station_score_detail | 47
+  t_power_ai_station_summary | 1034
+  t_power_ai_work_order | 5314
+
+### ai_data | select * from t_power_supply_company where coalesce(deleted_flag,0)=0 limit 20
+ERR (1146, "Table 'ai_data.t_power_supply_company' doesn't exist")
+
+### ai_data | select * from t_power_company where coalesce(deleted_flag,0)=0 limit 25
+ERR (1146, "Table 'ai_data.t_power_company' doesn't exist")
+
+### ai_data | select area_name, station_name from t_power_push_area where coalesce(deleted_flag,0)=0 limit 15
+ERR (1146, "Table 'ai_data.t_power_push_area' doesn't exist")
+
+### ai_data | select count(*) from t_power_push_area where coalesce(deleted_flag,0)=0
+ERR (1146, "Table 'ai_data.t_power_push_area' doesn't exist")

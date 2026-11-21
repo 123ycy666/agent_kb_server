@@ -41,6 +41,7 @@ tar czf "$OUT" \
   --exclude=./server/tests/output \
   --exclude=./output \
   --exclude=./.dsh \
+  --exclude=./.local \
   --exclude=./.venv \
   --exclude=./venv \
   --exclude=./A924-POC \

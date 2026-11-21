@@ -90,20 +90,22 @@ def _p_route(cur):
 
 
 def _p_lex(cur):
-    from app.secretary import lex_admin
+    from app.secretary import lex_import
     total = 0
     rows = []
-    for key, spec in lex_admin.TABLES.items():
-        table = spec.get('table') or ('t_nc_' + key)
+    for key in lex_import.ORDER:
+        spec = lex_import.SPECS[key]
+        flag = 'enabled' if spec.get('upsert') else 'deleted_flag = 0'
         try:
-            n = _fetch(cur, 'select count(*) as n from cfg.%s where deleted_flag = 0' % table)
+            n = _fetch(cur, 'select count(*) as n from %s where %s' % (spec['table'], flag))
             c = int((n[0] or {}).get('n') or 0)
         except Exception:                            # noqa: BLE001
             c = 0
         total += c
-        rows.append({'词典': key, '表': table, '条数': c, '说明': spec.get('name') or ''})
+        rows.append({'词典': key, '表': spec['table'], '条数': c, '说明': spec['name']})
     return _rows(rows, size='%d 条' % total,
-                 note='四张词典页面上可改；名称库与拼音库是离线编译产物，不在页面改。改完 60 秒内重载。')
+                 note='四类可逐行改，五类可批量导入（CSV / XLSX）；拼音码导入时由系统现算。'
+                      '改完 60 秒内重载，也可以点「立即生效」。')
 
 
 def _p_askfill(cur):
@@ -166,9 +168,9 @@ CHAIN = [
          'note': '判成问数还是干活；判错整条线走错。', 'editor': 'route_rule', 'probe': _p_route},
     ]},
     {'key': 'fix', 'name': '② 名称与错字纠错', 'items': [
-        {'key': 'lexicon', 'name': '六张纠错词典',
-         'where': 'cfg.t_nc_*', 'editable': True, 'takes_effect': '60 秒',
-         'note': '所名、指标名、错字、同音、歧义；改完 60 秒内重载。',
+        {'key': 'lexicon', 'name': '七张纠错词典',
+         'where': 't_nc_* / cfg.t_nc_word', 'editable': True, 'takes_effect': '60 秒',
+         'note': '名称库、拼音表、错别字、标准词、单位规则；可批量导入，导完可立即生效。',
          'editor': 'lexicon', 'probe': _p_lex},
     ]},
     {'key': 'askfill', 'name': '③ 补问法', 'items': [

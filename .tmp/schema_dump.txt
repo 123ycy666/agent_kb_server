@@ -1,0 +1,30 @@
+=== cfg.t_nc_pinyin
+  id(bigint), hanzi(character varying), initial(character varying), final(character varying), deleted_flag(smallint), create_time(timestamp without time zone), update_time(timestamp without time zone)
+=== cfg.t_nc_catalog
+  id(bigint), name(character varying), kind(character varying), owner(character varying), py_full(character varying), py_strict(character varying), initials(character varying), core_code(character varying), source_id(character varying), deleted_flag(smallint), create_time(timestamp without time zone), update_time(timestamp without time zone)
+=== cfg.t_nc_wordlist
+  id(bigint), word(character varying), domain(character varying), src(character varying), py_full(character varying), initials(character varying), deleted_flag(smallint), create_time(timestamp without time zone), update_time(timestamp without time zone)
+=== cfg.t_nc_ambiguous
+  id(bigint), py_code(character varying), name_a(character varying), kind_a(character varying), name_b(character varying), kind_b(character varying), action(character varying), deleted_flag(smallint), create_time(timestamp without time zone), update_time(timestamp without time zone)
+=== cfg.t_nc_typo
+  id(bigint), org(character varying), wrong(character varying), right_word(character varying), freq_level(character varying), reason(character varying), sample(character varying), deleted_flag(smallint), create_time(timestamp without time zone), update_time(timestamp without time zone)
+
+pinyin cols: ['id', 'hanzi', 'initial', 'final', 'deleted_flag', 'create_time', 'update_time']
+  1 | 一 |  | i | 0 | 2026-09-20 18:27:12 | 2026-09-20 18:27:12
+  2 | 丁 | d | ing | 0 | 2026-09-20 18:27:12 | 2026-09-20 18:27:12
+  3 | 丂 | k | ao | 0 | 2026-09-20 18:27:12 | 2026-09-20 18:27:12
+  4 | 七 | q | i | 0 | 2026-09-20 18:27:12 | 2026-09-20 18:27:12
+  5 | 丄 | sh | ang | 0 | 2026-09-20 18:27:12 | 2026-09-20 18:27:12
+  6 | 丅 | x | ia | 0 | 2026-09-20 18:27:12 | 2026-09-20 18:27:12
+  7 | 丆 | h | an | 0 | 2026-09-20 18:27:12 | 2026-09-20 18:27:12
+  8 | 万 |  | uan | 0 | 2026-09-20 18:27:12 | 2026-09-20 18:27:12
+
+拼音表 distinct initial/final: (22, 37)
+
+供电所样本:
+  环潭供电所 | huantangondianso | huantangongdiansuo | htgds | 
+  唐镇供电所 | tanzengondianso | tangzhengongdiansuo | tzgds | 
+  厉山供电所 | lisangondianso | lishangongdiansuo | lsgds | 
+  万和供电所 | uanhegondianso | uanhegongdiansuo | whgds | 
+  殷店供电所 | indiangondianso | indiangongdiansuo | ydgds | 
+  安居供电所 | anzvgondianso | anjvgongdiansuo | ajgds | 

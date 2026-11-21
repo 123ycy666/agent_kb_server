@@ -804,8 +804,10 @@ export const promptsApi = {
     http.get<any, any>('/prompts/impact/office/body', { params: { key } }),
   complete: () => http.get<any, any>('/prompts/complete'),
   saveComplete: (rows: unknown[]) => http.put<any, any>('/prompts/complete', { rows }),
-  lexicon: (key: string, q = '') =>
-    http.get<any, any>(`/prompts/lexicon/${key}`, { params: { q } }),
+  lexicon: (key: string, q = '', page = 1, pageSize = 20) =>
+    http.get<any, any>(`/prompts/lexicon/${key}`, {
+      params: { q, limit: pageSize, offset: (page - 1) * pageSize },
+    }),
   lexiconTables: () => http.get<any, any>('/prompts/lexicon'),
   lexiconCreate: (key: string, data: Record<string, unknown>) =>
     http.post<any, any>(`/prompts/lexicon/${key}`, data),
@@ -813,6 +815,21 @@ export const promptsApi = {
     http.put<any, any>(`/prompts/lexicon/${key}/${id}`, data),
   lexiconDelete: (key: string, id: number) =>
     http.delete<any, any>(`/prompts/lexicon/${key}/${id}`),
+  lexiconStatus: () => http.get<any, any>('/prompts/lexicon/status'),
+  lexiconImport: (form: FormData) => http.post<any, any>('/prompts/lexicon/import', form),
+  lexiconReload: () => http.post<any, any>('/prompts/lexicon/reload', {}),
+  lexiconTry: (q: string) => http.post<any, any>('/prompts/lexicon/try', { q }),
+  lexiconDownload: async (kind: 'template' | 'export', key: string) => {
+    const blob = await http.get<any, Blob>(`/prompts/lexicon/${kind}/${key}`, {
+      responseType: 'blob',
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${key}_${kind === 'template' ? 'template' : 'export'}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
   material: (slot: string) => http.get<any, any>(`/prompts/material/${slot}`),
   materialSave: (slot: string, sections: unknown[]) =>
     http.put<any, any>(`/prompts/material/${slot}`, { sections }),

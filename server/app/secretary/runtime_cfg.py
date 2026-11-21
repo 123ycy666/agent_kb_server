@@ -118,12 +118,9 @@ def save(data: dict, user: str = '') -> dict:
 
 def refresh() -> dict:
     """把页面上的值同步到 config（含业务库连接）。"""
-    from app.secretary import config, tools_db
+    from app.secretary import config
     vals = all(refresh=True)
 
-    if vals.get('model'):
-        config.MODEL = vals['model']
-    # 模型通道（页面可改，存本库；切现场跟着换）
     if vals.get('model_channel') in ('local', 'online'):
         config.MODEL_CHANNEL = vals['model_channel']
     if vals.get('llm_base_url'):
@@ -141,35 +138,41 @@ def refresh() -> dict:
             except Exception:                         # noqa: BLE001
                 pass
 
-    db = dict(config.DB)
-    changed = False
-    if vals.get('db_host'):
-        db['host'] = vals['db_host']
-        changed = True
-    if vals.get('db_port'):
-        try:
-            db['port'] = int(vals['db_port'])
-            changed = True
-        except Exception:                             # noqa: BLE001
-            pass
-    if vals.get('db_name'):
-        db['db'] = vals['db_name']
-        changed = True
-    if vals.get('db_user'):
-        db['user'] = vals['db_user']
-        changed = True
-    if vals.get('db_password'):
-        db['password'] = vals['db_password']
-        changed = True
-    if changed and db != config.DB:
-        config.DB = db
-        config.SCHEMA = db.get('db') or config.SCHEMA
-        try:
-            tools_db._drop_conn()
-        except Exception:                             # noqa: BLE001
-            pass
-        print('[runtime] 业务库连接已切换：%s/%s' % (db.get('host'), db.get('db')), flush=True)
+    _apply_db(vals)
     return vals
+
+
+_DB_KEYS = ('db_host', 'db_port', 'db_name', 'db_user', 'db_password')
+
+
+def _apply_db(vals: dict) -> None:
+    """业务库连接整组生效：页面配齐五项才用页面的，缺一项就整组回到 `.env`。
+
+    逐项覆盖会拼出「`.env` 的库名 + 页面的密码」这种混合连接 —— 两处各生效一半，
+    线上表现为「页面空着、实际在查另一个库」。
+    """
+    from app.secretary import config, tools_db
+
+    # ⚠️ 本模块有个同名函数 `all()`（读配置），这里不能用内置 all：会被它顶掉。
+    missing = [k for k in _DB_KEYS if not vals.get(k)]
+    if missing:
+        if len(missing) < len(_DB_KEYS):
+            print('[runtime] 业务库只配了一部分（缺 %s），整组用环境变量'
+                  % '/'.join(missing), flush=True)
+        config.reset_db()
+        return
+    try:
+        port = int(vals['db_port'])
+    except (TypeError, ValueError):
+        port = 3306
+    new = {'host': vals['db_host'], 'port': port, 'db': vals['db_name'],
+           'user': vals['db_user'], 'password': vals['db_password']}
+    if new == config.DB:
+        return
+    config.DB = new
+    config.SCHEMA = new['db']
+    tools_db._drop_conn()
+    print('[runtime] 业务库来自页面配置：%s/%s' % (new['host'], new['db']), flush=True)
 
 
 def test_conn(target: dict | None = None) -> dict:

@@ -1,0 +1,7 @@
+夷陵区供电公司 -> full=ilincvgondiangonsi | strict=ilingqvgongdiangongsi | light=ilinqvgondiangonsi
+西陵区供电公司 -> full=silincvgondiangonsi | strict=xilingqvgongdiangongsi | light=xilinqvgondiangonsi
+五峰渔洋关供电所 -> full=uhenvianguangondianso | strict=ufengviangguangongdiansuo | light=uhenvianguangondianso
+环潭供电所 -> full=huantangondianso | strict=huantangongdiansuo | light=huantangondianso
+当阳玉阳供电所 -> full=danianviangondianso | strict=dangiangvianggongdiansuo | light=danianviangondianso
+
+--- one-liner test ---

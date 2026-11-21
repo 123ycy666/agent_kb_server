@@ -22,6 +22,16 @@ from app.secretary import pgdb
 
 # key -> 表结构与可编辑列（列白名单：页面只能改这些，其余列一律不接受）
 TABLES = {
+    'catalog': {
+        'table': 't_nc_catalog',
+        'name': '名称库',
+        'note': '公司 / 供电所 / 服务站 / 台区的地名与类型；拼音码由系统现算，不用填。',
+        'cols': [('name', '名称'), ('kind', '类别'), ('owner', '所属'),
+                 ('core_code', '核心码'), ('source_id', '来源ID')],
+        'search': ('name', 'kind', 'owner'),
+        'required': ('name',),
+        'uniq': ('name',),
+    },
     'typo': {
         'table': 't_nc_typo',
         'name': '错别字纠正',
@@ -31,6 +41,7 @@ TABLES = {
                  ('reason', '错因类型'), ('sample', '纠正示例')],
         'search': ('wrong', 'right_word', 'org'),
         'required': ('wrong', 'right_word'),
+        'uniq': ('wrong', 'org'),
     },
     'term': {
         'table': 't_nc_term',
@@ -40,6 +51,7 @@ TABLES = {
                  ('org', '适用组织')],
         'search': ('term', 'alias', 'definition'),
         'required': ('term',),
+        'uniq': ('term',),
     },
     'ambiguous': {
         'table': 't_nc_ambiguous',
@@ -49,6 +61,7 @@ TABLES = {
                  ('name_b', '名称 B'), ('kind_b', '类别 B'), ('action', '处理方式')],
         'search': ('name_a', 'name_b', 'py_code'),
         'required': ('name_a', 'name_b'),
+        'uniq': (),
     },
     'wordlist': {
         'table': 't_nc_wordlist',
@@ -58,6 +71,7 @@ TABLES = {
                  ('py_full', '拼音码'), ('initials', '首字母')],
         'search': ('word', 'domain'),
         'required': ('word',),
+        'uniq': ('word',),
     },
 }
 
@@ -149,14 +163,22 @@ def _clean(spec, data, partial: bool = False) -> tuple[dict, str]:
 
 
 def _fill_pinyin(spec: dict, data: dict) -> dict:
-    """标准词表：首字母留空时按 `t_nc_pinyin` 字表补。
+    """补拼音列：名称库按引擎规则现算，标准词表只补首字母。
 
-    `initials` 是声母串（`业扩报装` → `ykbz`），跟库里既有数据一致，可以放心补。
+    名称库的 `py_full` 是纠错索引的键，手敲对不上等于这条名字永远匹配不上 ——
+    所以页面新增 / 修改和导入走同一个算法（`lex_import._codes`）。
 
-    `py_full` **不补**：库里存的是离线编译出来的混合码（`业扩报装` → `ekobaozuan`，
-    不是纯韵母也不是纯全拼），格式没法从字表可靠复现。瞎填一个值会让模糊音匹配
-    出奇怪的候选，比留空更糟 —— 留空就只按汉字 + 首字母匹配。
+    标准词表的 `py_full` **不补**：库里存的是离线编译出来的混合码
+    （`业扩报装` → `ekobaozuan`，不是纯韵母也不是纯全拼），格式没法从字表可靠复现。
+    瞎填一个值会让模糊音匹配出奇怪的候选，比留空更糟 —— 留空就只按汉字 + 首字母匹配。
     """
+    if spec['table'] == 't_nc_catalog':
+        from app.secretary import lex_import
+        name = str(data.get('name') or '')
+        table = lex_import._pinyin_table() if name else {}
+        full, strict, initials = (lex_import._codes(name, table) if table else ('', '', ''))
+        data['py_full'], data['py_strict'], data['initials'] = full, strict, initials
+        return data
     if spec['table'] != 't_nc_wordlist':
         return data
     word = str(data.get('word') or '')
@@ -176,6 +198,13 @@ def _fill_pinyin(spec: dict, data: dict) -> dict:
         return data
     data['initials'] = ''.join(str((m.get(ch) or {}).get('initial') or '') for ch in word)
     return data
+
+
+def _dup_hint(spec: dict) -> str:
+    """同名/同键已存在时给一句人话（库上建了唯一索引，冲突会直接报 duplicate key）。"""
+    labels = dict(spec['cols'])
+    return ('、'.join('「%s」' % labels.get(c, c) for c in spec.get('uniq') or ())
+            or '同一组值')
 
 
 def create(key: str, data: dict) -> dict:
@@ -203,6 +232,9 @@ def create(key: str, data: dict) -> dict:
             cur.close()
         return {'ok': True, 'id': new_id, 'key': key, 'rows': row}
     except Exception as exc:                           # noqa: BLE001
+        if getattr(exc, 'sqlstate', '') == '23505':
+            return {'error': '%s 已经有这一行；要改它请直接改那一行，不要重复新增'
+                             % _dup_hint(spec)}
         return {'error': '新增失败：%s' % str(exc)[:200]}
     finally:
         try:
@@ -234,6 +266,8 @@ def update(key: str, rid: int, data: dict) -> dict:
         finally:
             cur.close()
     except Exception as exc:                           # noqa: BLE001
+        if getattr(exc, 'sqlstate', '') == '23505':
+            return {'error': '%s 已经有这一行，改名或改那一行' % _dup_hint(spec)}
         return {'error': '保存失败：%s' % str(exc)[:200]}
     finally:
         try:

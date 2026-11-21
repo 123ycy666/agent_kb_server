@@ -55,20 +55,30 @@ def get_config(actor: CurrentActor | None = Depends(get_current_actor_optional))
     _admin_guard(actor)          # 现场就绪后只有管理员能看连接信息（含脱敏口令）
     st = site.status()
     cfg = site.load() or {}
-    from app.secretary import runtime_cfg
+    from app.secretary import config as sec_config, runtime_cfg
 
     vals = runtime_cfg.all() if st.get("ok") else {}
+    if st.get("ok"):
+        # 先把库里的值算进 config.DB，再读它 —— 否则页面显示的是上次请求算出的旧连接
+        runtime_cfg.refresh()
     pg = dict((cfg.get("pg") or {}))
     pg["password"] = _mask(pg.get("password", ""))
     admin = dict((cfg.get("admin") or {}))
     admin["password"] = _mask(admin.get("password", ""))
+    # 业务库显示**实际生效**的那组（config.DB），不是库里存的半截值：
+    # 页面空着但环境变量在生效时，用户要能看见自己实际在查哪个库。
     return {
         "status": st,
         "pg": pg,
         "admin": admin,
-        "mysql": {k: (vals.get(k) or "") for k in
-                  ("db_host", "db_port", "db_name", "db_user")},
-        "mysql_password_set": bool(vals.get("db_password")),
+        "mysql": {"db_host": sec_config.DB.get("host") or "",
+                  "db_port": sec_config.DB.get("port") or "",
+                  "db_name": sec_config.DB.get("db") or "",
+                  "db_user": sec_config.DB.get("user") or ""},
+        "mysql_password_set": bool(sec_config.DB.get("password")),
+        "mysql_source": ("page" if all(vals.get(k) for k in
+                                       ("db_host", "db_port", "db_name", "db_user", "db_password"))
+                         else "env"),
         "model": {"channel": vals.get("model_channel") or "",
                   "base_url": vals.get("llm_base_url") or "",
                   "api_key_set": bool(vals.get("llm_api_key")),

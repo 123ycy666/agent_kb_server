@@ -63,7 +63,7 @@ def _env_db() -> dict:
         'user': ENV.get('MYSQL_USER') or ENV.get('DB_USER') or '',
         'password': ENV.get('MYSQL_PASSWORD') or ENV.get('DB_PASSWORD') or '',
         'db': (os.environ.get('SECRETARY_DB') or ENV.get('SECRETARY_DB')
-               or ENV.get('DB_NAME') or 'dlj_data'),
+               or ENV.get('DB_NAME') or ''),
     }
 
 
@@ -82,11 +82,11 @@ def reset_db() -> None:
     DB = _env_db()
     SCHEMA = DB['db']
 
-_missing_db = [k for k in ('host', 'user', 'password') if not DB[k]]
+_missing_db = [k for k in ('host', 'user', 'password', 'db') if not DB[k]]
 # ⚠️ 不再 SystemExit：骨架现场的业务库在「现场配置」页里填，进程必须先能起来。
 #    缺连接时只警告；真去查业务库时再带着原因报错。
 if _missing_db:
-    print('[配置] MySQL 连接项为空：%s（业务库可在「现场配置」页填写）'
+    print('[配置] .env 里没有这些 MySQL 连接项：%s（以「现场配置」页保存的为准）'
           % ' / '.join(_missing_db), flush=True)
 
 # 对话记录/词典库名（与知识库后端 .env 保持一致）

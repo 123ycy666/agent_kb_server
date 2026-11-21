@@ -36,6 +36,8 @@ def chk(label: str, cond: bool, extra: str = '') -> None:
 
 
 DDL = """
+DROP TABLE IF EXISTS t_nc_typo, t_nc_term, t_nc_ambiguous, t_nc_wordlist,
+  t_nc_pinyin, t_nc_catalog, prompt_text CASCADE;
 CREATE TABLE IF NOT EXISTS t_nc_typo (
   id bigserial PRIMARY KEY, org varchar(64) NOT NULL DEFAULT '',
   wrong varchar(64) NOT NULL, right_word varchar(64) NOT NULL,
@@ -61,7 +63,16 @@ CREATE TABLE IF NOT EXISTS t_nc_wordlist (
   create_time timestamp NOT NULL DEFAULT now(), update_time timestamp NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS t_nc_pinyin (
   id bigserial PRIMARY KEY, hanzi varchar(4) NOT NULL,
-  initial varchar(4) NOT NULL DEFAULT '', final varchar(8) NOT NULL DEFAULT '');
+  initial varchar(4) NOT NULL DEFAULT '', final varchar(8) NOT NULL DEFAULT '',
+  deleted_flag smallint NOT NULL DEFAULT 0,
+  create_time timestamp NOT NULL DEFAULT now(), update_time timestamp NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS t_nc_catalog (
+  id bigserial PRIMARY KEY, name varchar(200) NOT NULL,
+  kind varchar(32) NOT NULL DEFAULT '', owner varchar(200) NOT NULL DEFAULT '',
+  py_full varchar(200) NOT NULL DEFAULT '', py_strict varchar(200) NOT NULL DEFAULT '',
+  initials varchar(80) NOT NULL DEFAULT '', core_code varchar(80) NOT NULL DEFAULT '',
+  source_id varchar(64) NOT NULL DEFAULT '', deleted_flag smallint NOT NULL DEFAULT 0,
+  create_time timestamp NOT NULL DEFAULT now(), update_time timestamp NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS prompt_text (
   k varchar(64) PRIMARY KEY, body text NOT NULL, version_no int NOT NULL DEFAULT 1,
   updated_by varchar(64) NOT NULL DEFAULT '', updated_at timestamptz NOT NULL DEFAULT now());
@@ -157,11 +168,24 @@ def main() -> int:
     row = q("select py_full, initials from t_nc_wordlist where word='报装'")[0]
     chk('手填的拼音不被覆盖', row['py_full'] == '自定义' and row['initials'] == 'zd', row)
 
+    # ── 3b 名称库：页面新增时拼音码按字表现算
+    c = psycopg.connect(uri, autocommit=True)
+    c.execute("INSERT INTO t_nc_pinyin (hanzi, initial, final) VALUES "
+              "('供','g','ong'),('电','d','ian'),('所','s','uo')")
+    c.close()
+    r = lex_admin.create('catalog', {'name': '供电所', 'kind': '供电所'})
+    chk('名称库能新增', r.get('ok'), r)
+    row = q("select py_full, py_strict, initials from t_nc_catalog where name='供电所'")[0]
+    chk('名称库拼音码现算（模糊音合并）', row['py_full'] == 'gondianso', row['py_full'])
+    chk('名称库严格音', row['py_strict'] == 'gongdiansuo', row['py_strict'])
+    chk('名称库首字母', row['initials'] == 'gds', row['initials'])
+
     # ── 4 概览
     reset()
     lex_admin.create('typo', {'wrong': 'a', 'right_word': 'b'})
     ov = {x['key']: x for x in lex_admin.overview()}
-    chk('概览四张表都在', sorted(ov) == ['ambiguous', 'term', 'typo', 'wordlist'], sorted(ov))
+    chk('概览五张表都在', sorted(ov) == ['ambiguous', 'catalog', 'term', 'typo', 'wordlist'],
+        sorted(ov))
     chk('概览行数正确', ov['typo']['rows'] == 1, ov['typo'])
 
     # ── 5 时间地点规则：**已整体删除**（2026-11-03），页面与 prompt_text 里不再有 time_* 键

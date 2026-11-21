@@ -1,0 +1,4 @@
+类型,词,附加,排序
+suffix_hint,供电所,{},1
+unit_kind,供电所,{},1
+unit_level,供电所,{"level":2},1

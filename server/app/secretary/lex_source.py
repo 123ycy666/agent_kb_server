@@ -13,11 +13,12 @@
     全是 r["错误写法"] 这种中文取值。映射集中在 SPEC 这一张表里，
     **算法代码一行都不用改**。
 
-【必须守住的语义】表不存在或为空时抛 FileNotFoundError。
-    Corrector.__init__ 里 area_core / wordlist 的降级分支靠捕获这个异常工作
-    （「没有索引文件就现算」「词表可选」）。抛成 OperationalError 之类会让降级失效、
-    服务直接起不来 —— 这是最容易踩的坑。
-    但「连不上数据库」要原样抛，那样 /health 才能区分「库连不上」和「表是空的」。
+【必须守住的语义】表不存在时抛 FileNotFoundError（`Corrector.__init__` 里
+    area_core / wordlist 的降级分支靠捕获这个异常工作）；**但表存在而 0 行时返回空列表**。
+    为什么改过这一条：新现场是从零一张一张导词典的，导了拼音表还没导名称库时，
+    抛异常会让整套纠错整体降级 —— 先导的那张等于白导，页面还会说「纠错不可用」。
+    空表的具体提示交给 `name_fix.status()` 与页面体检点名，不靠抛异常。
+    「连不上数据库」仍原样抛，那样 /health 才能区分「库连不上」和「表是空的」。
 
 【列宽/口径】py_full / py_strict / initials / core_code 是离线编译产物，
     存进库只是为了省掉启动时的重算（两万条要 4 秒）。本模块原样搬运，绝不重算。
@@ -154,9 +155,10 @@ class MysqlSource:
             finally:
                 cur.close()
             if not raw:
-                raise FileNotFoundError('词典表为空：%s' % table)
-            rows = [{inv[k]: (v if v is not None else '') for k, v in r.items()}
-                    for r in raw]
+                rows = []
+            else:
+                rows = [{inv[k]: (v if v is not None else '') for k, v in r.items()}
+                        for r in raw]
 
         self._rows[key] = rows
         return rows

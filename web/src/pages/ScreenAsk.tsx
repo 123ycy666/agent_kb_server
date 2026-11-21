@@ -21,9 +21,33 @@ const nk = (p: string) => p + ++seq
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 function stepBody(s: Step) {
-  const raw = JSON.stringify({ args: s.args, result: s.result, content: s.content }, null, 2)
-  return String(raw || '').slice(0, 3000)
+  const out: string[] = []
+  for (const [k, v] of Object.entries({ args: s.args, result: s.result, content: s.content })) {
+    if (v == null || v === '') continue
+    out.push(k + ':\n' + (typeof v === 'string' ? v : JSON.stringify(v, null, 2)))
+  }
+  return out.join('\n\n').slice(0, 3000)
 }
+
+// 历史回放的步骤来自 t_chat_trace_step（input_text/output_text 是入库时的 JSON 串）
+const asJson = (v: any) => {
+  if (typeof v !== 'string') return v
+  try {
+    return JSON.parse(v)
+  } catch {
+    return v
+  }
+}
+
+const toStep = (s: any): Step => ({
+  seq: s.step_no,
+  kind: s.step_kind || '',
+  tool: s.tool_name || '',
+  args: asJson(s.input_text),
+  result: asJson(s.output_text),
+  ms: s.cost_ms ?? undefined,
+  model_ms: s.model_ms ?? undefined,
+})
 
 export default function ScreenAsk() {
   const [sessions, setSessions] = useState<any[]>([])
@@ -39,11 +63,18 @@ export default function ScreenAsk() {
   const loadSessions = () =>
     agentHttp
       .get('/api/sessions')
-      .then((r: any) => setSessions(r.sessions || []))
+      .then((r: any) => {
+        const list = r.sessions || []
+        setSessions(list)
+        return list
+      })
       .catch(() => undefined)
 
   useEffect(() => {
-    void loadSessions()
+    // 刷新后没有选中态：直接打开最近一场，右栏才不会空着
+    void loadSessions().then((list?: any[]) => {
+      if (list?.length) void openSession(list[0].session_id)
+    })
   }, [])
 
   useEffect(() => {
@@ -67,14 +98,20 @@ export default function ScreenAsk() {
     setActive(sid)
     setSteps([])
     try {
-      const h: any = await agentHttp.get('/api/history', { params: { session_id: sid } })
+      // with_steps：刷新后 task_id 已随页面丢掉，右栏的步骤只能从历史里回放
+      const h: any = await agentHttp.get('/api/history', {
+        params: { session_id: sid, with_steps: true },
+      })
+      const rows = h.messages || []
       setMsgs(
-        (h.messages || []).map((m: any) => ({
+        rows.map((m: any) => ({
           key: nk('h'),
           role: Number(m.sender_type) === 2 ? 'assistant' : 'user',
           text: String(m.content || ''),
         }))
       )
+      const last = [...rows].reverse().find((m: any) => Array.isArray(m.steps) && m.steps.length)
+      setSteps(last ? (last.steps as any[]).map(toStep) : [])
     } catch {
       message.error('历史拉取失败')
     }

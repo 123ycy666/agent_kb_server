@@ -20,8 +20,8 @@ from fastapi.encoders import jsonable_encoder
 import re
 import time
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import JSONResponse, Response
 
 from app.core.deps import CurrentActor, get_current_actor
 
@@ -304,6 +304,70 @@ async def complete_save(request: Request,
 def lexicon_overview(actor: CurrentActor = Depends(get_current_actor)):
     from app.secretary import lex_admin
     return _jr({'ok': True, 'tables': lex_admin.overview()})
+
+
+@router.get('/lexicon/status', summary='纠错词典体检：七类条数 + 缺哪一步会关掉什么能力')
+def lexicon_status(actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import lex_import
+    return _jr(lex_import.status())
+
+
+@router.get('/lexicon/template/{key}', summary='下载导入模板（CSV，中文表头）')
+def lexicon_template(key: str, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import lex_import
+    text = lex_import.template_csv(key)
+    if text is None:
+        return _jr({'error': '不支持的导入类型：%s' % key}, 404)
+    return Response(content=text.encode('utf-8'), media_type='text/csv; charset=utf-8',
+                    headers={'Content-Disposition': 'attachment; filename="%s_template.csv"' % key})
+
+
+@router.get('/lexicon/export/{key}', summary='把当前库导出成同格式 CSV（搬到另一套实例用）')
+def lexicon_export(key: str, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import lex_import
+    text = lex_import.export_csv(key)
+    if text is None:
+        return _jr({'error': '不支持的导入类型：%s' % key}, 404)
+    return Response(content=text.encode('utf-8'), media_type='text/csv; charset=utf-8',
+                    headers={'Content-Disposition': 'attachment; filename="%s.csv"' % key})
+
+
+@router.post('/lexicon/import', summary='导入纠错词典（CSV / XLSX，拼音码服务端现算）')
+def lexicon_import(file: UploadFile = File(...), key: str = Form('catalog'),
+                   mode: str = Form('append'),
+                   actor: CurrentActor = Depends(get_current_actor)):
+    from app.core.config import settings
+    from app.secretary import lex_import
+    limit = settings.max_upload_mb * 1024 * 1024
+    content = file.file.read(limit + 1)
+    if len(content) > limit:
+        return _jr({'error': '文件超过 %d MB' % settings.max_upload_mb}, 400)
+    res = lex_import.import_file(key, file.filename, content, mode)
+    return _jr(res, 200 if res.get('ok') else 400)
+
+
+@router.post('/lexicon/reload', summary='立刻重载纠错引擎（不用等 60 秒）')
+def lexicon_reload(actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import name_fix
+    res = name_fix.reload_now()
+    return _jr(res, 200 if res.get('ok') else 500)
+
+
+@router.post('/lexicon/try', summary='试一句：看当前词典把这句话改成什么')
+async def lexicon_try(request: Request, actor: CurrentActor = Depends(get_current_actor)):
+    from app.secretary import name_fix
+    body, err = await _json_body(request)
+    if err:
+        return _jr({'error': err}, 400)
+    q = str(body.get('q') or '').strip()
+    if not q:
+        return _jr({'error': '先写一句话'}, 400)
+    r = name_fix.fix(q)
+    return _jr({'ok': True, 'original': r.get('original'), 'text': r.get('text'),
+                'used': r.get('used'), 'word_fixes': r.get('word_fixes'),
+                'name_fixes': r.get('name_fixes'),
+                'unresolved': r.get('unresolved'),
+                'error': r.get('error') or ''})
 
 
 @router.get('/lexicon/{key}', summary='查一张词表（分页 + 模糊搜索）')
