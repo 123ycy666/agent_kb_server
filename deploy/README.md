@@ -69,19 +69,26 @@ curl -s http://$DEPLOY_HOST/health
 | `SITE_PREFIX` | 空 | 站点前缀（如 `sandbox`）。非空时用前缀模板，追加 `location ^~ /<前缀>/ { proxy_pass .../; }` |
 | `HEALTH_PATH` | `/<前缀>/health` 或 `/health` | 健康检查路径 |
 | `SITE_CONFIG` | `$APP_DIR/config/site.json` | 引导配置（现场库连接 + 初始管理员），挂进容器 `/app/config/site.json` |
+| `NET` | `kb-prod_kbnet` | 容器接入的 docker 网络。**第二套必须改成它自己的网络**（沙箱是 `kb-sandbox-net`），否则容器解析不到自己的库容器，健康检查必挂 |
+| `PG` | `kb-postgres` | 备份与建表检查用的 PG 容器。**第二套必须改成它自己的库容器**（沙箱是 `kb-pg-sandbox`），否则会拿生产库做备份与判断 |
+
+`NET` 与 `PG` 默认值都指向随州那套。发第二套时少写这两个变量，容器会起来但连不上库：
+部署日志里会看到 `健康检查失败，回滚`，`docker logs` 里是 `failed to resolve host 'kb-pg-sandbox'`。
 
 发第二套时（示例，**不连服务器、照这里填就行**）：
 
 ```bash
-CONTAINER=kb-backend-sandbox PORT=8210 DB=skeleton \
+CONTAINER=kb-backend-sandbox PORT=8210 DB=skeleton PG=kb-pg-sandbox NET=kb-sandbox-net \
 IMAGE=kb-sandbox:latest PREV_IMAGE=kb-sandbox:prev VOL_PREFIX=kb_sandbox \
-NGINX_CONF=/etc/nginx/conf.d/sandbox.conf \
-NGINX_TEMPLATE=/root/agentkownlg/sandbox/merged/deploy/nginx/prefix.conf \
-SITE_PREFIX=sandbox HEALTH_PATH=/sandbox/health \
+NGINX_CONF=/etc/nginx/conf.d/sandbox.conf SITE_PREFIX= \
 SITE_CONFIG=/root/agentkownlg/sandbox/config/site.json \
 APP_DIR=/root/agentkownlg/sandbox \
-bash /root/agentkownlg/sandbox/merged/deploy/deploy.sh /root/agentkownlg/sandbox/merged.tar.gz
+bash /root/agentkownlg/sandbox/deploy.sh /root/agentkownlg/sandbox/merged.tar.gz
 ```
+
+⚠️ 该机器上沙箱的 nginx 是**独立主机名** `sandbox.xibuyj.cn`（`server_name` 写死，`location /` 直接反代 8210），
+不是路径前缀。发它时 `SITE_PREFIX=` 必须留空，脚本才会走「已指向 8210，跳过」那条分支；
+填了 `sandbox` 会往配置文件末尾追加一段 `location ^~ /sandbox/`，落在 server 块外面，`nginx -t` 失败并回滚。
 
 ⚠️ 只发随州时，宜昌（沙箱）的容器、镜像、库、nginx 段都不会被碰到 —— 这是
 `FR-REL-002` 的判据：另一套的登录态与会话不受影响。
