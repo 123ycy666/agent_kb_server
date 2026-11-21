@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Collapse, Input, Select, Space, Table, Tag, Typography, Upload, message } from 'antd'
+import { Button, Input, Select, Space, Table, Tag, Typography, Upload, message } from 'antd'
 import {
   DownloadOutlined,
   ExportOutlined,
@@ -163,7 +163,7 @@ export function CompleteEditor() {
   )
 }
 
-/** 纠错词典：四张表可逐行增删改查（分页 + 搜索看全），五类可批量导入。 */
+/** 纠错词典：可编辑表 + 批量导入。 */
 export function LexiconEditor() {
   const [items, setItems] = useState<any[]>([])
   const [tables, setTables] = useState<any[]>([])
@@ -237,7 +237,7 @@ export function LexiconEditor() {
         : await promptsApi.lexiconCreate(key, data)
       if (res?.error) message.error(res.error)
       else {
-        message.success('已保存，60 秒内生效')
+        message.success('已保存')
         await loadRows()
         await loadTables()
         await loadStatus()
@@ -253,7 +253,7 @@ export function LexiconEditor() {
     if (!row.id) return
     try {
       await promptsApi.lexiconDelete(key, Number(row.id))
-      message.success('已删除，60 秒内生效')
+      message.success('已删除')
       await loadRows()
       await loadTables()
       await loadStatus()
@@ -274,11 +274,7 @@ export function LexiconEditor() {
       setImpResult(r)
       if (r?.error) message.error(r.error)
       else {
-        message.success(
-          `导入完成：新增 ${r.inserted}，更新 ${r.updated}，跳过 ${r.skipped}，失败 ${
-            (r.failed ?? []).length
-          }`,
-        )
+        message.success(`新增 ${r.inserted}，跳过 ${r.skipped}，失败 ${(r.failed ?? []).length}`)
         await loadStatus()
         await loadTables()
         await loadRows(key, q, 1, pageSize)
@@ -295,7 +291,7 @@ export function LexiconEditor() {
     setReloading(true)
     try {
       const r: any = await promptsApi.lexiconReload()
-      if (r?.ok) message.success('纠错引擎已重建，现在就是新词典')
+      if (r?.ok) message.success('已生效')
       else message.error(r?.error || '重载失败')
       await loadStatus()
     } catch (e) {
@@ -322,128 +318,79 @@ export function LexiconEditor() {
       <Space wrap size={6}>
         {items.map((s) => (
           <Tag key={s.key} color={s.rows ? 'green' : 'default'}>
-            {String(s.name).split('（')[0]}：{s.rows}
+            {String(s.name).split('（')[0]} {s.rows}
           </Tag>
         ))}
       </Space>
-      {items
-        .filter((s) => s.hint)
-        .map((s) => (
-          <Text key={s.key} type="warning">
-            · {s.hint}
-          </Text>
-        ))}
-
-      <Collapse
-        ghost
-        size="small"
-        items={[
-          {
-            key: 'how',
-            label: '拼音怎么参与纠错（导之前先看这段）',
-            children: (
-              <Space direction="vertical" size={6}>
-                <Text>
-                  同音判断靠「拼音码」：每个汉字查拼音表得到（声母, 韵母），把声母韵母按模糊音合并
-                  后逐字拼成一个串。合并规则是 zh→z、ch→c、sh→s、n/l→l、f/h→h、j→z、q→c、x→s，
-                  ang→an、eng→en、ing→in、ong→on、uo→o、ie→e。
-                </Text>
-                <Text>
-                  所以「环谭供电所」和库里的「环潭供电所」拼出来一模一样，直接对上。名称库的拼音码列
-                  由系统导入时现算，不用填；手敲对不上，这条名字就永远匹配不上，而且不报错。
-                </Text>
-                <Text>
-                  完整名称匹配还要两个条件：片段里带类别词（供电所 / 供电公司 / 服务站）才去名称库找，
-                  相似度 ≥88 才改；同音候选多于一个只提示不改。
-                </Text>
-                <Text type="secondary">
-                  导入顺序：拼音表 → 单位规则 → 名称库 → 错别字 / 标准词。导入后 60 秒自动重载，
-                  点「立即生效」不用等。
-                </Text>
-              </Space>
-            ),
-          },
-          {
-            key: 'import',
-            label: '批量导入 / 导出（CSV、XLSX）',
-            children: (
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Space wrap>
-                  <Select
-                    size="small"
-                    style={{ width: 280 }}
-                    value={impKey}
-                    onChange={setImpKey}
-                    options={items.map((s) => ({ value: s.key, label: s.name }))}
-                  />
-                  <Select
-                    size="small"
-                    style={{ width: 220 }}
-                    value={impMode}
-                    onChange={setImpMode}
-                    options={[
-                      { value: 'append', label: '追加（同名的跳过）' },
-                      { value: 'replace', label: '替换（先清空这一类）' },
-                    ]}
-                  />
-                  <Button
-                    size="small"
-                    icon={<DownloadOutlined />}
-                    onClick={() => void promptsApi.lexiconDownload('template', impKey)}
-                  >
-                    下载模板
-                  </Button>
-                  <Button
-                    size="small"
-                    icon={<ExportOutlined />}
-                    onClick={() => void promptsApi.lexiconDownload('export', impKey)}
-                  >
-                    导出现有
-                  </Button>
-                  <Upload
-                    accept=".csv,.xlsx,.xlsm"
-                    showUploadList={false}
-                    beforeUpload={(f) => {
-                      void doImport(f as File)
-                      return false
-                    }}
-                  >
-                    <Button size="small" type="primary" loading={impBusy} icon={<UploadOutlined />}>
-                      选文件导入
-                    </Button>
-                  </Upload>
-                </Space>
-                <Text type="secondary">
-                  表头照模板填，中文列名和库列名都认。导入的拼音码一律由系统现算，文件里填了也不采用。
-                </Text>
-                {impResult ? (
-                  impResult.error ? (
-                    <Text type="danger">{impResult.error}</Text>
-                  ) : (
-                    <Space direction="vertical" size={2}>
-                      <Text>
-                        共 {impResult.total} 行：新增 {impResult.inserted}，更新 {impResult.updated}，
-                        跳过 {impResult.skipped}，失败 {(impResult.failed ?? []).length}
-                      </Text>
-                      {impResult.warning ? <Text type="warning">{impResult.warning}</Text> : null}
-                      {(impResult.failed ?? []).slice(0, 8).map((f: any) => (
-                        <Text key={f.row} type="danger">
-                          第 {f.row} 行：{f.reason}
-                        </Text>
-                      ))}
-                    </Space>
-                  )
-                ) : null}
-              </Space>
-            ),
-          },
-        ]}
-      />
 
       <Space wrap>
         <Select
           size="small"
-          style={{ width: 220 }}
+          style={{ width: 260 }}
+          value={impKey}
+          onChange={setImpKey}
+          options={items.map((s) => ({ value: s.key, label: s.name }))}
+        />
+        <Select
+          size="small"
+          style={{ width: 120 }}
+          value={impMode}
+          onChange={setImpMode}
+          options={[
+            { value: 'append', label: '追加' },
+            { value: 'replace', label: '替换' },
+          ]}
+        />
+        <Button
+          size="small"
+          icon={<DownloadOutlined />}
+          onClick={() => void promptsApi.lexiconDownload('template', impKey)}
+        >
+          模板
+        </Button>
+        <Button
+          size="small"
+          icon={<ExportOutlined />}
+          onClick={() => void promptsApi.lexiconDownload('export', impKey)}
+        >
+          导出
+        </Button>
+        <Upload
+          accept=".csv,.xlsx,.xlsm"
+          showUploadList={false}
+          beforeUpload={(f) => {
+            void doImport(f as File)
+            return false
+          }}
+        >
+          <Button size="small" type="primary" loading={impBusy} icon={<UploadOutlined />}>
+            选文件导入
+          </Button>
+        </Upload>
+      </Space>
+      {impResult ? (
+        impResult.error ? (
+          <Text type="danger">{impResult.error}</Text>
+        ) : (
+          <Space direction="vertical" size={2}>
+            <Text>
+              共 {impResult.total} 行：新增 {impResult.inserted}，更新 {impResult.updated}，跳过{' '}
+              {impResult.skipped}，失败 {(impResult.failed ?? []).length}
+            </Text>
+            {impResult.warning ? <Text type="warning">{impResult.warning}</Text> : null}
+            {(impResult.failed ?? []).slice(0, 5).map((f: any) => (
+              <Text key={f.row} type="danger">
+                第 {f.row} 行：{f.reason}
+              </Text>
+            ))}
+          </Space>
+        )
+      ) : null}
+
+      <Space wrap>
+        <Select
+          size="small"
+          style={{ width: 200 }}
           value={key}
           onChange={switchKey}
           options={tables.map((t) => ({ value: t.key, label: `${t.name}（${t.rows}）` }))}
@@ -451,8 +398,8 @@ export function LexiconEditor() {
         <Input.Search
           size="small"
           allowClear
-          style={{ width: 220 }}
-          placeholder="按内容搜"
+          style={{ width: 200 }}
+          placeholder="搜"
           onSearch={(v) => {
             setQ(v)
             setPage(1)
@@ -460,13 +407,6 @@ export function LexiconEditor() {
           }}
         />
         <Text type="secondary">共 {total} 条</Text>
-        {tables
-          .filter((t) => t.key === key)
-          .map((t) => (
-            <Text key={t.key} type="secondary">
-              {t.note}
-            </Text>
-          ))}
       </Space>
 
       <Table
@@ -498,7 +438,7 @@ export function LexiconEditor() {
           })),
           {
             title: '操作',
-            width: 140,
+            width: 120,
             render: (_: any, row: any) => (
               <Space size={4}>
                 <Button
@@ -527,14 +467,13 @@ export function LexiconEditor() {
         <Button size="small" loading={reloading} onClick={() => void reload()}>
           立即生效
         </Button>
-        <Tag>名称库与拼音表在「批量导入」里，不走逐行编辑</Tag>
       </Space>
 
       <Space wrap>
         <Input
           size="small"
           style={{ width: 420 }}
-          placeholder="试一句：看现在的词典把这句话改成什么"
+          placeholder="试一句"
           value={probeQ}
           onChange={(e) => setProbeQ(e.target.value)}
           onPressEnter={() => void probeOne()}
