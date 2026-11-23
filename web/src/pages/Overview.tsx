@@ -4,7 +4,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import Page from '../components/ui/Page'
 import { agentHttp } from '../api/client'
-import { wfApi } from '../api/workflows'
+import { flowApi } from '../api/flows'
 
 const { Text } = Typography
 
@@ -24,22 +24,25 @@ export default function Overview() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [loading, setLoading] = useState(false)
   const [agent, setAgent] = useState({ today_turns: 0, today_failed: 0 })
-  const [wf, setWf] = useState({ unread: 0, todo: 0 })
+  const [wf, setWf] = useState({ flows: 0, running: 0, triggers: 0 })
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [a, w, s] = await Promise.allSettled([
+      const [a, f, t, s] = await Promise.allSettled([
         agentHttp.get('/api/agent/overview'),
-        wfApi.overview(),
+        flowApi.list(),
+        flowApi.triggers(),
         agentHttp.get('/api/agent/sessions'),
       ])
       if (a.status === 'fulfilled') setAgent(a.value as any)
-      if (w.status === 'fulfilled') {
-        const v: any = w.value
+      if (f.status === 'fulfilled' && t.status === 'fulfilled') {
+        const flows = (f.value as any).items ?? []
+        const trig = (t.value as any).items ?? []
         setWf({
-          unread: v.unread ?? 0,
-          todo: (v.alert_types ?? []).reduce((n: number, x: any) => n + (x.total ?? 0), 0),
+          flows: flows.length,
+          running: flows.filter((x: any) => x.enabled).length,
+          triggers: trig.filter((x: any) => x.enabled).length,
         })
       }
       if (s.status === 'fulfilled') setSessions(((s.value as any).items ?? []).slice(0, 10))
@@ -57,8 +60,8 @@ export default function Overview() {
   const nums = [
     { label: '今日轮次', value: agent.today_turns },
     { label: '失败数', value: agent.today_failed },
-    { label: '预警条数', value: wf.unread },
-    { label: '待办事项', value: wf.todo },
+    { label: '在用工作流', value: wf.running },
+    { label: '在跑定时任务', value: wf.triggers },
   ]
 
   const columns: ColumnsType<Session> = [

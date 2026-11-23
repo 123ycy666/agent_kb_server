@@ -12,8 +12,7 @@ import Agent from './pages/Agent'
 import Skills from './pages/Skills'
 import Kb from './pages/Kb'
 import Prompts from './pages/Prompts'
-import Alerts from './pages/Alerts'
-import Tasks from './pages/Tasks'
+import Flows from './pages/Flows'
 import { Spin } from 'antd'
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -69,8 +68,8 @@ export default function App() {
           <Route path="skills" element={<Skills />} />
           <Route path="kb" element={<Kb />} />
           <Route path="prompts" element={<Prompts />} />
-          <Route path="alerts" element={<Alerts />} />
-          <Route path="tasks" element={<Tasks />} />
+          <Route path="alerts" element={<Flows />} />
+          <Route path="tasks" element={<Navigate to="/alerts" replace />} />
           {/* 「配置」= 原「设置」+「现场」合成一页（导航只剩一个入口） */}
           <Route path="site" element={<SiteConfig />} />
           <Route path="settings" element={<Navigate to="/site" replace />} />

@@ -7,7 +7,6 @@ import {
   BookOutlined,
   CloudServerOutlined,
   ClusterOutlined,
-  DeploymentUnitOutlined,
   DesktopOutlined,
   LogoutOutlined,
   MessageOutlined,
@@ -31,8 +30,7 @@ const NAV = [
   { key: '/skills', icon: <ThunderboltOutlined />, label: '技能' },
   { key: '/kb', icon: <BookOutlined />, label: '知识库' },
   { key: '/prompts', icon: <ClusterOutlined />, label: '提示词' },
-  { key: '/alerts', icon: <AlertOutlined />, label: '预警' },
-  { key: '/tasks', icon: <DeploymentUnitOutlined />, label: '任务' },
+  { key: '/alerts', icon: <AlertOutlined />, label: '工作流' },
   { key: '/site', icon: <CloudServerOutlined />, label: '配置' },
 ]
 

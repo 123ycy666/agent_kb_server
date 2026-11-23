@@ -106,29 +106,29 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("问数智能体预热启动失败（不影响服务）：%s", exc)
 
-    # 工作流框架：调度方案存库，启动时按库注册；改 cron 在页面里做（热重载）。
+    # 工作流框架（2026-11-23）：触发器只按时间规则跑工作流，规则存库，不看业务。
     # 多 worker 部署时设 SITE_JOBS=0，只让一个进程跑（APScheduler 是进程内调度器）。
     _sch = {"on": False}
     try:
         if not site.ok():
-            raise RuntimeError('现场未就绪，跳过调度')
+            raise RuntimeError('现场未就绪，跳过触发器')
         if (os.environ.get("SITE_JOBS") or "1").strip() not in ("0", "false", "no"):
-            from app.workflow import scheduler as _wfsched
+            from app.wf import sched as _wftrig
 
-            _reg = _wfsched.reload()
-            logger.info("工作流调度 | 注册 %d 条 | 跳过 %d 条",
-                        len(_reg.get("added") or []), len(_reg.get("skipped") or []))
+            _reg2 = _wftrig.reload()
+            logger.info("工作流触发器 | 注册 %d 条 | 跳过 %d 条",
+                        len(_reg2.get("added") or []), len(_reg2.get("skipped") or []))
             _sch["on"] = True
-    except Exception as exc:  # noqa: BLE001 - 调度起不来不许拖垮服务
-        logger.warning("工作流调度启动失败（不影响服务）：%s", exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("工作流触发器启动失败（不影响服务）：%s", exc)
 
     logger.info("API 文档： http://127.0.0.1:8200/docs")
     yield
     if _sch["on"]:
         try:
-            from app.workflow import scheduler as _wfsched
+            from app.wf import sched as _wftrig
 
-            _wfsched.stop()
+            _wftrig.stop()
         except Exception:  # noqa: BLE001
             pass
     logger.info("服务已停止")
@@ -271,10 +271,10 @@ from app.agent import api as agent_api_v2  # noqa: E402
 
 app.include_router(agent_api_v2.router, prefix="/api")
 
-# 工作流框架（2026-11-06）：规则文档 / 调度方案 / 运行记录 / 事项 / 发送记录 / 参数
-from app.workflow import api as workflow_api  # noqa: E402
+# 工作流框架（2026-11-23，唯一一套）：五段配置 → 编译成 SQL → 回填指定表字段
+from app.wf import api as wf_api  # noqa: E402
 
-app.include_router(workflow_api.router, prefix="/api")
+app.include_router(wf_api.router, prefix="/api")
 
 # 系统账号域（FR-SYS-001）：/api/alerts/*、/api/internal/*，只认 X-Internal-Token
 from app.api.v1 import alerts as alerts_api  # noqa: E402
@@ -305,8 +305,8 @@ def unified_health():
     my_ok, my_detail = check_mysql_connection()
     agent_h = agent_api.health()
     try:
-        from app.workflow import scheduler as _wfsched
-        wf_h = _wfsched.status()
+        from app.wf import sched as _wftrig
+        wf_h = _wftrig.status()
     except Exception as exc:  # noqa: BLE001
         wf_h = {"ok": False, "error": str(exc)[:200]}
     return {
