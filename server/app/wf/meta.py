@@ -24,9 +24,30 @@ _cache: dict[str, dict] = {}
 _stamp: dict[str, float] = {}
 
 
-def _schema_biz() -> str:
+def biz_db() -> str:
+    """预警业务库库名：页面「现场配置」里配的那一个，留空就跟问数用同一个库。"""
     from app.secretary import config
-    return config.SCHEMA
+    try:
+        from app.secretary import runtime_cfg
+        vals = runtime_cfg.all()
+    except Exception:                     # noqa: BLE001 - 配置读不到就退回 `.env`
+        vals = {}
+    name = str(vals.get('alert_db_name') or '').strip()
+    return name or str(config.DB.get('db') or '')
+
+
+def biz_conn() -> dict:
+    """预警业务库的整组连接参数：主机/账号跟问数同一套，只换库名。"""
+    from app.secretary import config
+    conn = dict(config.DB)
+    name = biz_db()
+    if name:
+        conn['db'] = name
+    return conn
+
+
+def _schema_biz() -> str:
+    return biz_db()
 
 
 def _load_biz() -> dict:

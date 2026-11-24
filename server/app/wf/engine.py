@@ -169,9 +169,9 @@ def compute(spec: dict, raw_rows: list[dict]) -> list[dict]:
 def _fetch_biz(sql: str, params: list) -> list[dict]:
     import pymysql
 
-    from app.secretary import config
     conn = pymysql.connect(cursorclass=pymysql.cursors.DictCursor, autocommit=True,
-                           connect_timeout=8, read_timeout=120, charset='utf8mb4', **config.DB)
+                           connect_timeout=8, read_timeout=120, charset='utf8mb4',
+                           **meta.biz_conn())
     try:
         cur = conn.cursor()
         cur.execute(sql, params or None)
@@ -218,12 +218,11 @@ def _write_biz(plan: dict, items: list[dict], mode: str) -> dict:
     import pymysql
     from pymysql.constants import CLIENT
 
-    from app.secretary import config
     # CLIENT.FOUND_ROWS：UPDATE 返回「匹配到几行」而不是「改了几行」。
     # 不然第二轮一个值都没变，会误报成「回填 0 行」（2026-11-23 实测）。
     conn = pymysql.connect(autocommit=False, connect_timeout=8, read_timeout=120,
                            write_timeout=120, charset='utf8mb4', client_flag=CLIENT.FOUND_ROWS,
-                           **config.DB)
+                           **meta.biz_conn())
     updated = inserted = 0
     try:
         cur = conn.cursor()

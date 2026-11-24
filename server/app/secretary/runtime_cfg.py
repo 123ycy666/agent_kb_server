@@ -29,6 +29,8 @@ KEYS = {
     'db_password': '业务库密码',
     'sql_timeout_ms': '单条 SQL 超时（毫秒）',
     'tool_result_chars': '单次工具结果给模型的字数上限',
+    # 预警工作流读写的业务库：与问数分开，同一台 MySQL 上可以换库；留空 = 同业务库
+    'alert_db_name': '预警业务库库名（留空 = 同业务库）',
 }
 
 

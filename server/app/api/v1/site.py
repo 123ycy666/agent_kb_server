@@ -45,6 +45,15 @@ def _mask(v: str) -> str:
     return ("*" * 6 + s[-4:]) if len(s) > 10 else "*" * len(s)
 
 
+def _alert_db() -> str:
+    """预警工作流实际在用的业务库（留空时等于问数业务库）。"""
+    try:
+        from app.wf import meta
+        return meta.biz_db()
+    except Exception:                                 # noqa: BLE001 - 读不到就空着
+        return ""
+
+
 @router.get("/status", summary="当前现场状态（公开）")
 def get_status():
     return site.status(refresh=True)
@@ -76,6 +85,8 @@ def get_config(actor: CurrentActor | None = Depends(get_current_actor_optional))
                   "db_name": sec_config.DB.get("db") or "",
                   "db_user": sec_config.DB.get("user") or ""},
         "mysql_password_set": bool(sec_config.DB.get("password")),
+        # 预警工作流单独用的业务库（同一台 MySQL，只换库名）；空 = 跟问数同一个库
+        "alert_db_name": _alert_db(),
         "mysql_source": ("page" if all(vals.get(k) for k in
                                        ("db_host", "db_port", "db_name", "db_user", "db_password"))
                          else "env"),
@@ -112,7 +123,7 @@ async def put_config(request: Request,
     mysql = body.get("mysql") or {}
     model = body.get("model") or {}
     payload = {}
-    for k in ("db_host", "db_port", "db_name", "db_user", "db_password"):
+    for k in ("db_host", "db_port", "db_name", "db_user", "db_password", "alert_db_name"):
         if mysql.get(k):
             payload[k] = str(mysql[k])
     for k in ("model_channel", "llm_base_url", "llm_api_key", "llm_model"):

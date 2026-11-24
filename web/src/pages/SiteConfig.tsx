@@ -326,13 +326,18 @@ export default function SiteConfig() {
                         <Input.Password />
                       </Form.Item>
                     </Col>
+                    <Col span={12}>
+                      <Form.Item name="alert_db_name" label="预警业务库（留空＝同上）">
+                        <Input placeholder="例：dlj_data" />
+                      </Form.Item>
+                    </Col>
                   </Row>
                   <Space>
                     <Button icon={<ApiOutlined />} onClick={testDb}>
                       测试连接
                     </Button>
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      问数只读这个库；连接信息存当前现场的产品库。
+                      问数读上面的库；预警工作流读「预警业务库」，留空就与问数同一个库。
                     </Text>
                   </Space>
                   <div style={{ marginTop: 6 }}>
